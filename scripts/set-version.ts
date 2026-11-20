@@ -1,9 +1,9 @@
-// Release helper: set the Rust workspace version to the semantic-release version.
+// Release helper: set the Rust workspace version (used by scripts/release.ts).
 //
 //   bun scripts/set-version.ts <semver> [--root <dir>]
 //
-// package.json is bumped by @semantic-release/npm; this script keeps Cargo.toml
-// ([workspace.package] version) and the two workspace entries in Cargo.lock in step.
+// scripts/release.ts bumps package.json and calls this to keep Cargo.toml ([workspace.package] version) and the
+// two workspace entries in Cargo.lock in step.
 // Edits are line-precise so every other byte of both files is preserved, and cargo is never run.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -105,7 +105,8 @@ export function setVersion(root: string, version: string): Change[] {
   return [toml.change, ...lock.changes];
 }
 
-function main(argv: string[]): number {
+/** The repository root (`--root <dir>`, else this script's repository) and the remaining arguments. */
+export function rootAndArgs(argv: string[]): { root: string; args: string[] } {
   const args = argv.slice(2);
   let root = resolve(import.meta.dir, '..');
   const rootFlag = args.indexOf('--root');
@@ -113,6 +114,12 @@ function main(argv: string[]): number {
     root = resolve(args[rootFlag + 1] ?? '');
     args.splice(rootFlag, 2);
   }
+
+  return { root, args };
+}
+
+function main(argv: string[]): number {
+  const { root, args } = rootAndArgs(argv);
   const [version, ...extra] = args;
   if (version === undefined || extra.length > 0) {
     console.error('usage: bun scripts/set-version.ts <semver> [--root <dir>]');

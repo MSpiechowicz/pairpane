@@ -1,10 +1,10 @@
 name: Release
 
 # CI is the only go/no-go gate: this workflow runs no tests. It starts after CI succeeded for a push to main and
-# releases exactly the commit CI tested. semantic-release reads the Conventional Commits since the last tag
-# (fix: -> patch, feat: -> minor, "feat!:" or a "BREAKING CHANGE:" footer -> major; other types do not release),
-# bumps package.json/Cargo.toml/Cargo.lock, updates CHANGELOG.md, pushes the release commit and the vX.Y.Z tag and
-# creates a DRAFT GitHub release. Then, each in its own job:
+# releases exactly the commit CI tested. scripts/release.ts reads the Conventional Commits since the last tag
+# (fix:/perf:/revert: -> patch, feat: -> minor, "feat!:" or a "BREAKING CHANGE:" footer -> major; other types do not
+# release), bumps package.json/Cargo.toml/Cargo.lock and CHANGELOG.md; the job pushes the release commit and the
+# vX.Y.Z tag and creates a DRAFT GitHub release. Then, each in its own job:
 #   verify  - checks the release commit is exactly the CI-tested commit plus the version bump;
 #   bundle  - builds the installers on every OS; read-only token, no secrets;
 #   sign    - signs the updater artifacts; the only job with the signing key, runs nothing but the Tauri signer;
@@ -32,7 +32,6 @@ permissions: {}
 
 env:
   BUN_VERSION: 1.4.2
-  NODE_VERSION: 26.13.1
 
 defaults:
   run:
@@ -49,22 +48,23 @@ jobs:
       && github.event.workflow_run.head_branch == 'main'
       && github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     permissions:
       contents: write # push the release commit + tag, create the draft release
     outputs:
-      # Written by the exec plugin's successCmd (see .releaserc.json). Empty when nothing was released.
-      released: ${{ steps.semantic-release.outputs.released }}
-      version: ${{ steps.semantic-release.outputs.version }}
-      sha: ${{ steps.semantic-release.outputs.sha }}
+      # Empty when nothing was released.
+      released: ${{ steps.version.outputs.released }}
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.version.outputs.sha }}
+      # (A failed push or draft fails the job, so the later jobs never run on a release that was not pushed.)
+    # This job holds a write token, so it runs no third-party package code: only git, gh, jq and the repository's own
+    # scripts/release.ts (from the commit CI tested) under the verified Bun. No `bun install`.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The commit CI validated. If main has moved on since, semantic-release sees a stale branch and does
-          # nothing; the newer push gets its own CI run and its own release run.
-          ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 0 # semantic-release needs the full history and tags
-          persist-credentials: false # semantic-release authenticates with GITHUB_TOKEN itself
+          ref: ${{ github.event.workflow_run.head_sha }} # the commit CI validated
+          fetch-depth: 0 # the full history and tags, to find the last release
+          persist-credentials: false # the push below passes the token explicitly, for that one command
       - name: The commit is on main
         run: |
           if ! git merge-base --is-ancestor HEAD origin/main; then
@@ -86,32 +86,68 @@ jobs:
             echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is not set. See docs/release-and-updater-keys.md."
             exit 1
           fi
-      # Node and Bun are downloaded and checked against pinned hashes before they run: this job holds a write token.
-      # No caches anywhere in this workflow: any CI run on main can write them.
-      - name: Install Node.js (verified)
-        run: .github/scripts/install-node.sh
+      # Bun is downloaded and checked against pinned hashes before it runs. No caches anywhere in this workflow.
       - name: Install Bun (verified)
         run: .github/scripts/install-bun.sh
-      # --ignore-scripts: no dependency code (and no repo git hook via `prepare`) runs during the install.
-      - run: bun install --frozen-lockfile --ignore-scripts
-      # semantic-release numbers a first release 1.0.0. A v0.0.0 tag on the root commit makes the first `feat:`
-      # release 0.1.0. semantic-release pushes it together with v0.1.0 (harmless: it has no GitHub release), and
-      # once any v* tag exists this step does nothing.
-      - name: Baseline tag for the first release
+      # No token in this step: it only computes the version and makes the local commit and tag.
+      - name: Version, changelog and tag
+        id: version
         run: |
-          if [ -z "$(git tag --list 'v*')" ]; then
-            git tag v0.0.0 "$(git rev-list --max-parents=0 HEAD | tail -n 1)"
+          # If main has moved on since, the newer push gets its own CI run and its own release run.
+          if [[ "$(git rev-parse origin/main)" != "$(git rev-parse HEAD)" ]]; then
+            echo "::notice::main has moved on since this commit; the newer push releases."
+            exit 0
           fi
-      - name: semantic-release
-        id: semantic-release
+
+          # --no-install: never fetch packages (there is no node_modules here); --no-env-file: ignore .env files.
+          plan="$(bun --no-install --no-env-file scripts/release.ts next)"
+          version="$(jq -r '.version // empty' <<< "$plan")"
+          if [[ -z "$version" ]]; then
+            echo "::notice::nothing to release since the last tag (no feat, fix, perf, revert or breaking change)."
+            exit 0
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::scripts/release.ts proposed an invalid version"
+            exit 1
+          fi
+
+          notes="$RUNNER_TEMP/notes.md"
+          jq -r '.notes' <<< "$plan" > "$notes"
+          bun --no-install --no-env-file scripts/release.ts apply "$version" "$notes"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json Cargo.toml Cargo.lock CHANGELOG.md
+          git -c core.hooksPath=/dev/null commit -q -m "chore(release): $version [skip ci]"
+          git tag "v$version"
+
+          {
+            echo "released=true"
+            echo "version=$version"
+            echo "sha=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+      # Only git and gh see the token. The token goes to the push as a masked header, never into the git config.
+      # --atomic: the commit and the tag land together or not at all (a tag without its commit on main would block
+      # every later release).
+      - name: Push the release commit and tag, create the draft release
+        if: ${{ steps.version.outputs.released == 'true' }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./node_modules/.bin/semantic-release
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c core.hooksPath=/dev/null -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            push --atomic origin "HEAD:refs/heads/main" "refs/tags/v$VERSION"
+
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --title "v$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
 
   verify:
     name: Verify the release commit
     needs: release
-    if: ${{ needs.release.outputs.released == 'true' }}
+    # success(): never run after a failed release job (its outputs are still set when the push failed).
+    if: ${{ success() && needs.release.outputs.released == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -122,8 +158,8 @@ jobs:
           ref: ${{ needs.release.outputs.sha }}
           fetch-depth: 2 # the release commit and its parent
           persist-credentials: false
-      # The release job runs semantic-release's npm dependencies with a write token and pushes the release commit.
-      # Before anything from it is built or trusted, this checks it is exactly the CI-tested commit plus the version
+      # The release job pushes the release commit with a write token. Defense in depth: before anything from it is
+      # built or trusted, this checks it is exactly the CI-tested commit plus the version
       # bump: each version file must equal the tested file with only the version replaced (CHANGELOG.md is free text
       # and read by nothing in the build). The check lives here, in the workflow file, because a workflow token
       # cannot change workflow files; a script from the release commit could be replaced by it.
@@ -270,9 +306,12 @@ jobs:
     needs: [release, bundle]
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # The only job with the signing key. It runs nothing from the repository or from the release commit (which the
-    # release job's npm dependencies wrote): only what this workflow file pins, which a workflow token cannot change.
+    # The only job with the signing key. It runs nothing from the repository or from the release commit (written by
+    # a job with a write token): only what this workflow file pins, which a workflow token cannot change.
     permissions: {}
+    outputs:
+      # check downloads exactly this artifact: a replaced one gets a new id and is not found.
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     env:
       VERSION: ${{ needs.release.outputs.version }}
     steps:
@@ -344,20 +383,26 @@ jobs:
               >/dev/null
           done
           ls -l dist
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: signed
           path: dist/
           if-no-files-found: error
           retention-days: 7
 
-  publish:
-    name: Publish release
+  check:
+    name: Check the signed release files
     needs: [release, verify, sign]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Read-only: the checks install minisign from apt (as root), so they run apart from the write token.
     permissions:
-      contents: write # upload the assets, un-draft the release
+      contents: read
+    outputs:
+      # publish downloads exactly this artifact (a replaced one gets a new id) and checks it against this hash.
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      checksums: ${{ steps.hash.outputs.checksums }}
     env:
       VERSION: ${{ needs.release.outputs.version }}
     steps:
@@ -365,64 +410,64 @@ jobs:
         with:
           ref: ${{ needs.release.outputs.sha }} # verified: tauri.conf.json (the public key) is the CI-tested one
           persist-credentials: false
+      # Without an id the action would download every artifact of the run: refuse instead.
+      - name: The signed artifact id is known
+        env:
+          ARTIFACT_ID: ${{ needs.sign.outputs.artifact-id }}
+        run: '[[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]] || { echo "::error::no artifact id from sign"; exit 1; }'
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: signed
+          artifact-ids: ${{ needs.sign.outputs.artifact-id }}
           path: dist
-      # Exactly the expected installers, each updater artifact with a signature made by the committed public key for
-      # this file name and this version: a key mismatch, a tampered file or a replayed older signature fails here.
-      - name: Verify the files and every signature
+      # Exact file list, every signature bound to the committed public key, file name and version; then
+      # latest.json and checksums.txt. From the verified release commit (CI-tested plus the version bump only).
+      - name: Check the files and signatures, write latest.json and checksums.txt
+        run: .github/scripts/check-release-files.sh
+      - id: hash
+        run: echo "checksums=$(sha256sum < dist/checksums.txt | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: [release, check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The only step with a write token here: download the checked files, upload them, publish. Nothing else runs.
+    permissions:
+      contents: write # upload the assets, un-draft the release
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      # Without an id the action would download every artifact of the run: refuse instead.
+      - name: The checked artifact id is known
+        env:
+          ARTIFACT_ID: ${{ needs.check.outputs.artifact-id }}
+        run: '[[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]] || { echo "::error::no artifact id from check"; exit 1; }'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.check.outputs.artifact-id }}
+          path: dist
+      # Exactly the files check verified: checksums.txt is the one check hashed, every file matches it, nothing else.
+      - name: The files are the checked ones
+        env:
+          CHECKSUMS: ${{ needs.check.outputs.checksums }}
         run: |
-          v="$VERSION"
-          updater=("Pairpane_${v}_amd64.AppImage" "Pairpane_${v}_amd64.deb" "Pairpane-${v}-1.x86_64.rpm"
-            "Pairpane_${v}_aarch64.app.tar.gz" "Pairpane_${v}_x64.app.tar.gz"
-            "Pairpane_${v}_x64_en-US.msi" "Pairpane_${v}_x64-setup.exe")
-          expected=("${updater[@]}" "Pairpane_${v}_aarch64.dmg" "Pairpane_${v}_x64.dmg")
-          for name in "${updater[@]}"; do expected+=("$name.sig"); done
-          if ! diff <(find dist -mindepth 1 -maxdepth 1 -printf '%f\n' | sort) <(printf '%s\n' "${expected[@]}" | sort); then
-            echo "::error::the signed artifact does not contain exactly the expected files"
+          if [[ -z "$CHECKSUMS" || "$(sha256sum < dist/checksums.txt | cut -d' ' -f1)" != "$CHECKSUMS" ]]; then
+            echo "::error::checksums.txt is not the one the check job wrote"
             exit 1
           fi
-          sudo apt-get update
-          sudo apt-get install -y minisign
-          jq -r '.plugins.updater.pubkey' src-tauri/tauri.conf.json | base64 -d > "$RUNNER_TEMP/updater.pub"
-          for name in "${updater[@]}"; do
-            base64 -d < "dist/$name.sig" > "$RUNNER_TEMP/current.minisig"
-            output="$(minisign -V -m "dist/$name" -p "$RUNNER_TEMP/updater.pub" -x "$RUNNER_TEMP/current.minisig")"
-            comment="$(sed -n 's/^Trusted comment: //p' <<< "$output" | tr '\t' '\n')"
-            if ! grep -qxF "file:$name" <<< "$comment" || ! grep -qxF "version:$v" <<< "$comment"; then
-              echo "::error::the signature of $name is not bound to file $name and version $v"
-              exit 1
-            fi
-          done
-          echo "${#updater[@]} signatures verified"
-      - name: Write latest.json
-        run: |
-          v="$VERSION"
-          base="https://github.com/$GITHUB_REPOSITORY/releases/download/v$v"
-          entry() {
-            jq -n --arg url "$base/$1" --rawfile signature "dist/$1.sig" \
-              '{signature: ($signature | rtrimstr("\n")), url: $url}'
-          }
-          appimage="$(entry "Pairpane_${v}_amd64.AppImage")"
-          deb="$(entry "Pairpane_${v}_amd64.deb")"
-          rpm="$(entry "Pairpane-${v}-1.x86_64.rpm")"
-          mac_arm="$(entry "Pairpane_${v}_aarch64.app.tar.gz")"
-          mac_x64="$(entry "Pairpane_${v}_x64.app.tar.gz")"
-          msi="$(entry "Pairpane_${v}_x64_en-US.msi")"
-          nsis="$(entry "Pairpane_${v}_x64-setup.exe")"
-          jq -n --arg version "$v" --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
-            --argjson appimage "$appimage" --argjson deb "$deb" --argjson rpm "$rpm" \
-            --argjson mac_arm "$mac_arm" --argjson mac_x64 "$mac_x64" --argjson msi "$msi" --argjson nsis "$nsis" \
-            '{version: $version, notes: "", pub_date: $pub_date, platforms: {
-              "linux-x86_64": $appimage, "linux-x86_64-appimage": $appimage,
-              "linux-x86_64-deb": $deb, "linux-x86_64-rpm": $rpm,
-              "darwin-aarch64": $mac_arm, "darwin-aarch64-app": $mac_arm,
-              "darwin-x86_64": $mac_x64, "darwin-x86_64-app": $mac_x64,
-              "windows-x86_64": $msi, "windows-x86_64-msi": $msi, "windows-x86_64-nsis": $nsis}}' > dist/latest.json
-      # install.sh / install.ps1 (#4) install nothing without a SHA-256 to compare against.
-      - name: Write checksums.txt
-        run: (cd dist && sha256sum -- * > "$RUNNER_TEMP/checksums.txt") && mv "$RUNNER_TEMP/checksums.txt" dist/
+          (cd dist && sha256sum --quiet --strict -c checksums.txt)
+          if ! diff <(find dist -mindepth 1 -maxdepth 1 -printf '%f\n' | grep -vxF checksums.txt | sort) \
+            <(sed 's/^[0-9a-f]\{64\}  //' dist/checksums.txt | sort); then
+            echo "::error::the downloaded files are not exactly the checked ones"
+            exit 1
+          fi
       - name: Upload to the draft release and publish it as latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

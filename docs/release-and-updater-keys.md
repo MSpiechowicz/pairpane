@@ -7,22 +7,22 @@ Releases are fully automated from Conventional Commits. The only manual work is 
 CI is the only go/no-go gate. The release workflow runs no tests of its own and only ever releases a commit whose
 CI passed. There is no manual trigger.
 
-1. **Commit messages decide the version.** On `main`, `fix:` releases a patch, `feat:` a minor, and a
-   `BREAKING CHANGE:` footer or `feat!:` a major. Other types (`chore:`, `ci:`, `docs:`, `test:`, ...) do not
-   release. The first release is 0.1.0: until a `v*` tag exists, the release job tags the root commit `v0.0.0`, so
-   the first `feat:` bumps the minor version instead of semantic-release's default 1.0.0 (semantic-release pushes
-   that tag along with `v0.1.0`; it has no GitHub release).
+1. **Commit messages decide the version.** On `main`, `fix:`, `perf:` or `revert:` releases a patch, `feat:` a minor, and a
+   `BREAKING CHANGE:` footer or `type!:` a major. Other types (`chore:`, `ci:`, `docs:`, `test:`, ...) do not
+   release. Versions count up from the newest `vX.Y.Z` tag (`v0.0.0` marks the root commit).
 2. **CI runs** on the push to `main` (`.github/workflows/ci.yml`).
 3. **The `Release` workflow** (`.github/workflows/release.yml`) starts when CI finishes. It continues only when that
    CI run **succeeded**, was a **push** to **`main`** of **this repository** (a fork's CI run never releases), and
    the commit is still on `main`. It checks out exactly the commit CI tested.
-4. **Job `release`** runs `semantic-release` (config: `.releaserc.json`). If there is something to release it:
-   - writes `CHANGELOG.md`;
-   - bumps `package.json` (npm plugin, no publishing) and, through `scripts/set-version.ts`, the Rust workspace
-     version in `Cargo.toml` and the two workspace entries (`pairpane_core`, `pairpane_app`) in `Cargo.lock`.
+4. **Job `release`** runs the repository's own `scripts/release.ts` (no npm packages: only git and the verified
+   Bun). If there is something to release it:
+   - writes the release notes and prepends them to `CHANGELOG.md` (conventional-changelog format);
+   - bumps the `version` line of `package.json` and, through `scripts/set-version.ts`, the Rust workspace version in
+     `Cargo.toml` and the two workspace entries (`pairpane_core`, `pairpane_app`) in `Cargo.lock`.
      `src-tauri/tauri.conf.json` reads its version from `package.json`;
    - commits them as `chore(release): X.Y.Z [skip ci]`, pushes the commit and the tag `vX.Y.Z`;
-   - creates a **draft** GitHub release with the generated notes.
+   - creates a **draft** GitHub release with the notes.
+   If `main` has moved on since the tested commit, it does nothing: the newer push releases.
 5. **Job `verify`** checks the release commit is exactly the CI-tested commit plus the version bump: its parent is
    the tested commit, and `package.json`, `Cargo.toml` and `Cargo.lock` equal the tested files with only the version
    replaced (`CHANGELOG.md` may change freely; nothing in the build reads it). The check is inline in the workflow
@@ -41,11 +41,13 @@ CI passed. There is no manual trigger.
    expected file names, and signs the updater artifacts with the Tauri signer (`signer sign --app-version X.Y.Z`).
    It is the only job that ever sees the signing key. It runs nothing from the repository or the release commit:
    only the Tauri CLI packages, checked against SHA-512 values pinned in the workflow file, under the runner's Node.
-8. **Job `publish`** checks the exact file list, verifies every signature against the
+8. **Job `check`** (read-only) checks the exact file list, verifies every signature against the
    public key committed in `tauri.conf.json` (`minisign`) and that each is bound to its file name and this version,
    writes `latest.json` (the updater manifest, one signed entry per platform and installer type) and `checksums.txt`
-   (SHA-256 of every asset, used by `install.sh`/`install.ps1`), uploads everything to the draft and only then
-   publishes the release as latest.
+   (SHA-256 of every asset, used by `install.sh`/`install.ps1`).
+9. **Job `publish`** downloads exactly the artifact `check` produced (by its id), checks every file against the
+   `checksums.txt` whose hash `check` passed on, uploads them to the draft and only then publishes the release as
+   latest.
 
 Releases are serialized (`concurrency: release`, never cancelled). `install.sh`, `install.ps1` and the in-app
 updater only ever see **published** releases, so nothing that failed CI, a bundle, the signing or the signature
@@ -53,7 +55,7 @@ check reaches users.
 
 **Recovering a failed release.**
 
-- A `bundle`, `sign` or `publish` job failed: re-run the failed jobs of **that same run** (Actions page, or
+- A `bundle`, `sign`, `check` or `publish` job failed: re-run the failed jobs of **that same run** (Actions page, or
   `gh run rerun <run-id> --failed`); the later jobs follow.
 - The `release` job itself failed **after** pushing the tag (for example the draft was not created): re-running it
   releases nothing. Delete the draft release (if any) and the tag (`git push origin :refs/tags/vX.Y.Z`), then push
@@ -67,44 +69,50 @@ check reaches users.
 - The release job fails before any tag is created when `plugins.updater.pubkey` is still the placeholder or the
   `TAURI_SIGNING_PRIVATE_KEY` secret is missing, so no release can ship that installs but never updates.
 - The workflow token has no permissions by default. Only `release` (push the version commit and tag) and `publish`
-  (upload, publish) can write; `bundle` and `sign` are read-only.
+  (upload, publish) can write; `verify`, `bundle`, `sign` and `check` are read-only.
+- **No third-party package code runs with a write token.** The `release` job runs only git, `gh`, `jq` and the
+  repository's own `scripts/release.ts` from the CI-tested commit under the verified Bun (`--no-install`, no
+  `node_modules`: a package import fails instead of being fetched; a test also keeps the script free of them). The
+  token is passed only to the push step; the job as a whole runs no third-party package code.
+  `publish` only downloads the checked files and uploads them with `gh`; the checks (with `minisign` from apt) run
+  in the read-only `check` job.
 - **The signing key is isolated in the `sign` job**: none of the ~500 build dependencies (crates, build scripts,
-  npm packages) and none of the semantic-release dependencies ever run in a job that holds it, and the job runs
+  npm packages) ever run in a job that holds it, and the job runs
   nothing a workflow token could change (no repository checkout; only pinned, hash-checked Tauri CLI packages).
   A compromised build dependency can still tamper with the installers of that one release (true of any build), but
   cannot steal the key. The key's password adds nothing inside CI (it sits next to the key); it protects the key
   file at rest.
-- The release commit is checked before it is built or trusted (`verify` job): only the version may change, so a
-  compromised semantic-release dependency cannot get its own code built and signed through the release commit.
-- Remaining exposure, tracked separately: the `release` job runs semantic-release's npm dependencies with a token
-  that can write to `main` and to releases. Published releases are protected by GitHub's immutable releases setting
-  (assets and tags cannot change after publishing); the planned redesign keeps npm code away from write tokens.
+- The release commit is checked before it is built or trusted (`verify` job): only the version may change.
+- Published releases are immutable (GitHub's immutable releases setting): their assets and tag cannot change.
 - Residual risk: within one workflow run, a compromised build dependency could use the run's artifact token to
-  replace another platform's artifact before `sign` downloads it; the per-platform file-name checks limit this to
-  that one release. Signatures are bound to file name and version and `publish` checks both. Installed apps (from
+  replace another platform's artifact before `sign` downloads it (after that, `check` and `publish` download the
+  signed and the checked files by artifact id, so a replaced artifact is not found); the per-platform file-name checks limit this to
+  that one release. Signatures are bound to file name and version and `check` verifies both; `publish` accepts only the files `check`
+  verified. Installed apps (from
   v0.2.0, the first release with the updater) accept an update only from this repository's release of that version,
   for exactly their own artifact (checked against the signature's `file:`), verify the signature with
   `requireSignedVersion`, never downgrade, and install only the version the user confirmed. `.deb`/`.rpm`
   and MSI installations are not updated in-app (the package manager, or the installer from the releases page, does
   that: both would otherwise run an elevated install from a temp file).
-- Residual risk, accepted for now (#32 removes the realistic path): `install.sh`/`install.ps1` verify downloads
-  against the release's own `checksums.txt`, not your signing key, so whoever can push to `main` or publish a release
-  could serve a different first install. Installed apps are not affected: updates must carry your signature.
-- Bun and Node are downloaded by `.github/scripts/install-bun.sh` / `install-node.sh` and checked against pinned
-  SHA-256 hashes **before** they run (the setup-* actions would execute their downloads unverified).
-- `bun install --ignore-scripts` everywhere in the release: no dependency install script and no repo git hook runs.
+- Residual risk: `install.sh`/`install.ps1` verify downloads against the release's own `checksums.txt`, not your
+  signing key, so whoever can push to `main` or publish a release (your GitHub credentials, or the two jobs that
+  hold a write token) could serve a different first install. No npm package in the pipeline holds a write token;
+  build dependencies can still tamper with that release's installers (see above). Installed apps are not affected:
+  updates must carry your signature.
+- Bun is downloaded by `.github/scripts/install-bun.sh` and checked against pinned SHA-256 hashes **before** it runs
+  (setup-bun would execute its download unverified).
+- `bun install --ignore-scripts` in the bundle jobs: no dependency install script and no repo git hook runs.
 - **No caches** in the release workflow: a cache can be written by any CI run on `main`, including CI-only dev
   dependencies, and must not reach a signed artifact.
 - The bundle jobs build the release commit by SHA and fail if the tag was moved.
 
-### Bumping Bun, Node or the Tauri CLI
+### Bumping Bun or the Tauri CLI
 
-`BUN_VERSION` and `NODE_VERSION` are pinned to the hashes in the install scripts. To bump Bun: download
+`BUN_VERSION` is pinned to the hashes in `install-bun.sh`. To bump Bun: download
 `bun-linux-x64.zip`, `bun-darwin-aarch64.zip`, `bun-windows-x64.zip` and `SHASUMS256.txt.asc` from the Bun release,
 verify the signature with Bun's release key (`F3DCC08A8572C0749B3E18888EAB4D40A7B22B59`), check the zips against
 it, and put both the zip SHA-256 and the SHA-256 of the extracted `bun` / `bun.exe` into `install-bun.sh` (CI's
-`BUN_VERSION` should move with it). For Node: verify the release's `SHASUMS256.txt.asc` with a key listed under
-"Release keys" in the nodejs/node README and put the `linux-x64.tar.xz` hash into `install-node.sh`. When `@tauri-apps/cli` changes in `package.json`, copy the
+`BUN_VERSION` should move with it). When `@tauri-apps/cli` changes in `package.json`, copy the
 new `integrity` values of `@tauri-apps/cli` and `@tauri-apps/cli-linux-x64-gnu` from `bun.lock` into the
 "Install the Tauri signer" step of `release.yml`.
 
@@ -146,14 +154,3 @@ with the updater key; only the first install shows an OS warning:
   then **Open** again. On macOS 15 and later, if it still refuses: `System Settings > Privacy & Security` > **Open
   Anyway**.
 - **Windows (SmartScreen)**: "Windows protected your PC" > **More info** > **Run anyway**.
-
-## Known advisories
-
-`bun run audit` (used by CI) ignores two advisories that are reachable only through `semantic-release`'s npm plugin,
-which runs in the release job and is never shipped in the app:
-
-- GHSA-3g3m-2fjr-6pw4 (glob, AbortSignal cancellation bypass) via `@semantic-release/npm` -> npm -> glob;
-- GHSA-g3hv-75wg-m249 (minimatch, ReDoS through globparts) via `@semantic-release/npm` -> npm -> minimatch.
-
-Remove the `--ignore` flags from the `audit` script in `package.json` once fixed versions are in the lockfile.
-Plain `bun audit` still reports both.
