@@ -2675,7 +2675,7 @@ dependencies = [
 
 [[package]]
 name = "pairpane_app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "pairpane_core",
  "serde",
@@ -2693,7 +2693,7 @@ dependencies = [
 
 [[package]]
 name = "pairpane_core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.23.1",
  "minisign-verify",

@@ -1,3 +1,10 @@
+# [0.3.0](https://github.com/MSpiechowicz/pairpane/compare/v0.2.0...v0.3.0) (2026-11-20)
+
+
+### Features
+
+* app shell from the approved mockups ([2b24fc6](https://github.com/MSpiechowicz/pairpane/commit/2b24fc69c22f8450b196bba0ff032f5ef9e2d07a)), closes [#6](https://github.com/MSpiechowicz/pairpane/issues/6)
+
 # [0.2.0](https://github.com/MSpiechowicz/pairpane/compare/v0.1.1...v0.2.0) (2026-11-20)
 
 
