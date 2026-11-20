@@ -1,3 +1,14 @@
+# [0.4.0](https://github.com/MSpiechowicz/pairpane/compare/v0.3.0...v0.4.0) (2026-11-20)
+
+
+### Features
+
+* fast folder listings in the panes ([8567de5](https://github.com/MSpiechowicz/pairpane/commit/8567de573442054027ab2a1759e1ff2d8f252fdc)), closes [#7](https://github.com/MSpiechowicz/pairpane/issues/7)
+
+### Bug Fixes
+
+* keep a pane's folder watch across reloads of the same folder ([0235adb](https://github.com/MSpiechowicz/pairpane/commit/0235adb7b2457f83f774f7a6ab2c0a9451443abb))
+
 # [0.3.0](https://github.com/MSpiechowicz/pairpane/compare/v0.2.0...v0.3.0) (2026-11-20)
 
 
