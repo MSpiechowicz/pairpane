@@ -4,6 +4,8 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
+import { appVersion } from './app-version.ts';
+
 // `ui/` is the Vite root regardless of the directory the CLI is started from.
 const uiRoot = fileURLToPath(new URL('.', import.meta.url));
 const debug = !!process.env.TAURI_ENV_DEBUG;
@@ -13,6 +15,7 @@ export default defineConfig({
   root: uiRoot,
   plugins: [svelte(), tailwindcss()],
   resolve: { alias: { $lib: libDir } },
+  define: { __APP_VERSION__: JSON.stringify(appVersion) },
   // Keep Rust compiler output visible in the terminal during `tauri dev`.
   clearScreen: false,
   server: {

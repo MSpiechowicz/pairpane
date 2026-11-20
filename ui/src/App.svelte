@@ -11,6 +11,7 @@
   import Pane from '$lib/shell/Pane.svelte';
   import { Session } from '$lib/shell/session.svelte';
   import { isTyping, shortcutFor } from '$lib/shell/shortcuts';
+  import Splash from '$lib/shell/Splash.svelte';
   import { Theme } from '$lib/shell/theme.svelte';
   import TopBar from '$lib/shell/TopBar.svelte';
   import UpdateCard from '$lib/updates/UpdateCard.svelte';
@@ -130,6 +131,13 @@
     }
   }
 
+  /** The splash was above the app: the focus goes where the app keeps it, the active pane's list. */
+  function focusActiveList() {
+    if (document.activeElement === null || document.activeElement === document.body) {
+      document.querySelector<HTMLElement>('[data-pane][aria-current="true"] [role="listbox"]')?.focus();
+    }
+  }
+
   onMount(async () => {
     // The panes open the folders of the last session (the home folder when there is none); the rest does not wait.
     void session.restore();
@@ -191,6 +199,8 @@
 </div>
 
 <UpdateCard {updates} />
+
+<Splash onEnd={focusActiveList} />
 
 <style>
   .shell {
