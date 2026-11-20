@@ -171,6 +171,30 @@ impl Rig {
         question
     }
 
+    /// Answers the job's question with `answer` if it asks one before it ends, then waits for its end; says
+    /// whether it asked. A move of a file onto itself asks on some systems, and is a rename that changes nothing
+    /// on others (macOS), so a test of it accepts both.
+    pub(super) fn answer_if_asked(&mut self, job: JobId, answer: Answer) -> (bool, Ended) {
+        let asks = |event: &OpsEvent| matches!(event, OpsEvent::Conflict { conflict } if conflict.job == job);
+        let ends = |event: &OpsEvent| matches!(event, OpsEvent::Ended { id, .. } if *id == job);
+
+        loop {
+            let open = |wanted: &dyn Fn(&OpsEvent) -> bool| {
+                (0..self.seen.len()).any(|index| !self.claimed.contains(&index) && wanted(&self.seen[index]))
+            };
+            if open(&asks) {
+                self.answer_next(job, answer, false);
+                return (true, self.wait_ended(job));
+            }
+            if open(&ends) {
+                return (false, self.wait_ended(job));
+            }
+
+            let event = self.events.recv_timeout(PATIENCE).expect("the job asked or ended");
+            self.seen.push(event);
+        }
+    }
+
     /// Submits a job and returns its id.
     pub(super) fn start(&self, request: Request) -> JobId {
         self.engine.submit(request).expect("accepted")

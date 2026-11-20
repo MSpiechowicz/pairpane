@@ -76,6 +76,14 @@ pub(super) fn rename_in(folder: &Path, from: &str, to: &str) -> io::Result<()> {
         return Err(refuse_name());
     }
 
+    // Onto its own name: some systems (macOS) take a no-replace rename of a file onto itself as done.
+    if from == to {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "an item with this name exists already",
+        ));
+    }
+
     let (from_path, to_path) = (folder.join(from), folder.join(to));
 
     if platform::CASE_INSENSITIVE && from != to && from.to_lowercase() == to.to_lowercase() {

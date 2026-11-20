@@ -212,21 +212,20 @@ fn cancelling_a_move_across_disks_keeps_the_empty_folders_it_already_moved() {
 
 /// Moves `a.txt` into its own folder with a rig set by `set`, and answers "overwrite" to the question about the file
 /// that is already there: it is the file itself. Returns how the job ended, and the folder.
-fn move_onto_itself(set: impl FnOnce(&mut Hooks)) -> (Ended, TempDir) {
+fn move_onto_itself(set: impl FnOnce(&mut Hooks)) -> (bool, Ended, TempDir) {
     let root = temp();
     let src = root.path().join("src");
     write(&src.join("a.txt"), b"only copy");
     let mut rig = Rig::hooked(set);
 
     let job = rig.start(relocate(&src, &["a.txt"], &src));
-    rig.answer_next(job, Answer::Overwrite, false);
-    let ended = rig.wait_ended(job);
+    let (asked, ended) = rig.answer_if_asked(job, Answer::Overwrite);
 
     assert_eq!(ended.outcome, Outcome::Done);
     assert_eq!(read(&src.join("a.txt")), b"only copy");
     assert_eq!(tree(&src), ["a.txt"]);
 
-    (ended, root)
+    (asked, ended, root)
 }
 
 #[test]
@@ -234,7 +233,7 @@ fn a_move_never_deletes_a_source_that_is_the_committed_target() {
     // A move into its own folder, as a name nothing recognises (the check of the conflict sees nothing): the answer
     // "overwrite" replaces the file with a copy of itself, and the source must not then be deleted.
     // (A rename onto itself would end the move without a copy; pretend it fails like one between two disks.)
-    let (ended, _root) = move_onto_itself(|hooks| {
+    let (_, ended, _root) = move_onto_itself(|hooks| {
         hooks.blind_identity = true;
         hooks.cross_device = true;
     });
@@ -246,9 +245,9 @@ fn a_move_never_deletes_a_source_that_is_the_committed_target() {
 fn a_move_whose_identities_cannot_be_read_replaces_nothing() {
     // The names alone would show that the target is the source's own folder; a missing identity still counts as
     // "the same file" for the question about overwriting, so the answer "overwrite" becomes a skip.
-    let (ended, _root) = move_onto_itself(|hooks| hooks.unreadable_identity = true);
+    let (asked, ended, _root) = move_onto_itself(|hooks| hooks.unreadable_identity = true);
 
-    assert_eq!(ended.skipped, 1);
+    assert_eq!(ended.skipped, u32::from(asked), "asked, the answer is a skip");
     assert!(ended.errors.is_empty(), "{:?}", ended.errors);
 }
 
@@ -256,7 +255,7 @@ fn a_move_whose_identities_cannot_be_read_replaces_nothing() {
 fn a_move_keeps_the_original_when_it_cannot_confirm_the_copy_is_a_different_file() {
     // The question about overwriting is fooled (the file replaces itself), and the identities cannot be read to
     // tell the copy from its source afterwards: the source stays, and the item says why.
-    let (ended, _root) = move_onto_itself(|hooks| {
+    let (_, ended, _root) = move_onto_itself(|hooks| {
         hooks.blind_identity = true;
         hooks.unreadable_identity = true;
         hooks.cross_device = true;
@@ -294,11 +293,10 @@ fn move_a_file_onto_itself_through(root: &Path, name: &str, to: &Path) {
     let mut rig = Rig::new();
 
     let job = rig.start(relocate(&root.join("src"), &[name], to));
-    rig.answer_next(job, Answer::Overwrite, false);
-    let ended = rig.wait_ended(job);
+    let (asked, ended) = rig.answer_if_asked(job, Answer::Overwrite);
 
     assert_eq!(ended.outcome, Outcome::Done);
-    assert_eq!(ended.skipped, 1, "the file is left as it is");
+    assert_eq!(ended.skipped, u32::from(asked), "asked, the file is left as it is");
     assert_eq!(read(&root.join("src").join(name)), b"only copy");
     assert_eq!(tree(&root.join("src")), [name]);
 }
