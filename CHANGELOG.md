@@ -1,3 +1,10 @@
+# [0.7.0](https://github.com/MSpiechowicz/pairpane/compare/v0.6.0...v0.7.0) (2026-11-20)
+
+
+### Features
+
+* startup splash (B1) ([a806218](https://github.com/MSpiechowicz/pairpane/commit/a806218e4f5c2fca15bd0a577518e66e6e9378df)), closes [#10](https://github.com/MSpiechowicz/pairpane/issues/10)
+
 # [0.6.0](https://github.com/MSpiechowicz/pairpane/compare/v0.5.1...v0.6.0) (2026-11-20)
 
 
