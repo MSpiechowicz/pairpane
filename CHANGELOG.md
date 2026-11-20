@@ -1,3 +1,10 @@
+# [0.8.0](https://github.com/MSpiechowicz/pairpane/compare/v0.7.0...v0.8.0) (2026-11-20)
+
+
+### Features
+
+* copy and move engine with a background queue ([2c9a8f1](https://github.com/MSpiechowicz/pairpane/commit/2c9a8f19d1aa4a6028d67cd4c913eee44d042084)), closes [#11](https://github.com/MSpiechowicz/pairpane/issues/11)
+
 # [0.7.0](https://github.com/MSpiechowicz/pairpane/compare/v0.6.0...v0.7.0) (2026-11-20)
 
 
