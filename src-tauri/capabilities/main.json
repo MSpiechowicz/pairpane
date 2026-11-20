@@ -13,6 +13,11 @@
     "allow-pane-folder-size",
     "allow-volumes-list",
     "allow-state-load",
-    "allow-state-save"
+    "allow-state-save",
+    "allow-ops-subscribe",
+    "allow-ops-start",
+    "allow-ops-control",
+    "allow-ops-answer",
+    "allow-ops-rename"
   ]
 }

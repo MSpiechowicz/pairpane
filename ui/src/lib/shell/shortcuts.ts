@@ -1,4 +1,7 @@
-/** What a window-level shortcut asks for. The drive menus and the hotlist are run by the shell that owns them. */
+/**
+ * What a window-level shortcut asks for. The drive menus, the hotlist, the copy dialogs and the transfers panel
+ * are run by the shell that owns them.
+ */
 export type Action =
   | 'newTab'
   | 'closeTab'
@@ -8,7 +11,11 @@ export type Action =
   | 'forward'
   | 'driveMenuLeft'
   | 'driveMenuRight'
-  | 'hotlist';
+  | 'hotlist'
+  | 'copy'
+  | 'move'
+  | 'rename'
+  | 'transfers';
 
 /** Ctrl + key. (Ctrl on every OS: on macOS Cmd+W already closes the window.) */
 function withCtrl(event: KeyboardEvent): Action | undefined {
@@ -27,6 +34,8 @@ function withCtrl(event: KeyboardEvent): Action | undefined {
       return 'closeTab';
     case 'd':
       return 'hotlist';
+    case 'j':
+      return 'transfers';
     default:
       return undefined;
   }
@@ -52,9 +61,26 @@ function withAlt(event: KeyboardEvent): Action | undefined {
   }
 }
 
+/** A function key on its own: F5 copies, F6 moves, Shift+F6 renames. */
+function functionKey(event: KeyboardEvent): Action | undefined {
+  switch (event.key) {
+    case 'F5':
+      return event.shiftKey ? undefined : 'copy';
+    case 'F6':
+      return event.shiftKey ? 'rename' : 'move';
+    default:
+      return undefined;
+  }
+}
+
+/** F5 reloads the webview, which would lose every pane and job on screen: it is never left to the webview. */
+export function reloadsPage(event: KeyboardEvent): boolean {
+  return event.key === 'F5';
+}
+
 /**
  * The action a key press stands for. Ctrl+Alt (AltGr, which types characters) and Cmd are never shortcuts; Tab
- * alone is not one either (it switches panes).
+ * alone is not one either (it switches panes). The function keys are the only shortcuts without a modifier.
  */
 export function shortcutFor(event: KeyboardEvent): Action | undefined {
   if (event.isComposing || event.metaKey || (event.ctrlKey && event.altKey)) {
@@ -65,7 +91,11 @@ export function shortcutFor(event: KeyboardEvent): Action | undefined {
     return withCtrl(event);
   }
 
-  return event.altKey ? withAlt(event) : undefined;
+  if (event.altKey) {
+    return withAlt(event);
+  }
+
+  return functionKey(event);
 }
 
 /** Whether the key press goes to a text field: shortcuts and pane switching leave those alone. */

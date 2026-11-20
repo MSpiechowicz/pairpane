@@ -7,6 +7,7 @@
 mod app;
 mod ipc_error;
 mod listing;
+mod ops;
 mod state;
 mod update;
 mod volume;
@@ -14,6 +15,9 @@ mod volume;
 pub use app::AppInfo;
 pub use ipc_error::{IpcError, IpcErrorCode};
 pub use listing::{Crumb, Entry, EntryKind, ListEvent, PaneId, SizeEvent};
+pub use ops::{
+    Answer, ConflictInfo, ControlAction, FileFacts, ItemError, JobId, JobPhase, JobView, OpKind, OpsEvent, Outcome,
+};
 pub use state::{SavedPane, SavedState, SavedTab, SortColumn};
 pub use update::{MAX_UPDATE_NOTES_BYTES, MenuCommand, UpdateInfo, UpdatePhase, UpdateProgress};
 pub use volume::{Volume, VolumeEvent, VolumeKind};

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ops-answer"
+description = "Enables the ops_answer command without any pre-configured scope."
+commands.allow = ["ops_answer"]
+
+[[permission]]
+identifier = "deny-ops-answer"
+description = "Denies the ops_answer command without any pre-configured scope."
+commands.deny = ["ops_answer"]

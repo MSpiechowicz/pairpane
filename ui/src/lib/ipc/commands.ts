@@ -1,6 +1,11 @@
+import type { Answer } from './bindings/Answer';
 import type { AppInfo } from './bindings/AppInfo';
+import type { ControlAction } from './bindings/ControlAction';
+import type { JobId } from './bindings/JobId';
 import type { ListEvent } from './bindings/ListEvent';
 import type { MenuCommand } from './bindings/MenuCommand';
+import type { OpKind } from './bindings/OpKind';
+import type { OpsEvent } from './bindings/OpsEvent';
 import type { PaneId } from './bindings/PaneId';
 import type { SavedState } from './bindings/SavedState';
 import type { SizeEvent } from './bindings/SizeEvent';
@@ -29,6 +34,11 @@ export const commands = {
   >(),
   pane_folder_size: cmd<{ pane: PaneId; path: string; name: string; onEvent: EventSink<SizeEvent> }, null>(),
   volumes_list: cmd<{ onEvent: EventSink<VolumeEvent> }, null>(),
+  ops_subscribe: cmd<{ onEvent: EventSink<OpsEvent> }, null>(),
+  ops_start: cmd<{ kind: OpKind; from: string; names: string[]; to: string; verify: boolean }, JobId>(),
+  ops_control: cmd<{ job: JobId; action: ControlAction }, null>(),
+  ops_answer: cmd<{ job: JobId; question: number; answer: Answer; all: boolean }, null>(),
+  ops_rename: cmd<{ path: string; from: string; to: string }, null>(),
   state_load: cmd<undefined, SavedState | null>(),
   state_save: cmd<{ state: SavedState }, null>(),
 };

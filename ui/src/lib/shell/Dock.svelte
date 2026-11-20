@@ -1,4 +1,6 @@
 <script lang="ts">
+  import type { Snippet } from 'svelte';
+
   /** The function keys, in key order. Delete is the one destructive key and is marked as such. */
   const KEYS: readonly { key: string; label: string; hot?: boolean }[] = [
     { key: 'F3', label: 'View' },
@@ -8,17 +10,29 @@
     { key: 'F7', label: 'New folder' },
     { key: 'F8', label: 'Delete', hot: true },
   ];
+
+  let {
+    onKey,
+    children,
+  }: {
+    /** A function key was clicked; it does what pressing it does. */
+    onKey?: (key: string) => void;
+    /** Between the command line and the keys. */
+    children?: Snippet;
+  } = $props();
 </script>
 
-<!-- One row: the shell command line on the left, content-width function keys on the right, no separators. -->
+<!-- One row: the shell command line on the left, content-width function keys on the right, no separators; whatever
+  the dock is given (the transfers chip) sits between them. -->
 <footer class="dock">
   <label class="shell">
     <span class="prompt" aria-hidden="true">❯</span>
     <input placeholder="Shell command in the active folder…" spellcheck="false" aria-label="Shell command" />
   </label>
+  {@render children?.()}
   <div class="keys">
     {#each KEYS as { key, label, hot } (key)}
-      <button class="fk" class:hot type="button" aria-label="{label} ({key})">
+      <button class="dock-key fk" class:hot type="button" aria-label="{label} ({key})" onclick={() => onKey?.(key)}>
         <kbd>{key}</kbd><span class="label">{label}</span>
       </button>
     {/each}
@@ -74,24 +88,6 @@
     display: flex;
     align-items: center;
     gap: 2px;
-  }
-
-  .fk {
-    height: 30px;
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 0 10px 0 6px;
-    border: 1px solid transparent;
-    border-radius: 7px;
-    background: none;
-    color: var(--text);
-    white-space: nowrap;
-  }
-
-  .fk:hover {
-    border-color: var(--line);
-    background: var(--panel-2);
   }
 
   kbd {

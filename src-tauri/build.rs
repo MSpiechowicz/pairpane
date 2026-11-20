@@ -18,6 +18,11 @@ const COMMANDS: &[&str] = &[
     "volumes_list",
     "state_load",
     "state_save",
+    "ops_subscribe",
+    "ops_start",
+    "ops_control",
+    "ops_answer",
+    "ops_rename",
 ];
 
 fn main() {

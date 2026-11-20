@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isTyping, shortcutFor } from './shortcuts';
+import { isTyping, reloadsPage, shortcutFor } from './shortcuts';
 
 const press = (key: string, init: KeyboardEventInit = {}) =>
   shortcutFor(new KeyboardEvent('keydown', { key, ...init }));
@@ -25,6 +25,23 @@ describe('shortcutFor', () => {
     expect(press('ArrowRight', { altKey: true })).toBe('forward');
     expect(press('F1', { altKey: true })).toBe('driveMenuLeft');
     expect(press('F2', { altKey: true })).toBe('driveMenuRight');
+  });
+
+  it('F5 copies, F6 moves, Shift+F6 renames and Ctrl+J toggles the transfers', () => {
+    expect(press('F5')).toBe('copy');
+    expect(press('F6')).toBe('move');
+    expect(press('F6', { shiftKey: true })).toBe('rename');
+    expect(press('j', { ctrlKey: true })).toBe('transfers');
+    expect(press('J', { ctrlKey: true })).toBe('transfers'); // caps lock
+  });
+
+  it('other function keys and modified F5 and F6 are not shortcuts', () => {
+    expect(press('F3')).toBeUndefined();
+    expect(press('F5', { shiftKey: true })).toBeUndefined();
+    expect(press('F5', { ctrlKey: true })).toBeUndefined();
+    expect(press('F6', { altKey: true })).toBeUndefined();
+    expect(press('F6', { metaKey: true })).toBeUndefined();
+    expect(press('j')).toBeUndefined();
   });
 
   it('plain arrows and letters are the pane`s, not shortcuts', () => {
@@ -60,5 +77,18 @@ describe('isTyping', () => {
     expect(isTyping(button)).toBe(false);
     expect(isTyping(document.body)).toBe(false);
     expect(isTyping(null)).toBe(false);
+  });
+});
+
+describe('reloadsPage', () => {
+  it('is F5 with or without a modifier, and nothing else', () => {
+    const reloads = (key: string, init: KeyboardEventInit = {}) =>
+      reloadsPage(new KeyboardEvent('keydown', { key, ...init }));
+
+    expect(reloads('F5')).toBe(true);
+    expect(reloads('F5', { ctrlKey: true })).toBe(true);
+    expect(reloads('F5', { shiftKey: true })).toBe(true);
+    expect(reloads('F6')).toBe(false);
+    expect(reloads('r')).toBe(false);
   });
 });

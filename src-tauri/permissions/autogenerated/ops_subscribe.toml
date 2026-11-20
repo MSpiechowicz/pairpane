@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ops-subscribe"
+description = "Enables the ops_subscribe command without any pre-configured scope."
+commands.allow = ["ops_subscribe"]
+
+[[permission]]
+identifier = "deny-ops-subscribe"
+description = "Denies the ops_subscribe command without any pre-configured scope."
+commands.deny = ["ops_subscribe"]

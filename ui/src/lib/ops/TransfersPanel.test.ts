@@ -1,0 +1,185 @@
+import { fireEvent, render, screen, within } from '@testing-library/svelte';
+import { describe, expect, it, vi } from 'vitest';
+
+import type { OpsEvent } from '$lib/ipc/bindings/OpsEvent';
+
+import { job, opsBackend } from '../../../tests/ops';
+import TransfersChip from './TransfersChip.svelte';
+import TransfersPanel from './TransfersPanel.svelte';
+import { Transfers } from './transfers.svelte';
+
+async function store() {
+  const backend = opsBackend();
+  const transfers = new Transfers(backend.ipc);
+  await transfers.subscribe();
+  return { ...backend, transfers };
+}
+
+const progress = (id: number, doneBytes: number, totalBytes: number): OpsEvent => ({
+  kind: 'progress',
+  id,
+  doneBytes,
+  totalBytes,
+  doneFiles: 0,
+  totalFiles: 1,
+  current: null,
+  bytesPerSec: 10 * 1024 * 1024,
+  etaSecs: 65,
+});
+
+const ended = (id: number, extra: Partial<Extract<OpsEvent, { kind: 'ended' }>> = {}): OpsEvent => ({
+  kind: 'ended',
+  id,
+  outcome: { kind: 'done' },
+  skipped: 0,
+  errors: [],
+  moreErrors: 0,
+  ...extra,
+});
+
+describe('TransfersPanel', () => {
+  it('has a row per job: label, target, progress, speed and time left', async () => {
+    const { transfers, send } = await store();
+    send({ kind: 'added', job: job(1, { label: '3 items', kind: 'move', to: '/backup' }) });
+    send(progress(1, 50, 200));
+    render(TransfersPanel, { transfers, onClose: vi.fn() });
+
+    expect(screen.getByText('3 items')).toBeInTheDocument();
+    expect(screen.getByText('Move')).toBeInTheDocument();
+    expect(screen.getByText('→ /backup')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Progress of 3 items' })).toHaveAttribute('aria-valuenow', '25');
+    expect(screen.getByText('10 MB/s · 1 min 5 s left')).toBeInTheDocument();
+  });
+
+  it('says where a job is before there is a speed to show', async () => {
+    const { transfers, send } = await store();
+    send({ kind: 'added', job: job(1, { phase: 'scanning' }) }, { kind: 'added', job: job(2, { phase: 'waiting', label: 'b' }) });
+    render(TransfersPanel, { transfers, onClose: vi.fn() });
+
+    expect(screen.getByText('Scanning…')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for your answer')).toBeInTheDocument();
+  });
+
+  it('Pause becomes Resume while the job is paused, and each sends its action', async () => {
+    const { transfers, send, calls } = await store();
+    send({ kind: 'added', job: job(1) });
+    render(TransfersPanel, { transfers, onClose: vi.fn() });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Pause a.pdf' }));
+    send({ kind: 'paused', id: 1, paused: true });
+    expect(await screen.findByText('Paused')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Resume a.pdf' }));
+
+    expect(calls('ops_control')).toEqual([
+      { job: 1, action: 'pause' },
+      { job: 1, action: 'resume' },
+    ]);
+  });
+
+  it('Cancel cancels that job only', async () => {
+    const { transfers, send, calls } = await store();
+    send({ kind: 'added', job: job(1) }, { kind: 'added', job: job(2, { label: 'b.txt' }) });
+    render(TransfersPanel, { transfers, onClose: vi.fn() });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel b.txt' }));
+
+    expect(calls('ops_control')).toEqual([{ job: 2, action: 'cancel' }]);
+  });
+
+  it('a finished job shows how it ended, and × dismisses it', async () => {
+    const { transfers, send } = await store();
+    send({ kind: 'added', job: job(1) }, ended(1, { skipped: 2 }));
+    render(TransfersPanel, { transfers, onClose: vi.fn() });
+
+    expect(screen.getByText('Done · 2 skipped')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pause a.pdf' })).not.toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Dismiss a.pdf' }));
+    expect(screen.queryByText('a.pdf')).not.toBeInTheDocument();
+    expect(screen.getByText('No transfers')).toBeInTheDocument();
+  });
+
+  it('a failed job shows its errors on expand', async () => {
+    const { transfers, send } = await store();
+    const error = (message: string) => ({ code: 'io' as const, message });
+    send(
+      { kind: 'added', job: job(1) },
+      ended(1, {
+        outcome: { kind: 'failed', error: error('The target disk is full') },
+        errors: [{ path: 'dir/x.bin', error: error('Permission denied') }],
+        moreErrors: 3,
+      }),
+    );
+    render(TransfersPanel, { transfers, onClose: vi.fn() });
+    expect(screen.queryByText('Permission denied')).not.toBeInTheDocument();
+
+    const toggle = screen.getByRole('button', { name: 'Failed · 4 errors' });
+    await fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('The target disk is full')).toBeInTheDocument();
+    expect(screen.getByText('dir/x.bin')).toBeInTheDocument();
+    expect(screen.getByText(/Permission denied/)).toBeInTheDocument();
+    expect(screen.getByText('and 3 more')).toBeInTheDocument();
+
+    await fireEvent.click(toggle);
+    expect(screen.queryByText('Permission denied')).not.toBeInTheDocument();
+  });
+
+  it('closes on Escape, and on a click outside but not on the chip that opens it', async () => {
+    const { transfers } = await store();
+    const onClose = vi.fn();
+    render(TransfersPanel, { transfers, onClose });
+    const panel = screen.getByRole('region', { name: 'Transfers' });
+    expect(panel).toHaveFocus();
+
+    await fireEvent.click(within(panel).getByText('No transfers'));
+    expect(onClose).not.toHaveBeenCalled();
+
+    await fireEvent.keyDown(panel, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    const opener = document.body.appendChild(document.createElement('button'));
+    opener.dataset.menuOpener = '';
+    await fireEvent.click(opener);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    opener.remove();
+
+    await fireEvent.click(document.body);
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('TransfersChip', () => {
+  it('is not there while there are no jobs', async () => {
+    const { transfers } = await store();
+    render(TransfersChip, { transfers, open: false, onToggle: vi.fn() });
+
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('shows the number of jobs and how far they are, and opens the panel', async () => {
+    const { transfers, send } = await store();
+    const onToggle = vi.fn();
+    render(TransfersChip, { transfers, open: false, onToggle });
+    send({ kind: 'added', job: job(1) }, { kind: 'added', job: job(2) });
+    send(progress(1, 30, 100), progress(2, 60, 100));
+
+    const chip = await screen.findByRole('button', { name: 'Transfers (Ctrl+J)' });
+    expect(chip).toHaveTextContent('⇅ 2 · 45 %');
+    expect(chip).toHaveAttribute('aria-expanded', 'false');
+
+    await fireEvent.click(chip);
+    expect(onToggle).toHaveBeenCalledOnce();
+  });
+
+  it('shows just the count while no job knows its size yet', async () => {
+    const { transfers, send } = await store();
+    send({ kind: 'added', job: job(1, { phase: 'scanning' }) });
+    render(TransfersChip, { transfers, open: true, onToggle: vi.fn() });
+
+    expect(screen.getByRole('button', { name: /Transfers/ })).toHaveTextContent(/^⇅ 1$/);
+    expect(screen.getByRole('button', { name: /Transfers/ })).toHaveAttribute('aria-expanded', 'true');
+  });
+});

@@ -3,6 +3,7 @@
 
 pub mod app;
 mod limit;
+pub mod ops;
 pub mod panes;
 pub mod sizes;
 pub mod state;

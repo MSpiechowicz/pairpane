@@ -10,9 +10,9 @@ mod window;
 
 use std::process::ExitCode;
 
-use tauri::Manager;
+use tauri::{Manager, RunEvent};
 
-/// Builds and runs the app until the last window closes.
+/// Builds and runs the app until the last window closes; the transfers still running are cancelled, and given up to two seconds to clean up, as it exits.
 pub fn run() -> ExitCode {
     let builder = tauri::Builder::default()
         // Must be registered first so a second launch exits before anything else starts.
@@ -37,6 +37,7 @@ pub fn run() -> ExitCode {
             app.manage(menu::MenuEvents::default());
             app.manage(commands::panes::Panes::default());
             app.manage(commands::volumes::Volumes::default());
+            app.manage(commands::ops::Ops::default());
             // Next to the window-state plugin's file. Without a config folder nothing is saved.
             let state_file = app.path().app_config_dir().ok().map(|dir| dir.join("state.json"));
             app.manage(commands::state::StateStore::new(state_file));
@@ -59,8 +60,23 @@ pub fn run() -> ExitCode {
             commands::volumes::volumes_list,
             commands::state::state_load,
             commands::state::state_save,
+            commands::ops::ops_subscribe,
+            commands::ops::ops_start,
+            commands::ops::ops_control,
+            commands::ops::ops_answer,
+            commands::ops::ops_rename,
         ])
-        .run(tauri::generate_context!());
+        .build(tauri::generate_context!())
+        .map(|app| {
+            app.run(|app, event| {
+                // Cancel the jobs, silently, and give each a moment to remove its partial file (the plan's decision 8).
+                if let RunEvent::Exit = event
+                    && let Some(ops) = app.try_state::<commands::ops::Ops>()
+                {
+                    ops.shutdown();
+                }
+            });
+        });
 
     match result {
         Ok(()) => ExitCode::SUCCESS,

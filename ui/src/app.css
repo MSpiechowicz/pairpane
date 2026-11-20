@@ -65,7 +65,7 @@
   }
 }
 
-/* The look of every popup (the settings menu, the drive menu, the hotlist); each one places itself. */
+/* The look of every popup (the settings menu, the drive menu, the hotlist, the transfers); each one places itself. */
 @layer components {
   .popup {
     z-index: 30;
@@ -75,5 +75,81 @@
     border-radius: 10px;
     background: var(--panel);
     box-shadow: 0 16px 50px rgb(0 0 0 / 0.35);
+  }
+
+  /* Buttons of cards and dialogs; `btn-primary` is the one action they lead to. */
+  .btn {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--panel-2);
+    color: var(--text);
+    padding: 4px 12px;
+    cursor: pointer;
+  }
+
+  .btn:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+
+  .btn:disabled {
+    color: var(--dim);
+    cursor: default;
+  }
+
+  .btn-primary {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+  }
+
+  /* A checkbox with its text; the box takes the accent colour. */
+  .check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--dim);
+    white-space: nowrap;
+  }
+
+  .check input {
+    margin: 0;
+    accent-color: var(--accent);
+  }
+
+  /* A button of the dock (a function key, the transfers chip): 30px tall, bare until hovered. */
+  .dock-key {
+    height: 30px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0 10px 0 6px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: none;
+    color: var(--text);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .dock-key:hover {
+    border-color: var(--line);
+    background: var(--panel-2);
+  }
+
+  /* Things that appear in place do it with a fade, nothing moves. */
+  .fade-in {
+    animation: fade-in 200ms ease-out;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-in {
+    animation: none;
   }
 }

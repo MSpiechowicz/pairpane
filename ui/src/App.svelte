@@ -3,14 +3,21 @@
 
   import { ipc } from '$lib/ipc/client';
   import type { AppInfo } from '$lib/ipc/bindings/AppInfo';
+  import ConflictDialog from '$lib/ops/ConflictDialog.svelte';
+  import OpDialog from '$lib/ops/OpDialog.svelte';
+  import { type OpRequest, requestFor } from '$lib/ops/targets';
+  import { Transfers } from '$lib/ops/transfers.svelte';
+  import TransfersChip from '$lib/ops/TransfersChip.svelte';
+  import TransfersPanel from '$lib/ops/TransfersPanel.svelte';
   import { Hotlist } from '$lib/panes/hotlist.svelte';
   import { PaneTabs } from '$lib/panes/tabs.svelte';
+  import type { PaneView } from '$lib/panes/view.svelte';
   import { Volumes } from '$lib/panes/volumes.svelte';
   import Dock from '$lib/shell/Dock.svelte';
   import type { Menu } from '$lib/shell/menu';
   import Pane from '$lib/shell/Pane.svelte';
   import { Session } from '$lib/shell/session.svelte';
-  import { isTyping, shortcutFor } from '$lib/shell/shortcuts';
+  import { isTyping, reloadsPage, shortcutFor } from '$lib/shell/shortcuts';
   import Splash from '$lib/shell/Splash.svelte';
   import { Theme } from '$lib/shell/theme.svelte';
   import TopBar from '$lib/shell/TopBar.svelte';
@@ -41,6 +48,43 @@
     showHidden = !showHidden;
     void panes.left.view.listing.setShowHidden(showHidden);
     void panes.right.view.listing.setShowHidden(showHidden);
+  }
+
+  const transfers = new Transfers(ipc);
+  let panelOpen = $state(false);
+  /** The copy, move or rename dialog that is open, and the pane it works in. */
+  let dialog = $state.raw<{ request: OpRequest; source: PaneView } | undefined>();
+  const question = $derived(transfers.question);
+  /** A dialog has the keyboard: the shortcuts and Tab are its own then. */
+  const modal = $derived(dialog !== undefined || question !== undefined);
+
+  /** Opens the dialog for the active pane's selection (or cursor), with the other pane's folder as the target. */
+  function openDialog(kind: 'copy' | 'move' | 'rename') {
+    const other = active === 'left' ? 'right' : 'left';
+    const source = panes[active].view;
+    const request = requestFor(kind, source, panes[other].view);
+    if (request !== undefined) {
+      dialog = { request, source };
+    }
+  }
+
+  /** A job started (it took the selection over) or an item was renamed (the cursor goes to its new name). */
+  function dialogDone(name: string) {
+    if (dialog?.request.kind === 'rename') {
+      dialog.source.pointAt(name);
+    } else {
+      dialog?.source.deselect(dialog.request.names);
+    }
+
+    dialog = undefined;
+  }
+
+  function onDockKey(key: string) {
+    if (key === 'F5') {
+      openDialog('copy');
+    } else if (key === 'F6') {
+      openDialog('move');
+    }
   }
 
   const theme = new Theme();
@@ -119,13 +163,26 @@
       case 'hotlist':
         showMenu(active, 'hotlist');
         break;
+      case 'copy':
+      case 'move':
+      case 'rename':
+        openDialog(action);
+        break;
+      case 'transfers':
+        panelOpen = !panelOpen;
+        break;
     }
 
     event.preventDefault();
   }
 
   function onKeyDown(event: KeyboardEvent) {
-    if (!event.defaultPrevented) {
+    const claimed = event.defaultPrevented || modal;
+    if (reloadsPage(event)) {
+      event.preventDefault(); // even in a text field: a reload would lose the panes and every job on screen
+    }
+
+    if (!claimed) {
       switchPane(event);
       runShortcut(event);
     }
@@ -142,6 +199,8 @@
     // The panes open the folders of the last session (the home folder when there is none); the rest does not wait.
     void session.restore();
     void volumes.refresh();
+    // Without the desktop runtime there are no jobs.
+    void transfers.subscribe().catch(() => {});
 
     try {
       info = await ipc.invoke('app_info', undefined);
@@ -195,10 +254,28 @@
     {/each}
   </main>
 
-  <Dock />
+  <Dock onKey={onDockKey}>
+    <TransfersChip {transfers} open={panelOpen} onToggle={() => (panelOpen = !panelOpen)} />
+  </Dock>
 </div>
 
-<UpdateCard {updates} />
+<!-- Above the dock, on the right: the update card and the transfers stack, so neither covers the other. -->
+<div class="floats">
+  <UpdateCard {updates} />
+  {#if panelOpen}
+    <TransfersPanel {transfers} onClose={() => (panelOpen = false)} />
+  {/if}
+</div>
+
+{#if dialog}
+  <OpDialog request={dialog.request} {ipc} onClose={() => (dialog = undefined)} onDone={dialogDone} />
+{/if}
+
+{#if question}
+  {#key `${question.info.job}:${question.info.question}`}
+    <ConflictDialog {transfers} {question} />
+  {/key}
+{/if}
 
 <Splash onEnd={focusActiveList} />
 
@@ -208,6 +285,17 @@
     grid-template-rows: 44px minmax(0, 1fr) 44px;
     grid-template-columns: minmax(0, 1fr);
     height: 100%;
+  }
+
+  .floats {
+    position: fixed;
+    right: 16px;
+    bottom: 56px;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
   }
 
   .panes {

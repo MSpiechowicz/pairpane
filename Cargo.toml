@@ -45,6 +45,15 @@ fs4 = "1.1.0"
 # Lists the local volumes on Windows (`sysinfo::Disks`): FindFirstVolumeW with only fixed and removable drives kept,
 # so a mapped network drive is never listed or touched. A safe API; only the `disk` feature is built.
 sysinfo = { version = "0.40", default-features = false, features = ["disk"] }
+# File copy and move (pairpane_core::ops): BLAKE3 to verify a copy and to compare two files (a safe API; its SIMD code
+# is built with the `cc` build dependency that is in the lockfile already), and rustix (Unix only) for the fast paths and
+# the no-replace rename (reflink, copy_file_range, fclonefileat, renameat2), all without `unsafe`.
+blake3 = { version = "1.8.7", default-features = false, features = ["std"] }
+rustix = { version = "1.1.6", default-features = false, features = ["fs", "std"] }
+# Windows only: the identity of a file or folder (volume serial number and file index, from a handle the caller opens
+# without following links), so two spellings of one place (8.3 names, case, a volume GUID path) compare equal. A safe
+# API over `winapi-util`; both are in the lockfile already through `walkdir`.
+same-file = "1.0.6"
 # Dev dependencies
 pretty_assertions = "1.4"
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }

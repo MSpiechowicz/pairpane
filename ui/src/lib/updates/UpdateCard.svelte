@@ -28,7 +28,7 @@
 
 {#if state.kind !== 'idle'}
   <section
-    class="update-card fixed right-4 bottom-14 w-80 rounded-lg border border-line bg-panel p-4 text-sm text-fg shadow-lg"
+    class="fade-in w-80 rounded-lg border border-line bg-panel p-4 text-sm text-fg shadow-lg"
     aria-live="polite"
     aria-label="Updates"
   >
@@ -79,40 +79,3 @@
     {/if}
   </section>
 {/if}
-
-<style>
-  .btn {
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    background: var(--panel-2);
-    color: var(--text);
-    padding: 4px 12px;
-    cursor: pointer;
-  }
-
-  .btn:hover {
-    border-color: var(--accent);
-  }
-
-  .btn-primary {
-    border-color: var(--accent);
-    background: var(--accent);
-    color: #fff;
-  }
-
-  .update-card {
-    animation: fade-in 200ms ease-out;
-  }
-
-  @keyframes fade-in {
-    from {
-      opacity: 0;
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .update-card {
-      animation: none;
-    }
-  }
-</style>

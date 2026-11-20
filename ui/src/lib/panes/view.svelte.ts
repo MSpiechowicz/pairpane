@@ -43,6 +43,8 @@ export class PaneView {
   #hint = $state(0);
   /** The folder to put the cursor on in the next listing (the one we just left by going up). */
   #cameFrom: string | undefined;
+  /** The entry to put the cursor on once a listing has it (a renamed one, which the watch has not listed yet). */
+  #pointTo: string | undefined;
 
   /** Plain set (not proxied); readers track `#selection`, bumped on every change. */
   readonly #selected = new Set<string>();
@@ -64,21 +66,17 @@ export class PaneView {
   /** The cursor's row, `-1` when there are no rows. */
   readonly cursor = $derived.by(() => this.#locate());
 
-  /** What the selected entries add up to (computed folder sizes included); `undefined` when none is selected. */
+  /** What the selected entries that are shown add up to (computed folder sizes included); `undefined` when none is. */
   readonly selection = $derived.by(() => {
-    void this.#selection;
-    if (this.#selected.size === 0) {
+    const shown = this.selectedShown();
+    if (shown.length === 0) {
       return undefined;
     }
 
     let dirs = 0;
     let files = 0;
     let bytes = 0;
-    for (const entry of this.listing.entries) {
-      if (entry === undefined || !this.#selected.has(entry.name)) {
-        continue;
-      }
-
+    for (const entry of shown) {
       if (entry.kind === 'dir') {
         dirs += 1;
         bytes += this.sizes.sizeOf(entry.name) ?? 0;
@@ -107,7 +105,10 @@ export class PaneView {
           hooks.onListed?.(this.listing.path);
         }
       },
-      onDone: () => this.#prune(),
+      onDone: () => {
+        this.#prune();
+        this.#pointAtPending();
+      },
       onFail: hooks.onFail,
       onNotice: hooks.onNotice,
     });
@@ -242,8 +243,29 @@ export class PaneView {
     }
 
     const clamped = Math.min(Math.max(row, 0), count - 1);
+    this.#pointTo = undefined; // the cursor was moved on purpose: a pending pointAt has lost its turn
     this.#name = this.#nameAt(clamped);
     this.#hint = clamped;
+  }
+
+  /**
+   * Puts the cursor on the entry named `name`. An entry that is not listed yet (just renamed or created) gets it
+   * as soon as a listing has it, unless the cursor is moved or another folder opens before.
+   */
+  pointAt(name: string) {
+    const row = this.#find(name);
+    if (row >= 0) {
+      this.setCursor(row);
+    } else {
+      this.#pointTo = name;
+    }
+  }
+
+  #pointAtPending() {
+    const name = this.#pointTo;
+    if (name !== undefined) {
+      this.pointAt(name);
+    }
   }
 
   moveCursor(delta: number) {
@@ -306,6 +328,29 @@ export class PaneView {
       if (entry !== undefined) {
         visit(entry);
       }
+    }
+  }
+
+  /** The selected entries that pass the filter, in backend order: what the footer counts and a job acts on. */
+  selectedShown(): Entry[] {
+    void this.#selection;
+
+    const shown: Entry[] = [];
+    if (this.#selected.size > 0) {
+      this.#eachVisible((entry) => {
+        if (this.#selected.has(entry.name)) {
+          shown.push(entry);
+        }
+      });
+    }
+
+    return shown;
+  }
+
+  /** Deselects the names a job took over (selected entries the quick filter hid stay selected). */
+  deselect(names: readonly string[]) {
+    if (names.filter((name) => this.#selected.delete(name)).length > 0) {
+      this.#selection += 1;
     }
   }
 
@@ -421,6 +466,7 @@ export class PaneView {
 
     this.sizes.clear();
 
+    this.#pointTo = undefined;
     this.#name = this.#cameFrom;
     this.#cameFrom = undefined;
     this.#hint = 0;
