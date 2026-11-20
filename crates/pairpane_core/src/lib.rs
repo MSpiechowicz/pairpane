@@ -4,7 +4,9 @@
 //! # Layering
 //!
 //! 1. [`model`]: serde + ts-rs DTOs that form the IPC contract (generated TypeScript bindings).
-//! 2. Rules that need no Tauri, tested here: [`update`] (in-app updater).
+//! 2. Rules that need no Tauri, tested here: [`listing`] (folder listings and change watching), [`update`]
+//!    (in-app updater).
 
+pub mod listing;
 pub mod model;
 pub mod update;

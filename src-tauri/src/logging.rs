@@ -1,6 +1,7 @@
 //! Logging policy.
 //!
-//! Logs go to the OS log directory (and stdout in debug builds) at `Info`. They describe what
+//! Logs go to the OS log directory (and stdout in debug builds) at `Info` (Pairpane's own `Debug` lines, such as
+//! listing timings, too in debug builds). They describe what
 //! the app does, never what the user does: file names, file contents, IPC payloads and secrets
 //! must never be logged. The filter drops the targets that could carry payloads, and the webview
 //! cannot log at all (the log plugin's `log` command is not granted).
@@ -27,12 +28,22 @@ pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
         targets.push(Target::new(TargetKind::Stdout));
     }
 
+    let own_level = if cfg!(debug_assertions) {
+        LevelFilter::Debug
+    } else {
+        LevelFilter::Info
+    };
+
     tauri_plugin_log::Builder::new()
         .clear_targets()
         .targets(targets)
         .level(LevelFilter::Info)
+        .level_for("pairpane_core", own_level)
+        .level_for("pairpane_app_lib", own_level)
         // zbus logs every single-instance D-Bus call (including its argv signature) at info.
         .level_for("zbus", LevelFilter::Warn)
+        // notify's own log lines can name the watched folder; its errors reach our handler, which logs a fixed reason.
+        .level_for("notify", LevelFilter::Off)
         .filter(is_payload_free)
         .max_file_size(MAX_LOG_FILE_BYTES)
         .rotation_strategy(RotationStrategy::KeepSome(KEPT_LOG_FILES))

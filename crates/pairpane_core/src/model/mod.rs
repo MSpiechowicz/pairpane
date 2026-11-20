@@ -6,8 +6,10 @@
 
 mod app;
 mod ipc_error;
+mod listing;
 mod update;
 
 pub use app::AppInfo;
 pub use ipc_error::{IpcError, IpcErrorCode};
+pub use listing::{Crumb, Entry, EntryKind, ListEvent, PaneId};
 pub use update::{MAX_UPDATE_NOTES_BYTES, MenuCommand, UpdateInfo, UpdatePhase, UpdateProgress};

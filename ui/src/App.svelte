@@ -3,6 +3,7 @@
 
   import { ipc } from '$lib/ipc/client';
   import type { AppInfo } from '$lib/ipc/bindings/AppInfo';
+  import { Listing } from '$lib/panes/listing.svelte';
   import Dock from '$lib/shell/Dock.svelte';
   import Pane from '$lib/shell/Pane.svelte';
   import { Theme } from '$lib/shell/theme.svelte';
@@ -15,6 +16,15 @@
   let info = $state<AppInfo | undefined>();
   let failure = $state<string | undefined>();
   let active = $state<Side>('left');
+  let showHidden = $state(false);
+
+  const panes = { left: new Listing(ipc, 'left'), right: new Listing(ipc, 'right') };
+
+  function toggleHidden() {
+    showHidden = !showHidden;
+    void panes.left.setShowHidden(showHidden);
+    void panes.right.setShowHidden(showHidden);
+  }
 
   const theme = new Theme();
   const updates = new Updates(ipc, () => info?.version);
@@ -37,6 +47,10 @@
   }
 
   onMount(async () => {
+    // Both panes start in the home folder.
+    void panes.left.open(null);
+    void panes.right.open(null);
+
     try {
       info = await ipc.invoke('app_info', undefined);
     } catch (error) {
@@ -69,12 +83,14 @@
     {failure}
     {theme}
     {nativeMenu}
+    {showHidden}
     onCheckForUpdates={() => void updates.check(true)}
+    onToggleHidden={toggleHidden}
   />
 
   <main class="panes">
-    <Pane label="Left pane" path={['Home']} active={active === 'left'} onActivate={() => (active = 'left')} />
-    <Pane label="Right pane" path={['Home']} active={active === 'right'} onActivate={() => (active = 'right')} />
+    <Pane label="Left pane" listing={panes.left} active={active === 'left'} onActivate={() => (active = 'left')} />
+    <Pane label="Right pane" listing={panes.right} active={active === 'right'} onActivate={() => (active = 'right')} />
   </main>
 
   <Dock />

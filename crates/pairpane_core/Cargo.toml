@@ -11,12 +11,21 @@ publish = false
 [dependencies]
 base64.workspace = true
 minisign-verify.workspace = true
+notify.workspace = true
+rayon.workspace = true
 serde.workspace = true
+tracing.workspace = true
 ts-rs.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 pretty_assertions.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
+
+[[bench]]
+name = "listing"
+harness = false
 
 [lints]
 workspace = true

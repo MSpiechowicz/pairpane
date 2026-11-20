@@ -35,6 +35,7 @@ pub fn run() -> ExitCode {
         .setup(|app| {
             app.manage(updates::Updates::from_config(app.config()));
             app.manage(menu::MenuEvents::default());
+            app.manage(commands::panes::Panes::default());
 
             window::create_main_window(app)?;
 
@@ -49,6 +50,7 @@ pub fn run() -> ExitCode {
             commands::updates::update_install,
             commands::updates::app_relaunch,
             menu::menu_subscribe,
+            commands::panes::pane_open,
         ])
         .run(tauri::generate_context!());
 

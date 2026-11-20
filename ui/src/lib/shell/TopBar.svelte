@@ -6,14 +6,19 @@
     failure,
     theme,
     nativeMenu,
+    showHidden,
     onCheckForUpdates,
+    onToggleHidden,
   }: {
     version: string | undefined;
     failure: string | undefined;
     theme: Theme;
     /** macOS: the native app menu holds "Check for Updates…", so the top bar does not repeat it. */
     nativeMenu: boolean;
+    /** Whether the panes list hidden files. */
+    showHidden: boolean;
     onCheckForUpdates: () => void;
+    onToggleHidden: () => void;
   } = $props();
 
   const MENUS = ['Files', 'Mark', 'Commands', 'Net', 'View'] as const;
@@ -82,7 +87,7 @@
   <div class="tools">
     <button type="button">⇆ Compare</button>
     <button type="button">Σ Sizes</button>
-    <button type="button">Hidden</button>
+    <button type="button" class:on={showHidden} aria-pressed={showHidden} onclick={onToggleHidden}>Hidden</button>
     <button type="button" title="Theme: {THEME_LABEL[theme.mode]}" onclick={() => theme.cycle()}>
       <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" /><path d="M8 2.5v11a5.5 5.5 0 0 0 0-11z" /></svg>
       <span class="sr-only">Theme: {THEME_LABEL[theme.mode]}</span>
@@ -149,6 +154,10 @@
   .tools button:hover {
     border-color: var(--line);
     color: var(--text);
+  }
+
+  .tools button.on {
+    color: var(--accent-2);
   }
 
   .tools svg {

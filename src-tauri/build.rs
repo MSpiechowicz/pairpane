@@ -13,6 +13,7 @@ const COMMANDS: &[&str] = &[
     "update_install",
     "app_relaunch",
     "menu_subscribe",
+    "pane_open",
 ];
 
 fn main() {
