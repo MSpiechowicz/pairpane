@@ -1,3 +1,10 @@
+## [0.5.1](https://github.com/MSpiechowicz/pairpane/compare/v0.5.0...v0.5.1) (2026-11-20)
+
+
+### Bug Fixes
+
+* keep panes and folder sizes off network shares and devices on Windows ([9149c3f](https://github.com/MSpiechowicz/pairpane/commit/9149c3fef7f07f83cd63ec28661f9834beb637cf))
+
 # [0.5.0](https://github.com/MSpiechowicz/pairpane/compare/v0.4.0...v0.5.0) (2026-11-20)
 
 
