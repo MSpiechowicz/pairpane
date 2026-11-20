@@ -19,8 +19,9 @@ pub const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 /// and then. Returns `None` once `cancel` is set. Fails only when `root` itself cannot be read.
 ///
 /// Symbolic links and junctions below `root` are never followed or counted, nor is a subfolder on another
-/// device. On Unix `root` itself may be a symbolic link. On Windows it may not: a link there can lead through
-/// several hops to a network path, and only the first hop can be checked without touching the target.
+/// device, nor (on Windows) an entry whose name Windows would read as another one (see [`platform::is_unsafe_name`]).
+/// `root` itself may be a symbolic link, and a link may be on the way to it, unless a hop leads to a network or
+/// device path (see [`platform::local_path`]); the walk then starts from where the path ends.
 pub fn folder_size(root: &Path, cancel: &AtomicBool, progress: impl FnMut(u64)) -> io::Result<Option<u64>> {
     walk(root, cancel, PROGRESS_INTERVAL, progress)
 }
@@ -40,13 +41,8 @@ fn walk(
         return Ok(None);
     }
 
-    if root_link_refused(root)? {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "this link cannot be followed",
-        ));
-    }
-
+    // On Windows every folder on the way is checked first: a link or junction to a network path would make it connect.
+    let root = &platform::local_path(root)?;
     let root_metadata = fs::metadata(root)?;
     let root_device = platform::device(&root_metadata);
     let mut visited = HashSet::new();
@@ -66,6 +62,12 @@ fn walk(
 
             let Ok(entry) = entry else { continue };
             let Ok(file_type) = entry.file_type() else { continue };
+
+            // Windows opens `x.` as `x`, which may be a link to a network share: an unsafe name is neither walked
+            // nor counted (the same rule as when listing).
+            if cfg!(windows) && platform::is_unsafe_name(&entry.file_name().to_string_lossy()) {
+                continue;
+            }
 
             if file_type.is_dir() {
                 // The folder is opened by path later, so it may be swapped for another in between; accepted, as the
@@ -101,16 +103,6 @@ fn walk(
             }
         };
     }
-}
-
-/// Whether `root` is a link the walk must not start from: any link on Windows (it may chain to a network path),
-/// elsewhere one that leads to a network or device path.
-fn root_link_refused(root: &Path) -> io::Result<bool> {
-    if !fs::symlink_metadata(root)?.file_type().is_symlink() {
-        return Ok(false);
-    }
-
-    Ok(cfg!(windows) || !fs::read_link(root).is_ok_and(|target| platform::may_follow(&target)))
 }
 
 /// Records a directory as walked; `false` when it already was. Always `true` where directories have no identity.
@@ -245,15 +237,54 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_root_link_to_a_folder_is_followed() {
+    fn a_root_link_or_chain_of_links_is_followed_and_a_loop_refused() {
         use std::os::unix::fs::symlink;
 
         let target = TempDir::new().expect("temp dir");
         write(&target.path().join("a"), 10);
         let temp = TempDir::new().expect("temp dir");
         symlink(target.path(), temp.path().join("link")).expect("link");
+        symlink(temp.path().join("link"), temp.path().join("chain")).expect("link");
+        symlink("loop", temp.path().join("loop")).expect("link");
 
         assert_eq!(size(&temp.path().join("link")).expect("walks"), Some(10));
+        assert_eq!(
+            size(&temp.path().join("chain")).expect("walks"),
+            Some(10),
+            "a chain of links"
+        );
+        assert!(size(&temp.path().join("loop")).is_err(), "a loop");
+    }
+
+    /// Needs Windows symbolic links, which can need a privilege: skipped when one cannot be made.
+    #[cfg(windows)]
+    #[test]
+    fn a_root_chain_ending_at_a_network_path_is_refused() {
+        let temp = TempDir::new().expect("temp dir");
+        let Some((first, _)) = platform::link_tests::network_chain(temp.path(), platform::link_tests::REMOTES[0])
+        else {
+            return;
+        };
+
+        let refused = size(&first).expect_err("network chain");
+
+        assert_eq!(refused.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    /// Needs a name Windows can create only with a `\\?\` path: skipped when that cannot be made.
+    #[cfg(windows)]
+    #[test]
+    fn a_name_windows_would_read_as_another_is_neither_walked_nor_counted() {
+        let temp = TempDir::new().expect("temp dir");
+        write(&temp.path().join("x/file"), 1000);
+        let verbatim = fs::canonicalize(temp.path()).expect("verbatim path");
+        if fs::create_dir(verbatim.join("x.")).is_err() {
+            return;
+        }
+        fs::write(verbatim.join("x.").join("inside"), vec![b'x'; 500]).ok();
+        fs::write(verbatim.join("NUL.txt"), b"12345").ok();
+
+        assert_eq!(size(temp.path()).expect("walks"), Some(1000));
     }
 
     #[cfg(unix)]

@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { deliver, entry, fakeBackend } from '../../../tests/panes';
+import { BUSY_RETRY_MS } from './sizes.svelte';
 import { PaneView } from './view.svelte';
 
 const sample = () => [
@@ -453,5 +454,31 @@ describe('PaneView folder sizes', () => {
     await Promise.resolve();
 
     expect(backend.sizes.map((job) => job.args.name)).toEqual(['src']);
+  });
+
+  it('a job refused as busy is asked again, and not after the pane moved on', async () => {
+    vi.useFakeTimers();
+    try {
+      const { view, backend } = await shown();
+      const invoke = backend.ipc.invoke as unknown as { mockRejectedValueOnce: (error: unknown) => void };
+      invoke.mockRejectedValueOnce({ code: 'busy', message: 'the previous size calculation has not stopped yet' });
+
+      view.setCursor(1);
+      view.space(); // docs: busy
+      view.space(); // src waits behind it
+      await vi.advanceTimersByTimeAsync(0);
+      expect(backend.sizes).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(BUSY_RETRY_MS);
+      expect(backend.sizes.map((job) => job.args.name)).toEqual(['docs']);
+
+      invoke.mockRejectedValueOnce({ code: 'busy', message: 'still busy' });
+      backend.sizes[0].emit({ kind: 'done', bytes: 1 }); // src is asked next and refused as busy
+      view.sizes.clear(); // the pane opened another folder
+      await vi.advanceTimersByTimeAsync(BUSY_RETRY_MS * 2);
+      expect(backend.sizes).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

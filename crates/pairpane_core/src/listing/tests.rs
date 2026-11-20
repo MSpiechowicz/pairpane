@@ -43,6 +43,12 @@ fn watched(path: &Path) -> (FolderWatch, mpsc::Receiver<()>) {
     (watch, changes)
 }
 
+/// The listed entry called `name`.
+#[cfg(windows)]
+fn find_entry(listed: &[Entry], name: &str) -> Entry {
+    listed.iter().find(|entry| entry.name == name).expect("listed").clone()
+}
+
 fn folder(files: &[&str], dirs: &[&str]) -> TempDir {
     let temp = TempDir::new().expect("temp dir");
     for file in files {
@@ -170,6 +176,109 @@ fn symbolic_links_show_their_target() {
     assert_eq!(find("broken").kind, EntryKind::Other);
     assert_eq!(find("broken").link_target.as_deref(), Some("missing"));
     assert_eq!(find("file").mode.map(|mode| mode & 0o600), Some(0o600));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_chain_of_links_is_followed_and_a_loop_is_not() {
+    use std::os::unix::fs::symlink;
+
+    let temp = folder(&["file"], &["dir"]);
+    symlink(temp.path().join("dir"), temp.path().join("b")).expect("link");
+    symlink(temp.path().join("b"), temp.path().join("a")).expect("link");
+    symlink(temp.path().join("file"), temp.path().join("to-file")).expect("link");
+    symlink("loop", temp.path().join("loop")).expect("link");
+
+    let listed = entries(&events(temp.path(), false));
+    let kind = |name: &str| listed.iter().find(|entry| entry.name == name).expect("listed").kind;
+
+    assert_eq!(kind("a"), EntryKind::Dir);
+    assert_eq!(kind("b"), EntryKind::Dir);
+    assert_eq!(kind("to-file"), EntryKind::File);
+    assert_eq!(kind("loop"), EntryKind::Other);
+}
+
+/// Needs Windows symbolic links, which can need a privilege: skipped when one cannot be made.
+#[cfg(windows)]
+#[test]
+fn a_chain_ending_at_a_network_path_is_shown_but_not_followed() {
+    let temp = folder(&[], &["dir"]);
+    if platform::link_tests::network_chain(temp.path(), platform::link_tests::REMOTES[0]).is_none() {
+        return;
+    }
+
+    let listed = entries(&events(temp.path(), false));
+
+    assert_eq!(find_entry(&listed, "a").kind, EntryKind::Other);
+    assert_eq!(find_entry(&listed, "b").kind, EntryKind::Other);
+    assert_eq!(names(&events(temp.path(), false))[0], "dir");
+}
+
+#[test]
+fn a_batch_is_skipped_once_cancelled_on_a_pool_or_without_one() {
+    let temp = folder(&["a", "b"], &[]);
+    let names = [("a", false), ("b", false)].map(|(name, dir)| Name {
+        name: name.to_owned(),
+        os_name: name.into(),
+        key: String::new(),
+        dir,
+    });
+    let pool = describe_pool();
+
+    for pool in [None, pool.as_ref()] {
+        let running = describe_batch(pool, &names, temp.path(), &AtomicBool::new(false));
+        assert_eq!(running.map(|entries| entries.len()), Some(2));
+
+        assert!(describe_batch(pool, &names, temp.path(), &AtomicBool::new(true)).is_none());
+    }
+}
+
+/// Needs a name Windows can create only with a `\\?\` path, which a folder from the system's temp folder allows.
+#[cfg(windows)]
+#[test]
+fn names_windows_rewrites_are_listed_but_never_read() {
+    let temp = folder(&["x"], &["y"]);
+    let verbatim = fs::canonicalize(temp.path()).expect("verbatim path");
+    if fs::create_dir(verbatim.join("x ")).is_err() || fs::write(verbatim.join("NUL.txt"), b"1").is_err() {
+        return;
+    }
+
+    let listed = entries(&events(temp.path(), false));
+
+    for name in ["x ", "NUL.txt"] {
+        let entry = find_entry(&listed, name);
+        assert_eq!(
+            (entry.kind, entry.size, entry.modified),
+            (EntryKind::Other, 0, None),
+            "{name:?}"
+        );
+    }
+    assert_eq!(find_entry(&listed, "x").kind, EntryKind::File);
+    assert_eq!(find_entry(&listed, "y").kind, EntryKind::Dir);
+    assert_eq!(
+        names(&events(temp.path(), false))[0],
+        "y",
+        "an unsafe name is not a folder in the order"
+    );
+}
+
+#[test]
+fn a_folder_is_read_where_asked_and_shown_as_named() {
+    let temp = folder(&["a.txt"], &["sub"]);
+    let shown = if cfg!(windows) { r"C:\shown\as" } else { "/shown/as" };
+    let mut events = Vec::new();
+
+    list_at(Path::new(shown), temp.path(), false, &AtomicBool::new(false), |event| {
+        events.push(event)
+    })
+    .expect("listable");
+
+    assert_eq!(names(&events), ["sub", "a.txt"]);
+    let ListEvent::Start { path, crumbs, .. } = &events[0] else {
+        panic!("start first");
+    };
+    assert_eq!(path, shown);
+    assert_eq!(crumbs.last().map(|crumb| crumb.path.as_str()), Some(shown));
 }
 
 #[test]

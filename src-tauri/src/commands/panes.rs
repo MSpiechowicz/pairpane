@@ -5,6 +5,9 @@
 //! spinner meanwhile). Opening another folder in the same pane cancels the earlier listing and stops watching the
 //! earlier folder; a late, slow call never replaces a newer one (each open has a generation).
 //!
+//! A listing cancelled on a hung mount stays stuck, so a pane may have only [`LISTING_THREADS`] outstanding; beyond
+//! that `pane_open` is refused.
+//!
 //! The pane's size jobs (`sizes.rs`) belong to the latest folder that listed: they move on only once another
 //! folder's listing has started, so an open that fails leaves the pane, and its jobs, as they were.
 
@@ -13,14 +16,15 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Instant;
 
-use pairpane_core::listing::{self, FolderWatch, Outcome, platform};
+use pairpane_core::listing::{FolderWatch, platform};
 use pairpane_core::model::{IpcError, IpcErrorCode, ListEvent, PaneId};
 use tauri::State;
 use tauri::async_runtime;
 use tauri::ipc::Channel;
 
+use self::run::Open;
+use super::limit::ThreadCap;
 use super::sizes::Sizing;
 use crate::error::{CommandError, CommandResult};
 
@@ -49,9 +53,23 @@ type Slots = Arc<Mutex<HashMap<PaneId, Slot>>>;
 pub struct Panes {
     slots: Slots,
     generations: AtomicU64,
+    /// The listing threads each pane has outstanding, which outlive the slots they ran for.
+    left_listings: ThreadCap,
+    right_listings: ThreadCap,
 }
 
+/// Listing threads a pane may have at once. A superseded listing stops within a moment (it checks the cancel flag
+/// for every entry), so quick navigation stays far below this; only folders that do not respond pile up.
+const LISTING_THREADS: usize = 4;
+
 impl Panes {
+    fn listings(&self, pane: PaneId) -> &ThreadCap {
+        match pane {
+            PaneId::Left => &self.left_listings,
+            PaneId::Right => &self.right_listings,
+        }
+    }
+
     /// Runs `job` on the size state of `pane`; `None` when the pane was never opened.
     pub(super) fn with_sizing<R>(&self, pane: PaneId, job: impl FnOnce(&mut Sizing) -> R) -> Option<R> {
         lock(&self.slots).get_mut(&pane).map(|slot| job(&mut slot.sizing))
@@ -71,6 +89,11 @@ pub async fn pane_open(
     on_event: Channel<ListEvent>,
 ) -> CommandResult<()> {
     let folder = resolve(path, child.as_deref())?;
+    // Refused before anything changes, so the pane keeps showing its folder.
+    let permit = panes
+        .listings(pane)
+        .acquire(LISTING_THREADS)
+        .ok_or_else(|| CommandError::new(IpcErrorCode::Busy, "a folder is not responding; try again shortly"))?;
     let generation = panes.generations.fetch_add(1, Ordering::Relaxed) + 1;
     let cancel = Arc::new(AtomicBool::new(false));
 
@@ -78,21 +101,18 @@ pub async fn pane_open(
     // Dropped outside the lock: stopping a watch may wait on the OS.
     drop(earlier);
 
-    let slots = Arc::clone(&panes.slots);
-    async_runtime::spawn_blocking(move || {
-        // Watched from before the listing starts, so a change made while it runs is not missed. Setting up a
-        // watch touches the folder, so it happens here, never on the command's thread.
-        if !watched {
-            set_watch(&slots, pane, generation, start_watch(&folder, &on_event));
-        }
-
-        let started = || claim_sizing(&slots, pane, generation, &folder);
-        let failed = list(&folder, show_hidden, &cancel, &on_event, started);
-        if failed {
-            // A folder that cannot be listed is not watched (a file changing would re-list it forever).
-            set_watch(&slots, pane, generation, None);
-        }
-    });
+    let open = Open {
+        slots: Arc::clone(&panes.slots),
+        pane,
+        generation,
+        folder,
+        show_hidden,
+        cancel,
+        on_event,
+        watched,
+    };
+    // The permit is held until the listing ends, however it ends.
+    async_runtime::spawn_blocking(move || open.run(permit));
 
     Ok(())
 }
@@ -149,90 +169,6 @@ fn claim_sizing(slots: &Slots, pane: PaneId, generation: u64, folder: &Path) {
         && slot.generation == generation
     {
         slot.sizing.move_to(folder);
-    }
-}
-
-/// Watches `folder`, sending its changes to `on_event` (or to the channel of a later reload); `None` when the
-/// folder cannot be watched.
-fn start_watch(folder: &Path, on_event: &Channel<ListEvent>) -> Option<Watch> {
-    let sink = Arc::new(Mutex::new(on_event.clone()));
-    let changes = Arc::clone(&sink);
-    let watch = listing::watch(folder, move || {
-        changes
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .send(ListEvent::Changed)
-            .ok();
-    })
-    .inspect_err(|error| {
-        tracing::warn!(
-            reason = listing::watch_error_reason(error),
-            "cannot watch the folder; the pane will not update by itself"
-        );
-    })
-    .ok()?;
-
-    Some(Watch { _watch: watch, sink })
-}
-
-/// Attaches `watch` to the pane if `generation` is still its latest open; otherwise it is dropped.
-fn set_watch(slots: &Slots, pane: PaneId, generation: u64, watch: Option<Watch>) {
-    let replaced = match lock(slots).get_mut(&pane) {
-        Some(slot) if slot.generation == generation => std::mem::replace(&mut slot.watch, watch),
-        _ => watch,
-    };
-    drop(replaced);
-}
-
-/// Lists `folder` onto `on_event`, calling `on_start` as the first pass ends (just before `start` is sent); `true`
-/// when it could not be listed.
-fn list(
-    folder: &Path,
-    show_hidden: bool,
-    cancel: &AtomicBool,
-    on_event: &Channel<ListEvent>,
-    on_start: impl FnOnce(),
-) -> bool {
-    let started = Instant::now();
-    let mut first_batch = None;
-    let mut total = 0;
-    let mut on_start = Some(on_start);
-    // A closed channel only means the page went away; the next `pane_open` starts over.
-    let send = |event: ListEvent| {
-        match &event {
-            ListEvent::Start { total: count, .. } => {
-                total = *count;
-                if let Some(on_start) = on_start.take() {
-                    on_start();
-                }
-            }
-            ListEvent::Batch { .. } => {
-                first_batch.get_or_insert_with(|| started.elapsed());
-            }
-            _ => {}
-        }
-        on_event.send(event).ok();
-    };
-
-    match listing::list(folder, show_hidden, cancel, send) {
-        Ok(Outcome::Done) => {
-            tracing::debug!(
-                total,
-                first_batch_ms = first_batch.map(|time| time.as_secs_f64() * 1000.0),
-                all_ms = started.elapsed().as_secs_f64() * 1000.0,
-                "folder listed"
-            );
-            false
-        }
-        Ok(Outcome::Cancelled) => false,
-        Err(error) => {
-            on_event
-                .send(ListEvent::Error {
-                    error: list_error(&error),
-                })
-                .ok();
-            true
-        }
     }
 }
 
@@ -315,7 +251,7 @@ mod tests {
             .get_mut(&PaneId::Left)
             .map(|slot| slot.sizing.begin(path.to_string_lossy().into_owned(), name));
 
-        slot.expect("open pane").map(|(_, stop)| stop)
+        slot.expect("open pane").map(|job| job.stop)
     }
 
     /// A pane whose folder (generation 1) has listed and has a size job running in it.
@@ -434,4 +370,29 @@ mod tests {
         assert!(size_job(&slots, folder, "photos").is_err());
         assert!(size_job(&slots, &other, "x").is_ok());
     }
+
+    #[test]
+    fn each_pane_has_its_own_listing_cap_and_a_finished_listing_frees_a_place() {
+        let panes = Panes::default();
+
+        let mut running: Vec<_> = (0..LISTING_THREADS)
+            .map(|_| panes.listings(PaneId::Left).acquire(LISTING_THREADS).expect("place"))
+            .collect();
+        assert!(
+            panes.listings(PaneId::Left).acquire(LISTING_THREADS).is_none(),
+            "the left pane is full"
+        );
+        assert!(
+            panes.listings(PaneId::Right).acquire(LISTING_THREADS).is_some(),
+            "the right pane is not"
+        );
+
+        running.pop();
+        assert!(panes.listings(PaneId::Left).acquire(LISTING_THREADS).is_some());
+    }
 }
+
+mod run;
+
+#[cfg(test)]
+mod path_tests;

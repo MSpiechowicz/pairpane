@@ -2,8 +2,13 @@
 //! names sort.
 
 use std::cmp::Ordering;
-use std::fs::Metadata;
-use std::path::{Component, Path, Prefix};
+use std::fs::{self, Metadata};
+use std::io;
+use std::path::{Component, Path, PathBuf, Prefix};
+
+mod resolve;
+
+pub use resolve::{local_target, resolve_local};
 
 /// Longest path a pane opens, in bytes.
 pub const MAX_PATH_BYTES: usize = 4_096;
@@ -25,6 +30,9 @@ pub fn check_folder(path: &Path) -> Result<(), &'static str> {
             Component::Prefix(prefix) if !is_local(prefix.kind()) => {
                 return Err("network and device paths cannot be opened here");
             }
+            Component::Normal(name) if is_unsafe_name(&name.to_string_lossy()) => {
+                return Err("this path has a name that cannot be opened here");
+            }
             _ => {}
         }
     }
@@ -33,12 +41,52 @@ pub fn check_folder(path: &Path) -> Result<(), &'static str> {
 }
 
 /// A file name to open inside a folder: one plain name, nothing that climbs, jumps or (on Windows) names a
-/// stream or another drive.
+/// stream, another drive or a device.
 pub fn is_plain_name(name: &str) -> bool {
     let unix_ok = !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\0']);
-    let windows_ok = !cfg!(windows) || !(name.contains(['\\', ':']) || name.ends_with(['.', ' ']));
+    let windows_ok = !cfg!(windows) || !(name.contains('\\') || is_special_windows_name(name));
 
     unix_ok && windows_ok
+}
+
+/// Whether a name must not be opened or followed on this platform: on Windows one that [`is_special_windows_name`].
+/// Used for every component of a path and every listed entry.
+pub fn is_unsafe_name(name: &str) -> bool {
+    cfg!(windows) && is_special_windows_name(name)
+}
+
+/// Whether Windows reads `name` as something other than the file it spells: a device, a stream (`:`), a name it
+/// rewrites by dropping trailing spaces and dots (`x ` is opened as `x`), or one holding a separator or another
+/// character Windows forbids in names (inside a `\\?\` path `//host/share` is one component, and joining it to a path
+/// would turn the path into a network one). Such a name would slip past a check of the component as spelled, so every
+/// one is refused. A pure check, testable on every system; only Windows applies it (see [`is_unsafe_name`]).
+pub fn is_special_windows_name(name: &str) -> bool {
+    let forbidden = |c: char| c.is_ascii_control() || matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*');
+
+    name.contains(forbidden) || name.ends_with(['.', ' ']) || is_reserved_windows_name(name)
+}
+
+/// Whether Windows treats `name` as a device, not a file: `CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`
+/// (the digit also as a superscript `¹²³`), `CONIN$` and `CONOUT$`, in any case, with anything after the first `.` or
+/// `:` (`NUL.txt`, `COM1:`, `NUL:x`) and with spaces before it (`NUL .txt`). Opening one reaches the device (a
+/// printer, a serial port), so it is refused. A pure check, testable on every system; only Windows applies it.
+pub fn is_reserved_windows_name(name: &str) -> bool {
+    let stem = name.split(['.', ':']).next().unwrap_or_default().trim_end_matches(' ');
+    let stem = stem.to_ascii_uppercase();
+
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$") {
+        return true;
+    }
+
+    let Some(digit) = stem.strip_prefix("COM").or_else(|| stem.strip_prefix("LPT")) else {
+        return false;
+    };
+    let mut chars = digit.chars();
+
+    match (chars.next(), chars.next()) {
+        (Some(digit), None) => digit.is_ascii_digit() || matches!(digit, '¹' | '²' | '³'),
+        _ => false,
+    }
 }
 
 /// Whether listing may follow a symbolic link to `target`: not to a network or device path (Windows would
@@ -47,9 +95,41 @@ pub fn may_follow(target: &Path) -> bool {
     !matches!(target.components().next(), Some(Component::Prefix(prefix)) if !is_local(prefix.kind()))
 }
 
-/// A drive letter path (`C:\`, `\\?\C:\`); only Windows paths have prefixes.
+/// A local place: a drive letter path (`C:\`, `\\?\C:\`) or a mounted volume (`\\?\Volume{GUID}\`, how Windows
+/// shows a folder that is another volume's mount point). Network (`\\host\share`, `\\?\UNC\`) and device
+/// (`\\.\pipe`, `\\?\GLOBALROOT`) prefixes are not. Only Windows paths have prefixes.
 fn is_local(prefix: Prefix<'_>) -> bool {
-    matches!(prefix, Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+    match prefix {
+        Prefix::Disk(_) | Prefix::VerbatimDisk(_) => true,
+        Prefix::Verbatim(name) => name.to_str().is_some_and(is_volume_guid),
+        _ => false,
+    }
+}
+
+/// `Volume{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}`: the volume name Windows gives a mounted volume.
+fn is_volume_guid(name: &str) -> bool {
+    name.split_at_checked(7).is_some_and(|(head, rest)| {
+        head.eq_ignore_ascii_case("Volume{")
+            && rest
+                .strip_suffix('}')
+                .is_some_and(|guid| !guid.is_empty() && guid.chars().all(|c| c.is_ascii_hexdigit() || c == '-'))
+    })
+}
+
+/// The path to open for `path`. On Windows every link on it is resolved and checked (see [`resolve_local`]); on other
+/// systems it is `path` itself, as the system does not connect to a host just by resolving a path.
+pub fn local_path(path: &Path) -> io::Result<PathBuf> {
+    if cfg!(windows) {
+        resolve_local(path)
+    } else {
+        Ok(path.to_owned())
+    }
+}
+
+/// The metadata of what the link at `path` leads to, or `None` when it must not be followed (see [`local_path`]) or
+/// cannot be read.
+pub fn follow(path: &Path) -> Option<Metadata> {
+    fs::metadata(local_path(path).ok()?).ok()
 }
 
 /// Whether names sort ignoring case: on macOS and Windows (whose filesystems usually ignore case), not on Linux.
@@ -135,6 +215,9 @@ pub fn mode(_metadata: &Metadata) -> Option<u32> {
 }
 
 #[cfg(test)]
+pub(crate) mod link_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -180,6 +263,116 @@ mod tests {
         for bad in ["a\\b", "C:", "x::$INDEX_ALLOCATION", "trailing.", "trailing ", "..."] {
             assert!(!is_plain_name(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn windows_device_names_are_recognised_in_any_spelling() {
+        for device in [
+            "CON",
+            "con",
+            "Prn",
+            "AUX",
+            "nUl",
+            "NUL.txt",
+            "nul.tar.gz",
+            "NUL .txt",
+            "NUL ",
+            "NUL..",
+            "COM0",
+            "com1",
+            "COM9",
+            "LPT0",
+            "lpt9.log",
+            "COM¹",
+            "com².x",
+            "LPT³",
+            "CONIN$",
+            "conout$",
+            "CONOUT$.txt",
+            "COM1:",
+            "NUL:x",
+            "con:",
+            "CON :x",
+            "LPT¹:stream",
+        ] {
+            assert!(is_reserved_windows_name(device), "{device}");
+        }
+        for file in [
+            "", ".", "NULL", "CONSOLE", "COM", "COM10", "COMA", "LPT", "LPT¹²", "xNUL", "NUL-1", ".NUL", "a.NUL",
+            "CONIN", "CON$", "photos", "x:CON", "x.CON:",
+        ] {
+            assert!(!is_reserved_windows_name(file), "{file}");
+        }
+    }
+
+    #[test]
+    fn windows_names_it_rewrites_or_reads_as_something_else_are_special() {
+        for special in [
+            "x ", "x.", "x..", "...", "..", "a:b", "x::$DATA", "NUL", "com1.txt", "x  ", "//h/s", r"\\h\s", "a/b",
+            r"a\b", "a?b", "a*b", "a<b", "a>b", "a|b", "a\"b", "a\u{1}b",
+        ] {
+            assert!(is_special_windows_name(special), "{special:?}");
+        }
+        for plain in ["x", ".x", "a b", "a.b", "photos", ".config", "NULL"] {
+            assert!(!is_special_windows_name(plain), "{plain:?}");
+        }
+
+        // Only Windows applies the rule.
+        assert_eq!(is_unsafe_name("x "), cfg!(windows));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn network_and_device_prefixes_are_not_local_but_volumes_and_drives_are() {
+        let volume = r"\\?\Volume{26a21bda-a627-11d7-9931-806e6f6e6963}\mount\x";
+        for local in [
+            r"C:\x",
+            r"\\?\C:\x",
+            volume,
+            r"\\?\volume{26A21BDA-a627-11d7-9931-806e6f6e6963}\",
+        ] {
+            assert!(may_follow(Path::new(local)), "{local}");
+            assert_eq!(check_folder(Path::new(local)), Ok(()), "{local}");
+        }
+        for remote in [
+            r"\\attacker\x",
+            r"\\?\UNC\a\b",
+            r"\\.\pipe\x",
+            r"\\?\GLOBALROOT\x",
+            r"\\?\Volume\x",
+            r"\\?\Volume{}\x",
+            r"\\?\Volume{zz}\x",
+            r"\\?\Volume{26a21bda}x\",
+        ] {
+            assert!(!may_follow(Path::new(remote)), "{remote}");
+            assert!(check_folder(Path::new(remote)).is_err(), "{remote}");
+        }
+        // In a `\\?\` path only `\` separates: `//attacker/share` is one component, refused before anything is opened.
+        for smuggled in [r"\\?\C:\//attacker/share", r"\\?\C:\a/b", r"\\?\C:\x\//h/s\y"] {
+            assert!(check_folder(Path::new(smuggled)).is_err(), "{smuggled}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_refuses_device_names_as_children_and_in_paths() {
+        for device in [
+            "NUL", "con.txt", "COM1", "LPT¹", "CONOUT$", "aux ", "COM1:", "x ", "x.", "x. ",
+        ] {
+            assert!(!is_plain_name(device), "{device}");
+            assert!(check_folder(&Path::new(r"C:\data").join(device)).is_err(), "{device}");
+            assert!(
+                check_folder(&Path::new(r"C:\data").join(device).join("x")).is_err(),
+                "{device}"
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn device_names_are_ordinary_names_off_windows() {
+        assert!(is_plain_name("NUL"));
+        assert_eq!(check_folder(Path::new("/data/NUL")), Ok(()));
     }
 
     #[test]

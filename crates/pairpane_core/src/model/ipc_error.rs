@@ -24,6 +24,9 @@ pub enum IpcErrorCode {
     Process,
     /// A bug or an unexpected internal state.
     Internal,
+    /// The request cannot start yet because an earlier one has not finished (a folder that does not respond); trying
+    /// again shortly may work.
+    Busy,
 }
 
 impl IpcError {
@@ -68,6 +71,7 @@ mod tests {
             (IpcErrorCode::Timeout, "timeout"),
             (IpcErrorCode::Process, "process"),
             (IpcErrorCode::Internal, "internal"),
+            (IpcErrorCode::Busy, "busy"),
         ];
 
         for (code, wire) in codes {

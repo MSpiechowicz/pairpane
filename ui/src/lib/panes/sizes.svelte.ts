@@ -1,9 +1,14 @@
 import type { Entry } from '$lib/ipc/bindings/Entry';
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import type { SizeEvent } from '$lib/ipc/bindings/SizeEvent';
-import type { Transport } from '$lib/ipc/transport';
+import { IpcFailure, type Transport } from '$lib/ipc/transport';
 
 import { formatSize } from './format';
+
+/** A job refused because the previous one has not stopped yet (it waits on a slow disk) is asked again this often… */
+export const BUSY_RETRY_MS = 500;
+/** …this many times, then dropped (the folder shows no size). */
+export const BUSY_RETRIES = 20;
 
 /**
  * The folder sizes a pane has asked for, by folder name: one job at a time, in the order asked (the backend walks
@@ -93,7 +98,7 @@ export class FolderSizes {
     return this.#known.size > 0 || this.#queue.length > 0;
   }
 
-  #next() {
+  #next(retries = 0) {
     const path = this.#folder();
     if (this.#job !== undefined || this.#queue.length === 0 || path === undefined) {
       return;
@@ -129,6 +134,22 @@ export class FolderSizes {
       }
     };
 
-    this.#ipc.invoke('pane_folder_size', { pane: this.#pane, path, name, onEvent }).catch(() => finish());
+    const refused = (error: unknown) => {
+      if (IpcFailure.from(error).code !== 'busy' || retries >= BUSY_RETRIES) {
+        finish();
+        return;
+      }
+
+      // The backend is still stopping an earlier job: ask again shortly, unless the pane has moved on meanwhile.
+      setTimeout(() => {
+        if (epoch === this.#epoch) {
+          this.#job = undefined;
+          this.#queue.unshift(name);
+          this.#next(retries + 1);
+        }
+      }, BUSY_RETRY_MS);
+    };
+
+    this.#ipc.invoke('pane_folder_size', { pane: this.#pane, path, name, onEvent }).catch(refused);
   }
 }

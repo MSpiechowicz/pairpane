@@ -42,6 +42,12 @@ pub enum Outcome {
     Cancelled,
 }
 
+/// Listings of up to this many entries read their metadata on the listing thread, with no pool.
+const SEQUENTIAL_MAX: usize = 256;
+
+/// Threads of a listing's own pool for the second pass.
+const POOL_THREADS: usize = 8;
+
 /// An entry known after the first pass.
 struct Name {
     name: String,
@@ -53,29 +59,38 @@ struct Name {
 /// Lists the folder at `path` (absolute), sending `start`, the `batch`es and `done` to `emit`, and stops early
 /// once `cancel` is set. Hidden entries are left out unless `show_hidden`. Fails only when the folder itself
 /// cannot be read; an entry that vanishes or cannot be read meanwhile is skipped or listed without details.
-pub fn list(
-    path: &Path,
+pub fn list(path: &Path, show_hidden: bool, cancel: &AtomicBool, emit: impl FnMut(ListEvent)) -> io::Result<Outcome> {
+    list_at(path, path, show_hidden, cancel, emit)
+}
+
+/// [`list`] for a folder shown as `shown` but read at `actual`: the same folder, spelled by the path that
+/// [`platform::local_path`] resolved, which holds no link. The system then never resolves a link of its own while
+/// reading it (on Windows that could reach a network host), and the pane keeps the path the user chose.
+pub fn list_at(
+    shown: &Path,
+    actual: &Path,
     show_hidden: bool,
     cancel: &AtomicBool,
     mut emit: impl FnMut(ListEvent),
 ) -> io::Result<Outcome> {
-    if !path.is_absolute() {
+    if !shown.is_absolute() || !actual.is_absolute() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "the path must be absolute"));
     }
 
-    let Some(names) = read_names(path, show_hidden, cancel)? else {
+    let Some(names) = read_names(actual, show_hidden, cancel)? else {
         return Ok(Outcome::Cancelled);
     };
 
     emit(ListEvent::Start {
-        path: path.to_string_lossy().into_owned(),
-        parent: path.parent().map(|parent| parent.to_string_lossy().into_owned()),
-        crumbs: crumbs(path),
+        path: shown.to_string_lossy().into_owned(),
+        parent: shown.parent().map(|parent| parent.to_string_lossy().into_owned()),
+        crumbs: crumbs(shown),
         total: count(names.len()),
     });
 
     let (mut dirs, mut files, mut bytes) = (0_u32, 0_u32, 0_u64);
     let mut offset = 0;
+    let pool = (names.len() > SEQUENTIAL_MAX).then(describe_pool).flatten();
 
     while offset < names.len() {
         if cancel.load(Ordering::Relaxed) {
@@ -84,14 +99,16 @@ pub fn list(
 
         let size = if offset == 0 { FIRST_BATCH } else { BATCH };
         let chunk = &names[offset..names.len().min(offset + size)];
-        let entries: Vec<Entry> = chunk.par_iter().map(|name| describe(path, name)).collect();
+        let Some(entries) = describe_batch(pool.as_ref(), chunk, actual, cancel) else {
+            return Ok(Outcome::Cancelled);
+        };
 
         for entry in &entries {
             match entry.kind {
-                EntryKind::Dir => dirs += 1,
+                EntryKind::Dir => dirs = dirs.saturating_add(1),
                 _ => {
-                    files += 1;
-                    bytes += entry.size;
+                    files = files.saturating_add(1);
+                    bytes = bytes.saturating_add(entry.size);
                 }
             }
         }
@@ -107,7 +124,7 @@ pub fn list(
         dirs,
         files,
         bytes,
-        free: platform::free_space(path),
+        free: platform::free_space(actual),
     });
 
     Ok(Outcome::Done)
@@ -137,11 +154,12 @@ fn read_names(path: &Path, show_hidden: bool, cancel: &AtomicBool) -> io::Result
             }
         }
 
-        // A link to a folder sorts and opens like a folder (links to network places are not followed).
-        let dir = if file_type.is_symlink() {
-            let path = entry.path();
-            fs::read_link(&path).is_ok_and(|target| platform::may_follow(&target))
-                && fs::metadata(&path).is_ok_and(|metadata| metadata.is_dir())
+        // A link to a folder sorts and opens like a folder (links that lead to network places are not followed).
+        // An unsafe name is never followed or counted as a folder (see `platform::is_unsafe_name`).
+        let dir = if platform::is_unsafe_name(&name) {
+            false
+        } else if file_type.is_symlink() {
+            platform::follow(&entry.path()).is_some_and(|metadata| metadata.is_dir())
         } else {
             file_type.is_dir()
         };
@@ -163,8 +181,43 @@ fn read_names(path: &Path, show_hidden: bool, cancel: &AtomicBool) -> io::Result
     Ok(Some(names))
 }
 
+/// A pool for one listing's second pass: its own threads, so folders that do not respond (a stale mount inside the
+/// listed folder blocks the thread reading its metadata for good) can never stall another listing or pane, the way
+/// they could on rayon's shared pool. `None` when the threads cannot be started; the listing then runs without it.
+fn describe_pool() -> Option<rayon::ThreadPool> {
+    let threads = std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(POOL_THREADS);
+
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .thread_name(|index| format!("pairpane-list-{index}"))
+        .build()
+        .ok()
+}
+
+/// The second pass for one batch, in order: `None` once `cancel` is set (entries are skipped from then on, so a
+/// cancelled listing does not go on reading a slow disk).
+fn describe_batch(
+    pool: Option<&rayon::ThreadPool>,
+    chunk: &[Name],
+    folder: &Path,
+    cancel: &AtomicBool,
+) -> Option<Vec<Entry>> {
+    let one = |name: &Name| (!cancel.load(Ordering::Relaxed)).then(|| describe(folder, name));
+
+    match pool {
+        Some(pool) => pool.install(|| chunk.par_iter().map(one).collect()),
+        None => chunk.iter().map(one).collect(),
+    }
+}
+
 /// The second pass for one entry: its metadata, following a symbolic link for kind, size and date.
 fn describe(folder: &Path, name: &Name) -> Entry {
+    if platform::is_unsafe_name(&name.name) {
+        return unread(name);
+    }
+
     let path = folder.join(&name.os_name);
     let own = fs::symlink_metadata(&path).ok();
 
@@ -173,10 +226,9 @@ fn describe(folder: &Path, name: &Name) -> Entry {
         .filter(|metadata| metadata.file_type().is_symlink())
         .and_then(|_| fs::read_link(&path).ok());
 
-    // Links to network places are not followed (see `platform::may_follow`).
+    // Links that lead to network places are not followed (see `platform::local_path`).
     let followed = match &link {
-        Some(target) if platform::may_follow(target) => fs::metadata(&path).ok(),
-        Some(_) => None,
+        Some(_) => platform::follow(&path),
         None => own.clone(),
     };
     let link_target = link.map(|target| target.to_string_lossy().into_owned());
@@ -203,6 +255,20 @@ fn describe(folder: &Path, name: &Name) -> Entry {
         readonly: shown.is_some_and(|metadata| metadata.permissions().readonly()),
         mode: shown.and_then(platform::mode),
         link_target,
+    }
+}
+
+/// An entry whose name must not be opened (see `platform::is_unsafe_name`): shown, but never read.
+fn unread(name: &Name) -> Entry {
+    Entry {
+        name: name.name.clone(),
+        kind: EntryKind::Other,
+        size: 0,
+        modified: None,
+        hidden: false,
+        readonly: false,
+        mode: None,
+        link_target: None,
     }
 }
 
