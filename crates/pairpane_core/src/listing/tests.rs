@@ -208,6 +208,8 @@ fn a_watched_folder_reports_a_change() {
 fn listing_a_watched_folder_is_not_a_change() {
     let temp = folder(&["a", "b"], &["sub"]);
     let (_watch, changes) = watched(temp.path());
+    // macOS (FSEvents) reports changes made shortly before a watch started; let those pass first.
+    while changes.recv_timeout(DEBOUNCE * 4).is_ok() {}
 
     // Reading the folder opens it (and on some systems updates its access time): no change, or a pane that
     // re-lists on every change would list forever.

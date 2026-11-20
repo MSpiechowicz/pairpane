@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
@@ -24,8 +24,16 @@ use crate::error::{CommandError, CommandResult};
 /// on its folder.
 struct Slot {
     generation: u64,
+    folder: PathBuf,
     cancel: Arc<AtomicBool>,
-    watch: Option<FolderWatch>,
+    watch: Option<Watch>,
+}
+
+/// A folder watch and the channel its changes go to: the latest open's, so a reload of the same folder keeps the
+/// watch (a new one would report recent changes again on macOS, and churn the OS on every reload).
+struct Watch {
+    _watch: FolderWatch,
+    sink: Arc<Mutex<Channel<ListEvent>>>,
 }
 
 type Slots = Arc<Mutex<HashMap<PaneId, Slot>>>;
@@ -53,14 +61,29 @@ pub async fn pane_open(
     let generation = panes.generations.fetch_add(1, Ordering::Relaxed) + 1;
     let cancel = Arc::new(AtomicBool::new(false));
 
-    let earlier = lock(&panes.slots).insert(
-        pane,
-        Slot {
-            generation,
-            cancel: Arc::clone(&cancel),
-            watch: None,
-        },
-    );
+    let earlier = {
+        let mut slots = lock(&panes.slots);
+        // The same folder again (a reload after a change, hidden files toggled): keep its watch.
+        let kept = slots
+            .get_mut(&pane)
+            .filter(|slot| slot.folder == folder)
+            .and_then(|slot| slot.watch.take());
+        if let Some(kept) = &kept {
+            *kept.sink.lock().unwrap_or_else(PoisonError::into_inner) = on_event.clone();
+        }
+        let watched = kept.is_some();
+        let earlier = slots.insert(
+            pane,
+            Slot {
+                generation,
+                folder: folder.clone(),
+                cancel: Arc::clone(&cancel),
+                watch: kept,
+            },
+        );
+        (earlier, watched)
+    };
+    let (earlier, watched) = earlier;
     // Dropped outside the lock: stopping a watch may wait on the OS.
     if let Some(earlier) = earlier {
         earlier.cancel.store(true, Ordering::Relaxed);
@@ -71,18 +94,9 @@ pub async fn pane_open(
     async_runtime::spawn_blocking(move || {
         // Watched from before the listing starts, so a change made while it runs is not missed. Setting up a
         // watch touches the folder, so it happens here, never on the command's thread.
-        let changes = on_event.clone();
-        let watch = listing::watch(&folder, move || {
-            changes.send(ListEvent::Changed).ok();
-        })
-        .inspect_err(|error| {
-            tracing::warn!(
-                reason = listing::watch_error_reason(error),
-                "cannot watch the folder; the pane will not update by itself"
-            );
-        })
-        .ok();
-        set_watch(&slots, pane, generation, watch);
+        if !watched {
+            set_watch(&slots, pane, generation, start_watch(&folder, &on_event));
+        }
 
         let failed = list(&folder, show_hidden, &cancel, &on_event);
         if failed {
@@ -94,8 +108,31 @@ pub async fn pane_open(
     Ok(())
 }
 
+/// Watches `folder`, sending its changes to `on_event` (or to the channel of a later reload); `None` when the
+/// folder cannot be watched.
+fn start_watch(folder: &Path, on_event: &Channel<ListEvent>) -> Option<Watch> {
+    let sink = Arc::new(Mutex::new(on_event.clone()));
+    let changes = Arc::clone(&sink);
+    let watch = listing::watch(folder, move || {
+        changes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .send(ListEvent::Changed)
+            .ok();
+    })
+    .inspect_err(|error| {
+        tracing::warn!(
+            reason = listing::watch_error_reason(error),
+            "cannot watch the folder; the pane will not update by itself"
+        );
+    })
+    .ok()?;
+
+    Some(Watch { _watch: watch, sink })
+}
+
 /// Attaches `watch` to the pane if `generation` is still its latest open; otherwise it is dropped.
-fn set_watch(slots: &Slots, pane: PaneId, generation: u64, watch: Option<FolderWatch>) {
+fn set_watch(slots: &Slots, pane: PaneId, generation: u64, watch: Option<Watch>) {
     let replaced = match lock(slots).get_mut(&pane) {
         Some(slot) if slot.generation == generation => std::mem::replace(&mut slot.watch, watch),
         _ => watch,
@@ -104,7 +141,7 @@ fn set_watch(slots: &Slots, pane: PaneId, generation: u64, watch: Option<FolderW
 }
 
 /// Lists `folder` onto `on_event`; `true` when it could not be listed.
-fn list(folder: &std::path::Path, show_hidden: bool, cancel: &AtomicBool, on_event: &Channel<ListEvent>) -> bool {
+fn list(folder: &Path, show_hidden: bool, cancel: &AtomicBool, on_event: &Channel<ListEvent>) -> bool {
     let started = Instant::now();
     let mut first_batch = None;
     let mut total = 0;
@@ -188,8 +225,6 @@ fn list_error(error: &io::Error) -> IpcError {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
 
     #[test]
