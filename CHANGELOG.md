@@ -1,3 +1,10 @@
+# [0.5.0](https://github.com/MSpiechowicz/pairpane/compare/v0.4.0...v0.5.0) (2026-11-20)
+
+
+### Features
+
+* keyboard navigation, selection and quick filter in the panes ([9bffa6e](https://github.com/MSpiechowicz/pairpane/commit/9bffa6e219dd0baa45fb905203c1004350bd9d8c))
+
 # [0.4.0](https://github.com/MSpiechowicz/pairpane/compare/v0.3.0...v0.4.0) (2026-11-20)
 
 
