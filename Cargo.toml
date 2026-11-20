@@ -1,0 +1,39 @@
+# Workspace root: the pairpane_core crate and the thin Tauri shell.
+[workspace]
+resolver = "3"
+members = ["crates/pairpane_core", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/MSpiechowicz/pairpane"
+rust-version = "1.98"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# Pinned once here; member crates use `name.workspace = true`.
+[workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+ts-rs = { version = "12.0.1", features = ["serde-json-impl"] }
+tracing = "0.1.44"
+# Desktop shell (Tauri 2 only; Tauri 3 alpha is not used).
+tauri = "2.12.2"
+tauri-build = "2.7.1"
+tauri-plugin-single-instance = "2.5.2"
+tauri-plugin-window-state = "2.5.0"
+tauri-plugin-opener = "2.7.0"
+tauri-plugin-log = "2.10.0"
+# Dev dependencies
+pretty_assertions = "1.4"
+
+# Default codegen units and no cross-crate LTO: the release bundles compile in about half the time, and an app
+# that mostly waits on the webview gains nothing measurable from the slower settings.
+[profile.release]
+opt-level = 3
+strip = true

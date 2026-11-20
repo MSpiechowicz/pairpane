@@ -1,0 +1,32 @@
+{
+  "threshold": 0,
+  "minTokens": 60,
+  "reporters": [
+    "console"
+  ],
+  "format": [
+    "typescript",
+    "javascript",
+    "rust",
+    "css",
+    "markup"
+  ],
+  "pattern": "**/*.{ts,js,mjs,cjs,rs,css,svelte}",
+  "gitignore": true,
+  "exitCode": 1,
+  "ignore": [
+    "**/node_modules/**",
+    "**/target/**",
+    "**/dist/**",
+    "**/report/**",
+    "**/bindings/**",
+    "**/*.lock",
+    "src-tauri/gen/**",
+    "**/*.test.ts"
+  ],
+  "formatsExts": {
+    "markup": [
+      "svelte"
+    ]
+  }
+}

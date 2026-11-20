@@ -1,0 +1,21 @@
+node_modules/
+target/
+ui/dist/
+src-tauri/gen/
+coverage/
+.DS_Store
+*.log
+.env.local
+report/
+.vite/
+
+# Secrets: never commit environment files or signing material.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.keystore
+.tauri/

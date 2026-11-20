@@ -1,0 +1,35 @@
+[package]
+name = "pairpane_app"
+description = "Pairpane: a thin Tauri shell over pairpane_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "pairpane_app_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pairpane"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+pairpane_core = { path = "../crates/pairpane_core" }
+# `generate_context!` embeds the `plugins` section of `tauri.conf.json` as `serde_json` values.
+serde_json.workspace = true
+tauri.workspace = true
+tauri-plugin-log.workspace = true
+tauri-plugin-opener.workspace = true
+tauri-plugin-single-instance.workspace = true
+tauri-plugin-window-state.workspace = true
+# `log` feature: tracing events from the core crate reach tauri-plugin-log (no subscriber is installed).
+tracing = { workspace = true, features = ["log"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,35 @@
+/* Design tokens: the single source of colors and fonts. Dark by default, light follows the OS. */
+:root {
+  color-scheme: dark;
+
+  --bg: #0d0f14;
+  --panel: #13161e;
+  --panel-2: #181c26;
+  --line: #232937;
+  --text: #d9dde7;
+  --dim: #828a9e;
+  --accent: #5b9cff;
+  --sel: #f3b64a;
+  --ok: #4cc38a;
+  --danger: #e8505e;
+
+  --font-ui: "Inter Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+
+    --bg: #eef0f4;
+    --panel: #ffffff;
+    --panel-2: #f6f7fa;
+    --line: #e0e3ea;
+    --text: #1c2130;
+    --dim: #687084;
+    --accent: #2a6ef0;
+    --sel: #b86f00;
+    --ok: #16935a;
+    --danger: #d63b4a;
+  }
+}
