@@ -1,3 +1,10 @@
+## [0.1.1](https://github.com/MSpiechowicz/pairpane/compare/v0.1.0...v0.1.1) (2026-11-20)
+
+
+### Bug Fixes
+
+* **release:** hash the Bun download from stdin so Windows paths verify ([7794f06](https://github.com/MSpiechowicz/pairpane/commit/7794f06ba9106332b2d64afcf8db447b988300b4)), closes [#3](https://github.com/MSpiechowicz/pairpane/issues/3)
+
 # [0.1.0](https://github.com/MSpiechowicz/pairpane/compare/v0.0.0...v0.1.0) (2026-11-20)
 
 
