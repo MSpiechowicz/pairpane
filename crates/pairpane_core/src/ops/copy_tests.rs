@@ -129,8 +129,9 @@ fn a_target_that_is_a_link_is_replaced_never_written_through() {
 #[cfg(unix)]
 #[test]
 fn a_source_swapped_for_a_link_or_another_file_or_a_pipe_is_not_opened() {
-    use rustix::fs::{CWD, FileType, Mode, mknodat};
     use std::os::unix::fs::symlink;
+
+    use super::testing::make_fifo;
 
     let root = temp();
     let path = root.path().join("source");
@@ -138,9 +139,10 @@ fn a_source_swapped_for_a_link_or_another_file_or_a_pipe_is_not_opened() {
     let seen = fs::symlink_metadata(&path).expect("metadata");
     assert!(open::source(&path, &seen).is_ok());
 
-    // A link in its place.
+    // A link in its place. The original is kept under another name, so its inode cannot be reused for the file
+    // swapped in below (ext4 hands a freed inode straight out again).
     write(&root.path().join("elsewhere"), b"other");
-    fs::remove_file(&path).expect("remove");
+    fs::rename(&path, root.path().join("original")).expect("keep the original");
     symlink(root.path().join("elsewhere"), &path).expect("link");
     assert!(open::source(&path, &seen).is_err());
 
@@ -151,7 +153,7 @@ fn a_source_swapped_for_a_link_or_another_file_or_a_pipe_is_not_opened() {
 
     // A pipe in its place: refused at once, not waited on.
     fs::remove_file(&path).expect("remove");
-    mknodat(CWD, &path, FileType::Fifo, Mode::RUSR | Mode::WUSR, 0).expect("fifo");
+    make_fifo(&path);
     assert!(open::source(&path, &seen).is_err());
 }
 

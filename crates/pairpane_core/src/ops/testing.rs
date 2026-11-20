@@ -366,3 +366,14 @@ pub(super) fn other_spelling(path: &Path) -> Option<PathBuf> {
 
     (plain.to_string_lossy().to_lowercase() != path.to_string_lossy().to_lowercase()).then_some(plain)
 }
+
+/// Makes a named pipe at `path`: through the `mkfifo` tool, the one way that works on Linux and macOS alike
+/// without `unsafe` (rustix has no `mknodat` on Apple systems).
+#[cfg(unix)]
+pub(super) fn make_fifo(path: &Path) {
+    let status = std::process::Command::new("mkfifo")
+        .arg(path)
+        .status()
+        .expect("mkfifo runs");
+    assert!(status.success(), "mkfifo failed");
+}

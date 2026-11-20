@@ -58,7 +58,7 @@ fn a_free_name_stays_within_the_length_of_a_file_name_by_cutting_the_stem_by_who
     // As long as a name may be, in chars that take two bytes and a last one that takes one, so a cut by bytes
     // would fall inside a char.
     let mut stem = String::new();
-    while name_units(&format!("{stem}é.txt")) <= MAX_NAME_UNITS {
+    while name_units(&format!("{stem}éa.txt")) <= MAX_NAME_UNITS {
         stem.push('é');
     }
     stem.push('a');

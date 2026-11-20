@@ -234,20 +234,13 @@ fn a_link_to_a_network_path_is_copied_as_a_link_and_never_opened() {
 #[cfg(unix)]
 #[test]
 fn a_pipe_is_skipped_and_never_opened() {
-    use rustix::fs::{CWD, FileType, Mode, mknodat};
+    use super::testing::make_fifo;
 
     let root = temp();
     let tree_dir = root.path().join("src/tree");
     write(&tree_dir.join("a.txt"), b"a");
-    mknodat(CWD, tree_dir.join("pipe"), FileType::Fifo, Mode::RUSR | Mode::WUSR, 0).expect("fifo");
-    mknodat(
-        CWD,
-        root.path().join("src/toplevel"),
-        FileType::Fifo,
-        Mode::RUSR | Mode::WUSR,
-        0,
-    )
-    .expect("fifo");
+    make_fifo(&tree_dir.join("pipe"));
+    make_fifo(&root.path().join("src/toplevel"));
     let mut rig = Rig::new();
 
     // A worker that opened the pipe would wait for a writer for good, and the rig gives up after 30 seconds.
