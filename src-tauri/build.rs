@@ -6,8 +6,14 @@
 
 use tauri_build::{AppManifest, Attributes};
 
-/// Every `#[tauri::command]` in `src/commands`; keep in sync with `generate_handler!` in `lib.rs`.
-const COMMANDS: &[&str] = &["app_info"];
+/// Every `#[tauri::command]` (src/commands and src/menu.rs); keep in sync with `generate_handler!` in `lib.rs`.
+const COMMANDS: &[&str] = &[
+    "app_info",
+    "update_check",
+    "update_install",
+    "app_relaunch",
+    "menu_subscribe",
+];
 
 fn main() {
     let attributes = Attributes::new().app_manifest(AppManifest::new().commands(COMMANDS));

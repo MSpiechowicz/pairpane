@@ -25,9 +25,12 @@ pairpane_core = { path = "../crates/pairpane_core" }
 serde_json.workspace = true
 tauri.workspace = true
 tauri-plugin-log.workspace = true
+tauri-plugin-updater.workspace = true
 tauri-plugin-opener.workspace = true
 tauri-plugin-single-instance.workspace = true
 tauri-plugin-window-state.workspace = true
+serde.workspace = true
+time.workspace = true
 # `log` feature: tracing events from the core crate reach tauri-plugin-log (no subscriber is installed).
 tracing = { workspace = true, features = ["log"] }
 

@@ -6,6 +6,8 @@
 
 mod app;
 mod ipc_error;
+mod update;
 
 pub use app::AppInfo;
 pub use ipc_error::{IpcError, IpcErrorCode};
+pub use update::{MAX_UPDATE_NOTES_BYTES, MenuCommand, UpdateInfo, UpdatePhase, UpdateProgress};

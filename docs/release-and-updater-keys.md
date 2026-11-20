@@ -81,8 +81,15 @@ check reaches users.
   (assets and tags cannot change after publishing); the planned redesign keeps npm code away from write tokens.
 - Residual risk: within one workflow run, a compromised build dependency could use the run's artifact token to
   replace another platform's artifact before `sign` downloads it; the per-platform file-name checks limit this to
-  that one release. Signatures are bound to file name and version and `publish` checks both; installed apps enforce
-  the version binding once the updater is configured with `requireSignedVersion` (#4).
+  that one release. Signatures are bound to file name and version and `publish` checks both. Installed apps (from
+  v0.2.0, the first release with the updater) accept an update only from this repository's release of that version,
+  for exactly their own artifact (checked against the signature's `file:`), verify the signature with
+  `requireSignedVersion`, never downgrade, and install only the version the user confirmed. `.deb`/`.rpm`
+  and MSI installations are not updated in-app (the package manager, or the installer from the releases page, does
+  that: both would otherwise run an elevated install from a temp file).
+- Residual risk, accepted for now (#32 removes the realistic path): `install.sh`/`install.ps1` verify downloads
+  against the release's own `checksums.txt`, not your signing key, so whoever can push to `main` or publish a release
+  could serve a different first install. Installed apps are not affected: updates must carry your signature.
 - Bun and Node are downloaded by `.github/scripts/install-bun.sh` / `install-node.sh` and checked against pinned
   SHA-256 hashes **before** they run (the setup-* actions would execute their downloads unverified).
 - `bun install --ignore-scripts` everywhere in the release: no dependency install script and no repo git hook runs.

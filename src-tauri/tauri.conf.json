@@ -60,7 +60,8 @@
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU2NEFEQzdGMkJFODhGOEIKUldTTGorZ3JmOXhLNW5JZ3g3NGMrcGtQSWJmOStMUGZ5Qk1wTXhyaHVhSkdjcExvU3VEM0tPVjIK",
       "endpoints": [
         "https://github.com/MSpiechowicz/pairpane/releases/latest/download/latest.json"
-      ]
+      ],
+      "requireSignedVersion": true
     }
   }
 }

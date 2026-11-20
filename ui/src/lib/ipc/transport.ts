@@ -2,6 +2,9 @@ import type { IpcError } from './bindings/IpcError';
 import type { IpcErrorCode } from './bindings/IpcErrorCode';
 import type { CommandArgs, CommandName, CommandResult } from './commands';
 
+/** Receives the events a command streams back (a Tauri `Channel` on the Rust side). */
+export type EventSink<T> = (event: T) => void;
+
 /** The seam between the UI and the backend; Tauri and "unavailable" implement it. */
 export interface Transport {
   invoke<K extends CommandName>(name: K, args: CommandArgs<K>): Promise<CommandResult<K>>;

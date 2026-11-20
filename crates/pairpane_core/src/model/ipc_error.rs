@@ -12,10 +12,28 @@ pub enum IpcErrorCode {
     NotFound,
     /// The operation is refused by a security rule (deny-list, path containment, ...).
     Forbidden,
-    /// A filesystem or I/O failure.
+    /// A filesystem, network or other I/O failure.
     Io,
+    /// The feature is not available in this build or on this platform (e.g. updates without a key).
+    Unsupported,
+    /// A remote service answered with something unexpected (e.g. a malformed update manifest).
+    Protocol,
+    /// A network operation took too long.
+    Timeout,
+    /// An external program failed (e.g. the package manager installing an update).
+    Process,
     /// A bug or an unexpected internal state.
     Internal,
+}
+
+impl IpcError {
+    /// An error with `code` and a `message` safe to display.
+    pub fn new(code: IpcErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
 }
 
 /// Error payload of every failed IPC command.
@@ -45,6 +63,10 @@ mod tests {
             (IpcErrorCode::NotFound, "notFound"),
             (IpcErrorCode::Forbidden, "forbidden"),
             (IpcErrorCode::Io, "io"),
+            (IpcErrorCode::Unsupported, "unsupported"),
+            (IpcErrorCode::Protocol, "protocol"),
+            (IpcErrorCode::Timeout, "timeout"),
+            (IpcErrorCode::Process, "process"),
             (IpcErrorCode::Internal, "internal"),
         ];
 

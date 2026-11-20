@@ -134,6 +134,8 @@ jobs:
       - run: bun run guard
       - run: bun run dup
       - run: bun run test:scripts
+      # The install script and the release helper scripts run on users' machines and in the release jobs.
+      - run: shellcheck install.sh .github/scripts/*.sh
 
   ui-build:
     name: UI build

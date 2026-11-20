@@ -29,6 +29,14 @@ tauri-plugin-single-instance = "2.5.2"
 tauri-plugin-window-state = "2.5.0"
 tauri-plugin-opener = "2.7.0"
 tauri-plugin-log = "2.10.0"
+# Updater public-key validation (pairpane_core::update). Kept on the versions tauri-plugin-updater uses,
+# so the app accepts exactly the keys the updater can verify signatures with.
+base64 = "0.23"
+minisign-verify = "0.3"
+# Formats the release date of an announced update (RFC 3339); already in the lockfile through Tauri.
+time = { version = "0.3.55", features = ["formatting"] }
+# Signed in-app updates over TLS (HTTPS only; see src-tauri/src/commands/updates.rs).
+tauri-plugin-updater = { version = "2.14.1", default-features = false, features = ["rustls-tls", "system-proxy"] }
 # Dev dependencies
 pretty_assertions = "1.4"
 

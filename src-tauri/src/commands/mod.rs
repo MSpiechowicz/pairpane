@@ -2,3 +2,4 @@
 //! `ui/src/lib/ipc/commands.ts` and must also be listed in `build.rs` and `capabilities/main.json`.
 
 pub mod app;
+pub mod updates;

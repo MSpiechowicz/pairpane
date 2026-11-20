@@ -2,10 +2,15 @@
 //! all domain logic lives in the core crate.
 
 mod commands;
+mod error;
 mod logging;
+mod menu;
+mod updates;
 mod window;
 
 use std::process::ExitCode;
+
+use tauri::Manager;
 
 /// Builds and runs the app until the last window closes.
 pub fn run() -> ExitCode {
@@ -23,7 +28,14 @@ pub fn run() -> ExitCode {
                 .build(),
         )
         .plugin(logging::plugin())
+        // Updates are driven from Rust only (commands/updates.rs); no JS updater permission is granted.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .menu(menu::build)
+        .on_menu_event(menu::on_event)
         .setup(|app| {
+            app.manage(updates::Updates::from_config(app.config()));
+            app.manage(menu::MenuEvents::default());
+
             window::create_main_window(app)?;
 
             let version = app.package_info().version.to_string();
@@ -31,7 +43,13 @@ pub fn run() -> ExitCode {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![commands::app::app_info])
+        .invoke_handler(tauri::generate_handler![
+            commands::app::app_info,
+            commands::updates::update_check,
+            commands::updates::update_install,
+            commands::updates::app_relaunch,
+            menu::menu_subscribe,
+        ])
         .run(tauri::generate_context!());
 
     match result {

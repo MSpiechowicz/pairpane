@@ -9,6 +9,8 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+base64.workspace = true
+minisign-verify.workspace = true
 serde.workspace = true
 ts-rs.workspace = true
 
