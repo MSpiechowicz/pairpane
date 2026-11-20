@@ -38,11 +38,13 @@ case "${RUNNER_OS:-}-${RUNNER_ARCH:-}" in
     ;;
 esac
 
+# Hashes stdin, not the path: GNU sha256sum escapes its output (a leading "\") for paths with backslashes, which
+# every Windows runner path has.
 sha256() {
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | cut -d ' ' -f 1
+    sha256sum < "$1" | cut -d ' ' -f 1
   else
-    shasum -a 256 "$1" | cut -d ' ' -f 1
+    shasum -a 256 < "$1" | cut -d ' ' -f 1
   fi
 }
 

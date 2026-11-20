@@ -58,6 +58,9 @@ check reaches users.
 - The `release` job itself failed **after** pushing the tag (for example the draft was not created): re-running it
   releases nothing. Delete the draft release (if any) and the tag (`git push origin :refs/tags/vX.Y.Z`), then push
   any commit to `main`; its green CI starts a fresh release of the same version.
+- A job failed because of a bug in the release workflow or its scripts: re-running cannot help (the jobs use the
+  workflow and scripts of the failed run's commits). Push the fix as a `fix:` commit; its green CI releases the next
+  patch version, and the failed version stays an unpublished draft (delete it when you like).
 
 ## Release safeguards
 

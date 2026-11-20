@@ -24,7 +24,7 @@ mkdir -p "$dir"
 
 curl -fsSL --retry 3 -o "$dir/$name.tar.xz" "https://nodejs.org/dist/v$PINNED_VERSION/$name.tar.xz"
 
-actual="$(sha256sum "$dir/$name.tar.xz" | cut -d ' ' -f 1)"
+actual="$(sha256sum < "$dir/$name.tar.xz" | cut -d ' ' -f 1)"
 if [[ "$actual" != "$ARCHIVE_SHA" ]]; then
   echo "::error::$name.tar.xz has SHA-256 $actual, expected $ARCHIVE_SHA. Refusing to continue."
   exit 1
