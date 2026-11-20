@@ -32,9 +32,35 @@
     background: var(--bg);
     color: var(--text);
     font-family: var(--font-ui);
-    font-size: 14px;
-    line-height: 1.5;
+    font-size: 13px;
+    line-height: 1.35;
+    overflow: hidden;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+  }
+
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  button:focus {
+    outline: none;
+  }
+
+  button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  kbd {
+    padding: 2px 5px;
+    border: 1px solid var(--line);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    background: var(--panel-2);
+    color: var(--dim);
+    font: 10.5px/1 var(--font-mono);
+    white-space: nowrap;
   }
 }

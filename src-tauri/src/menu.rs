@@ -1,5 +1,6 @@
-//! The native app menu: "Pairpane > Check for Updates…" on macOS, "Help > Check for Updates…" on Windows and
-//! Linux.
+//! The native app menu, macOS only: "Pairpane > Check for Updates…". Windows and Linux get no native menu bar:
+//! the in-app top bar holds the menu there (its Settings menu has "Check for Updates…"), so it is never shown
+//! twice.
 //!
 //! Menu clicks reach the UI over a channel the UI registers once with `menu_subscribe`, so the webview needs no
 //! event permission: it still only calls the app's own commands.
@@ -8,8 +9,8 @@ use std::sync::{Mutex, PoisonError};
 
 use pairpane_core::model::MenuCommand;
 use tauri::ipc::Channel;
-use tauri::menu::{Menu, MenuEvent, MenuItem, Submenu};
-use tauri::{AppHandle, Manager, Runtime, State};
+use tauri::menu::{Menu, MenuEvent, MenuItem};
+use tauri::{AppHandle, Builder, Manager, Runtime, State};
 
 /// Menu item id of "Check for Updates…".
 const CHECK_FOR_UPDATES: &str = "check-for-updates";
@@ -41,28 +42,30 @@ pub fn menu_subscribe(events: State<'_, MenuEvents>, on_command: Channel<MenuCom
     *events.channel.lock().unwrap_or_else(PoisonError::into_inner) = Some(on_command);
 }
 
-/// Builds the app menu.
-pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
-    let check = MenuItem::with_id(app, CHECK_FOR_UPDATES, "Check for Updates…", true, None::<&str>)?;
-
+/// Adds the native menu on macOS; elsewhere the builder is returned unchanged, so the window has no menu bar.
+pub fn attach<R: Runtime>(builder: Builder<R>) -> Builder<R> {
     if cfg!(target_os = "macos") {
-        // macOS needs the standard menus (Edit for copy/paste, Window, ...): keep them and add the item to the
-        // app menu right under "About" (the separator that follows "About" then follows it).
-        let menu = Menu::default(app)?;
+        builder.menu(build).on_menu_event(on_event)
+    } else {
+        builder
+    }
+}
 
-        if let Some(app_menu) = menu.items()?.first().and_then(|item| item.as_submenu().cloned()) {
-            app_menu.insert(&check, 1)?;
-        }
+/// Builds the macOS app menu: the standard menus (Edit for copy/paste, Window, ...) plus "Check for Updates…" in
+/// the app menu right under "About" (the separator that follows "About" then follows it).
+fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let check = MenuItem::with_id(app, CHECK_FOR_UPDATES, "Check for Updates…", true, None::<&str>)?;
+    let menu = Menu::default(app)?;
 
-        return Ok(menu);
+    if let Some(app_menu) = menu.items()?.first().and_then(|item| item.as_submenu().cloned()) {
+        app_menu.insert(&check, 1)?;
     }
 
-    let help = Submenu::with_items(app, "Help", true, &[&check])?;
-    Menu::with_items(app, &[&help])
+    Ok(menu)
 }
 
 /// Forwards a menu click to the UI.
-pub fn on_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
+fn on_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     if event.id() == CHECK_FOR_UPDATES {
         app.state::<MenuEvents>().send(MenuCommand::CheckForUpdates);
     }

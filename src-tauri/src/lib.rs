@@ -14,7 +14,7 @@ use tauri::Manager;
 
 /// Builds and runs the app until the last window closes.
 pub fn run() -> ExitCode {
-    let result = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // Must be registered first so a second launch exits before anything else starts.
         // Its argv is ignored: nothing from another process is forwarded to the webview.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -29,9 +29,9 @@ pub fn run() -> ExitCode {
         )
         .plugin(logging::plugin())
         // Updates are driven from Rust only (commands/updates.rs); no JS updater permission is granted.
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .menu(menu::build)
-        .on_menu_event(menu::on_event)
+        .plugin(tauri_plugin_updater::Builder::new().build());
+
+    let result = menu::attach(builder)
         .setup(|app| {
             app.manage(updates::Updates::from_config(app.config()));
             app.manage(menu::MenuEvents::default());

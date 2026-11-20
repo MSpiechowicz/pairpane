@@ -32,8 +32,8 @@ The macOS and Windows installers are not code-signed yet: see
 ## Updates
 
 Pairpane checks for a new version when it starts and from **Check for Updates…** (the Pairpane menu on macOS, the
-Help menu on Windows and Linux). It installs an update only after you confirm, and only when the download's signature
-matches the key built into the app and was made for that version. On Linux the AppImage is replaced in place.
+Settings menu in the top bar on Windows and Linux). It installs an update only after you confirm, and only when the
+download's signature matches the key built into the app and was made for that version. On Linux the AppImage is replaced in place.
 
 ## Development
 

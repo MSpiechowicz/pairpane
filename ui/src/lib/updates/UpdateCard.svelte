@@ -28,7 +28,7 @@
 
 {#if state.kind !== 'idle'}
   <section
-    class="update-card fixed right-4 bottom-4 w-80 rounded-lg border border-line bg-panel p-4 text-sm text-fg shadow-lg"
+    class="update-card fixed right-4 bottom-14 w-80 rounded-lg border border-line bg-panel p-4 text-sm text-fg shadow-lg"
     aria-live="polite"
     aria-label="Updates"
   >

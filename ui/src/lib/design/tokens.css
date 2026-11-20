@@ -1,4 +1,7 @@
-/* Design tokens: the single source of colors and fonts. Dark by default, light follows the OS. */
+/*
+ * Design tokens: the single source of colors and fonts. Dark is the base; `data-theme="light"` on <html>
+ * switches to light. lib/shell/theme.svelte.ts sets it from the user's choice or, by default, from the OS.
+ */
 :root {
   color-scheme: dark;
 
@@ -9,6 +12,7 @@
   --text: #d9dde7;
   --dim: #828a9e;
   --accent: #5b9cff;
+  --accent-2: #8cc0ff;
   --sel: #f3b64a;
   --ok: #4cc38a;
   --danger: #e8505e;
@@ -17,19 +21,18 @@
   --font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color-scheme: light;
+:root[data-theme="light"] {
+  color-scheme: light;
 
-    --bg: #eef0f4;
-    --panel: #ffffff;
-    --panel-2: #f6f7fa;
-    --line: #e0e3ea;
-    --text: #1c2130;
-    --dim: #687084;
-    --accent: #2a6ef0;
-    --sel: #b86f00;
-    --ok: #16935a;
-    --danger: #d63b4a;
-  }
+  --bg: #eef0f4;
+  --panel: #ffffff;
+  --panel-2: #f6f7fa;
+  --line: #e0e3ea;
+  --text: #1c2130;
+  --dim: #687084;
+  --accent: #2a6ef0;
+  --accent-2: #1f5bd0;
+  --sel: #b86f00;
+  --ok: #16935a;
+  --danger: #d63b4a;
 }

@@ -19,7 +19,7 @@
         "title": "Pairpane",
         "width": 1280,
         "height": 820,
-        "minWidth": 960,
+        "minWidth": 640,
         "minHeight": 600,
         "center": true,
         "resizable": true,
