@@ -10,6 +10,9 @@
     "allow-app-relaunch",
     "allow-menu-subscribe",
     "allow-pane-open",
-    "allow-pane-folder-size"
+    "allow-pane-folder-size",
+    "allow-volumes-list",
+    "allow-state-load",
+    "allow-state-save"
   ]
 }

@@ -121,6 +121,23 @@ describe('Listing', () => {
     expect(backend.last().args).toMatchObject({ path: '/x', showHidden: true });
   });
 
+  it('onFail is called when the pane is left with nothing to show, not for a failed move away from a folder', async () => {
+    const backend = fakeBackend();
+    const onFail = vi.fn();
+    const listing = new Listing(backend.ipc, 'left', { onFail });
+
+    await listing.open('/gone');
+    backend.last().emit({ kind: 'error', error: { code: 'notFound', message: 'This folder does not exist.' } });
+    expect(onFail).toHaveBeenCalledTimes(1);
+
+    await listing.open('/a');
+    backend.last().emit(start(0, '/a'));
+    await listing.open('/gone');
+    backend.last().emit({ kind: 'error', error: { code: 'notFound', message: 'This folder does not exist.' } });
+    expect(listing.notice).toBe('This folder does not exist.');
+    expect(onFail).toHaveBeenCalledTimes(1);
+  });
+
   it('an error event or a refused command shows the message and clears the entries', async () => {
     const backend = fakeBackend();
     const listing = new Listing(backend.ipc, 'left');

@@ -1,44 +1,64 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
+
   import ColumnHeader from '$lib/panes/ColumnHeader.svelte';
+  import type { Hotlist } from '$lib/panes/hotlist.svelte';
   import { handleKey } from '$lib/panes/keys';
   import PaneFooter from '$lib/panes/PaneFooter.svelte';
   import PaneRow from '$lib/panes/PaneRow.svelte';
+  import type { PaneTabs } from '$lib/panes/tabs.svelte';
+  import type { Volumes } from '$lib/panes/volumes.svelte';
   import VirtualRows from '$lib/panes/VirtualRows.svelte';
-  import type { PaneView } from '$lib/panes/view.svelte';
+
+  import DriveMenu from './DriveMenu.svelte';
+  import HotlistMenu from './HotlistMenu.svelte';
+  import type { Menu } from './menu';
+  import PaneHeader from './PaneHeader.svelte';
 
   let {
     label,
-    view,
+    tabs,
+    volumes,
+    hotlist,
+    menu,
     active,
     onActivate,
+    onMenu,
   }: {
     /** Accessible name of the pane ("Left pane"). */
     label: string;
-    view: PaneView;
+    tabs: PaneTabs;
+    volumes: Volumes;
+    hotlist: Hotlist;
+    /** The dropdown shown under the header, if any. */
+    menu: Menu | undefined;
     active: boolean;
     onActivate: () => void;
+    onMenu: (menu: Menu | undefined) => void;
   } = $props();
 
+  const view = $derived(tabs.view);
   const listing = $derived(view.listing);
   const uid = $props.id();
   let list = $state<HTMLElement>();
   let pageSize = $state(1);
 
-  // The active pane's list holds the keyboard focus (Tab, a click or the start of the app make a pane active).
+  // The active pane's list holds the keyboard focus (Tab, a click or the start of the app make a pane active),
+  // and keeps it when another tab is shown (the tab button that was clicked may be gone by then). A pane that
+  // becomes active with a menu open leaves the focus to the menu.
   $effect(() => {
-    if (active) {
+    void tabs.active;
+    if (active && untrack(() => menu) === undefined) {
       list?.focus();
     }
   });
 
-  /** A root crumb (`/`, `C:\\`) already ends in a separator; no second one follows it. */
-  const isRoot = (name: string) => name.endsWith('/') || name.endsWith('\\');
-
-  /** Long paths scroll so the current folder (the end) stays in view. */
-  function showEnd(node: HTMLElement, _path: string | undefined) {
-    const scroll = () => (node.scrollLeft = node.scrollWidth);
-    scroll();
-    return { update: scroll };
+  /** A menu closed from inside brings the focus back to the list; one closed by a click elsewhere leaves it there. */
+  function closeMenu(refocus: boolean) {
+    onMenu(undefined);
+    if (refocus) {
+      list?.focus();
+    }
   }
 
   function onkeydown(event: KeyboardEvent) {
@@ -82,11 +102,11 @@
     }
   }
 
-  // Clicking anywhere in a pane makes it the active one and, unless it hit a control, focuses its list.
+  // Clicking anywhere in a pane makes it the active one and, unless it hit a control or a menu, focuses its list.
   function activateOnClick(node: HTMLElement) {
     const onclick = (event: MouseEvent) => {
       onActivate();
-      if (!(event.target instanceof Element && event.target.closest('button, input'))) {
+      if (!(event.target instanceof Element && event.target.closest('button, input, [data-menu]'))) {
         list?.focus();
       }
     };
@@ -105,28 +125,18 @@
   aria-busy={listing.status === 'loading'}
   {@attach activateOnClick}
 >
-  <div class="phead">
-    <button class="drive" type="button" aria-label="Drives">
-      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5V13h-4v-3h-3v3h-4z" /></svg>
-      <span class="caret">▾</span>
-    </button>
-    <!-- Tab roles arrive with real tabs (#9); until then the active tab is just the path. -->
-    <div class="tabs">
-      <div class="tab on">
-        <nav class="crumbs" aria-label="Path" use:showEnd={listing.path}>
-          {#each listing.crumbs as crumb, index (crumb.path)}
-            {#if index > 0 && !isRoot(listing.crumbs[index - 1].name)}<i>/</i>{/if}
-            <button
-              type="button"
-              class:last={index === listing.crumbs.length - 1}
-              onclick={() => void listing.open(crumb.path)}>{crumb.name}</button
-            >
-          {/each}
-        </nav>
-      </div>
-      <button class="tab add" type="button" aria-label="New tab">+</button>
-    </div>
-  </div>
+  <PaneHeader
+    {tabs}
+    volumes={volumes.list}
+    driveMenuOpen={menu === 'drives'}
+    onDriveMenu={() => onMenu(menu === 'drives' ? undefined : 'drives')}
+  />
+
+  {#if menu === 'drives'}
+    <DriveMenu {tabs} {volumes} onClose={closeMenu} />
+  {:else if menu === 'hotlist'}
+    <HotlistMenu {tabs} {hotlist} onClose={closeMenu} />
+  {/if}
 
   <ColumnHeader {view} />
 
@@ -187,6 +197,7 @@
     flex: 1;
     display: flex;
     flex-direction: column;
+    position: relative;
     min-width: 0;
     min-height: 0;
     overflow: hidden;
@@ -200,114 +211,6 @@
     --cursor-line: var(--accent);
     --cursor-bg: color-mix(in srgb, var(--accent) 16%, transparent);
     border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
-  }
-
-  /* One header row per pane: one height, one font size. */
-  .phead {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 40px;
-    padding: 0 6px;
-    border-bottom: 1px solid var(--line);
-    background: var(--panel-2);
-    font-size: 12.5px;
-  }
-
-  .drive {
-    flex: none;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 0 6px 0 8px;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    background: var(--panel);
-    color: var(--text);
-  }
-
-  .drive:hover,
-  .active .drive {
-    border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
-  }
-
-  .drive svg {
-    width: 15px;
-    height: 15px;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.4;
-    stroke-linejoin: round;
-  }
-
-  .caret {
-    font-size: 9px;
-    color: var(--dim);
-  }
-
-  .tabs {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    overflow: hidden;
-  }
-
-  .tab {
-    flex: none;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    padding: 0 9px;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    background: none;
-    color: var(--dim);
-  }
-
-  .tab.on {
-    flex: 1 1 auto;
-    min-width: 0;
-    padding: 0 2px;
-    border-color: var(--line);
-    background: var(--panel);
-    color: var(--text);
-  }
-
-  .crumbs {
-    display: flex;
-    align-items: center;
-    gap: 1px;
-    overflow-x: auto;
-    scrollbar-width: none;
-    white-space: nowrap;
-  }
-
-  .crumbs button {
-    flex: none;
-    padding: 2px 5px;
-    border: 0;
-    border-radius: 5px;
-    background: none;
-    color: var(--dim);
-  }
-
-  .crumbs button:hover {
-    background: var(--panel-2);
-    color: var(--text);
-  }
-
-  .crumbs button.last {
-    color: var(--text);
-    font-weight: 600;
-  }
-
-  .crumbs i {
-    font-style: normal;
-    color: var(--line);
   }
 
   .rows {

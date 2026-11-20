@@ -5,4 +5,6 @@ pub mod app;
 mod limit;
 pub mod panes;
 pub mod sizes;
+pub mod state;
 pub mod updates;
+pub mod volumes;

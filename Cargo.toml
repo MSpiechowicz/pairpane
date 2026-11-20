@@ -42,6 +42,9 @@ rayon = "1.12.0"
 notify = "8.2.0"
 # Free space of the volume a folder is on (`fs4::available_space`: statvfs / GetDiskFreeSpaceExW); a safe API.
 fs4 = "1.1.0"
+# Lists the local volumes on Windows (`sysinfo::Disks`): FindFirstVolumeW with only fixed and removable drives kept,
+# so a mapped network drive is never listed or touched. A safe API; only the `disk` feature is built.
+sysinfo = { version = "0.40", default-features = false, features = ["disk"] }
 # Dev dependencies
 pretty_assertions = "1.4"
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }

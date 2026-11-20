@@ -1,17 +1,21 @@
-import { fireEvent, render, screen, within } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { PaneView } from '$lib/panes/view.svelte';
+import { Hotlist } from '$lib/panes/hotlist.svelte';
+import { PaneTabs } from '$lib/panes/tabs.svelte';
+import { Volumes } from '$lib/panes/volumes.svelte';
 
 import { entry, fakeBackend } from '../../../tests/panes';
+import type { Menu } from './menu';
 import Pane from './Pane.svelte';
 
 const TOTAL = 100_000;
 
-async function huge(active = true) {
+async function huge(active = true, menu?: Menu) {
   const backend = fakeBackend();
-  const view = new PaneView(backend.ipc, 'left');
+  const tabs = new PaneTabs(backend.ipc, 'left');
+  const view = tabs.view;
   await view.listing.open('/big');
   backend.last().emit({
     kind: 'start',
@@ -30,8 +34,11 @@ async function huge(active = true) {
   });
 
   const onActivate = vi.fn();
-  render(Pane, { label: 'Left pane', view, active, onActivate });
-  return { backend, view, onActivate };
+  const volumes = new Volumes(backend.ipc);
+  const hotlist = new Hotlist();
+  const onMenu = vi.fn();
+  render(Pane, { label: 'Left pane', tabs, volumes, hotlist, menu, active, onActivate, onMenu });
+  return { backend, tabs, view, onActivate, onMenu };
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -260,5 +267,33 @@ describe('Pane keyboard and accessibility', () => {
 
     await fireEvent.click(within(group).getByRole('button', { name: 'Size sorted ascending' }));
     expect(within(group).getByRole('button', { name: 'Size sorted descending' })).toBeInTheDocument();
+  });
+
+  it('shows the menu it is told to, under the header, and a click inside it leaves the focus in the menu', async () => {
+    await huge(true, 'hotlist');
+
+    const field = screen.getByRole('combobox', { name: 'Filter favourite folders' });
+    expect(field).toHaveFocus();
+
+    await fireEvent.click(field.closest('[data-menu]') as HTMLElement);
+    expect(field).toHaveFocus();
+  });
+
+  it('a pane that is active with a menu open leaves the focus to the menu', async () => {
+    await huge(true, 'drives');
+
+    expect(screen.getByRole('listbox', { name: 'Left pane files' })).not.toHaveFocus();
+    expect(screen.getByRole('listbox', { name: 'Drives' })).toHaveFocus();
+  });
+
+  it('the drive icon asks to show the drive menu, or to close it when it is shown', async () => {
+    const closed = await huge();
+    await fireEvent.click(screen.getByRole('button', { name: 'Drives' }));
+    expect(closed.onMenu).toHaveBeenLastCalledWith('drives');
+    cleanup();
+
+    const shown = await huge(true, 'drives');
+    await fireEvent.click(screen.getByRole('button', { name: 'Drives' }));
+    expect(shown.onMenu).toHaveBeenLastCalledWith(undefined);
   });
 });

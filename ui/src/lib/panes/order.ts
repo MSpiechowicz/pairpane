@@ -1,8 +1,9 @@
 import type { Entry } from '$lib/ipc/bindings/Entry';
+import type { SortColumn } from '$lib/ipc/bindings/SortColumn';
 
 import { splitName } from './format';
 
-export type SortColumn = 'name' | 'ext' | 'size' | 'modified';
+export type { SortColumn };
 
 export interface ViewOptions {
   column: SortColumn;

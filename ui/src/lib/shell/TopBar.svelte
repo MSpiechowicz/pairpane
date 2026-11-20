@@ -176,17 +176,11 @@
     position: relative;
   }
 
+  /* The look of the popup is in app.css. */
   .popup {
     position: absolute;
     top: 34px;
     left: 0;
-    z-index: 30;
-    min-width: 220px;
-    padding: 4px;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    background: var(--panel);
-    box-shadow: 0 16px 50px rgb(0 0 0 / 0.35);
   }
 
   .popup button {

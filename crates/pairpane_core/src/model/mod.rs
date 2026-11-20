@@ -7,9 +7,13 @@
 mod app;
 mod ipc_error;
 mod listing;
+mod state;
 mod update;
+mod volume;
 
 pub use app::AppInfo;
 pub use ipc_error::{IpcError, IpcErrorCode};
 pub use listing::{Crumb, Entry, EntryKind, ListEvent, PaneId, SizeEvent};
+pub use state::{SavedPane, SavedState, SavedTab, SortColumn};
 pub use update::{MAX_UPDATE_NOTES_BYTES, MenuCommand, UpdateInfo, UpdatePhase, UpdateProgress};
+pub use volume::{Volume, VolumeEvent, VolumeKind};

@@ -12,6 +12,18 @@ const UP = '..';
 
 export type MaskMode = 'select' | 'deselect';
 
+/** What the owner of a pane (its tabs) needs to hear about its folders. */
+export interface ViewHooks {
+  /** An open begins (any open, a silent one included), before any of its events. */
+  onOpen?: () => void;
+  /** A folder started listing, the shown one again included: where the pane is now. */
+  onListed?: (path: string) => void;
+  /** An open failed and the pane has nothing to show. */
+  onFail?: () => void;
+  /** An open of another folder failed and the pane stays in the folder it had. */
+  onNotice?: () => void;
+}
+
 /**
  * What a pane shows and does on top of its {@link Listing}: sort, quick filter, cursor, selection, the mask
  * prompt and folder sizes. Rows are numbered as displayed: the `..` row (when there is a parent), then the entries
@@ -79,18 +91,25 @@ export class PaneView {
     return { dirs, files, bytes };
   });
 
-  constructor(ipc: Transport, pane: PaneId) {
+  constructor(ipc: Transport, pane: PaneId, hooks: ViewHooks = {}) {
     this.sizes = new FolderSizes(ipc, pane, () => this.listing.path);
     this.listing = new Listing(ipc, pane, {
       onOpen: () => {
         this.#cameFrom = undefined; // any open supersedes a going up that has not been listed yet
+        hooks.onOpen?.();
       },
       onStart: (reload) => {
         if (!reload) {
           this.#reset();
         }
+        // A reload too: an open of the folder already shown (a tab on the same folder) lists as one.
+        if (this.listing.path !== undefined) {
+          hooks.onListed?.(this.listing.path);
+        }
       },
       onDone: () => this.#prune(),
+      onFail: hooks.onFail,
+      onNotice: hooks.onNotice,
     });
   }
 
@@ -148,6 +167,13 @@ export class PaneView {
       this.#desc = false;
     }
 
+    this.#keepCursor();
+  }
+
+  /** Sets the sort without toggling (a tab brings its own); the cursor stays on its entry. */
+  restoreSort(column: SortColumn, desc: boolean) {
+    this.#column = column;
+    this.#desc = desc;
     this.#keepCursor();
   }
 

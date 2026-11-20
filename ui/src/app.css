@@ -64,3 +64,16 @@
     white-space: nowrap;
   }
 }
+
+/* The look of every popup (the settings menu, the drive menu, the hotlist); each one places itself. */
+@layer components {
+  .popup {
+    z-index: 30;
+    min-width: 220px;
+    padding: 4px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    box-shadow: 0 16px 50px rgb(0 0 0 / 0.35);
+  }
+}

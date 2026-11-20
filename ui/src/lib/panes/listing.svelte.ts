@@ -17,6 +17,10 @@ export interface ListingHooks {
   onStart?: (reload: boolean) => void;
   /** A listing delivered its last batch. */
   onDone?: () => void;
+  /** An open failed and the pane has nothing to show (a failed move away from a listed folder is a notice instead). */
+  onFail?: () => void;
+  /** An open of another folder failed and the pane stays in the folder it had (the notice says why). */
+  onNotice?: () => void;
 }
 
 /**
@@ -192,7 +196,11 @@ export class Listing {
     if (!this.#started && this.path !== undefined && this.error === undefined) {
       this.notice = message;
       this.#settle('ready');
-      if (!wasReload) {
+
+      // The owner may open another folder at once; that open brings the watch back by itself.
+      const generation = this.#generation;
+      this.#hooks.onNotice?.();
+      if (!wasReload && generation === this.#generation) {
         void this.#open(this.path, null, true);
       }
 
@@ -203,6 +211,7 @@ export class Listing {
     this.#setRows([]);
     this.summary = undefined;
     this.#settle('error');
+    this.#hooks.onFail?.();
   }
 
   #settle(status: ListingStatus) {

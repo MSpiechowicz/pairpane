@@ -36,6 +36,10 @@ pub fn run() -> ExitCode {
             app.manage(updates::Updates::from_config(app.config()));
             app.manage(menu::MenuEvents::default());
             app.manage(commands::panes::Panes::default());
+            app.manage(commands::volumes::Volumes::default());
+            // Next to the window-state plugin's file. Without a config folder nothing is saved.
+            let state_file = app.path().app_config_dir().ok().map(|dir| dir.join("state.json"));
+            app.manage(commands::state::StateStore::new(state_file));
 
             window::create_main_window(app)?;
 
@@ -52,6 +56,9 @@ pub fn run() -> ExitCode {
             menu::menu_subscribe,
             commands::panes::pane_open,
             commands::sizes::pane_folder_size,
+            commands::volumes::volumes_list,
+            commands::state::state_load,
+            commands::state::state_save,
         ])
         .run(tauri::generate_context!());
 

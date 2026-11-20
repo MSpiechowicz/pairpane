@@ -15,6 +15,9 @@ const COMMANDS: &[&str] = &[
     "menu_subscribe",
     "pane_open",
     "pane_folder_size",
+    "volumes_list",
+    "state_load",
+    "state_save",
 ];
 
 fn main() {

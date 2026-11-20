@@ -34,5 +34,8 @@ time.workspace = true
 # `log` feature: tracing events from the core crate reach tauri-plugin-log (no subscriber is installed).
 tracing = { workspace = true, features = ["log"] }
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true
