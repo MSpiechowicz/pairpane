@@ -1,3 +1,10 @@
+# [0.2.0](https://github.com/MSpiechowicz/pairpane/compare/v0.1.1...v0.2.0) (2026-11-20)
+
+
+### Features
+
+* install scripts and signed in-app updates ([dd41ade](https://github.com/MSpiechowicz/pairpane/commit/dd41adee7de0ae18da68f400ed7dfc3af8da253e)), closes [#4](https://github.com/MSpiechowicz/pairpane/issues/4)
+
 ## [0.1.1](https://github.com/MSpiechowicz/pairpane/compare/v0.1.0...v0.1.1) (2026-11-20)
 
 
