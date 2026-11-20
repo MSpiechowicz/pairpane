@@ -1,3 +1,10 @@
+# [0.6.0](https://github.com/MSpiechowicz/pairpane/compare/v0.5.1...v0.6.0) (2026-11-20)
+
+
+### Features
+
+* pane tabs, drive menu, hotlist and history ([6284ee9](https://github.com/MSpiechowicz/pairpane/commit/6284ee96d442ac147366585bd89ddeda85c744a9)), closes [#9](https://github.com/MSpiechowicz/pairpane/issues/9)
+
 ## [0.5.1](https://github.com/MSpiechowicz/pairpane/compare/v0.5.0...v0.5.1) (2026-11-20)
 
 
