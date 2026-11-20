@@ -11,6 +11,7 @@
 //! [`watch`] reports changes to a listed folder, debounced.
 
 pub mod platform;
+pub mod size;
 mod watch;
 
 use std::ffi::OsString;
@@ -102,7 +103,12 @@ pub fn list(
         offset += chunk.len();
     }
 
-    emit(ListEvent::Done { dirs, files, bytes });
+    emit(ListEvent::Done {
+        dirs,
+        files,
+        bytes,
+        free: platform::free_space(path),
+    });
 
     Ok(Outcome::Done)
 }

@@ -40,6 +40,8 @@ tauri-plugin-updater = { version = "2.14.1", default-features = false, features 
 # Folder listings (pairpane_core::listing): parallel metadata reads and debounced change watching.
 rayon = "1.12.0"
 notify = "8.2.0"
+# Free space of the volume a folder is on (`fs4::available_space`: statvfs / GetDiskFreeSpaceExW); a safe API.
+fs4 = "1.1.0"
 # Dev dependencies
 pretty_assertions = "1.4"
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }

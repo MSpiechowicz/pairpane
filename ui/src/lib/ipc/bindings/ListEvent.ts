@@ -19,4 +19,8 @@ crumbs: Array<Crumb>, total: number, } | { "kind": "batch", offset: number, entr
 /**
  * Sum of the file sizes.
  */
-bytes: number, } | { "kind": "changed" } | { "kind": "error", error: IpcError, };
+bytes: number, 
+/**
+ * Space available to the user on the folder's volume, in bytes; `null` when it cannot be read.
+ */
+free: number | null, } | { "kind": "changed" } | { "kind": "error", error: IpcError, };

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ListEvent } from '$lib/ipc/bindings/ListEvent';
 
-import { formatDate, formatSize, formatSummary, iconClass, splitName } from './format';
+import { formatDate, formatFree, formatSelection, formatSize, formatSummary, iconClass, splitName } from './format';
 import { Listing, SPINNER_DELAY_MS } from './listing.svelte';
 import { entry, fakeBackend } from '../../../tests/panes';
 
@@ -33,10 +33,32 @@ describe('Listing', () => {
     expect(listing.entries.map((e) => e?.name)).toEqual([undefined, undefined, 'c', 'd']);
     expect(listing.firstScreenMs).toBeTypeOf('number');
 
-    backend.last().emit({ kind: 'done', dirs: 1, files: 3, bytes: 10 });
+    backend.last().emit({ kind: 'done', dirs: 1, files: 3, bytes: 10, free: null });
     expect(listing.status).toBe('ready');
-    expect(listing.summary).toEqual({ dirs: 1, files: 3, bytes: 10 });
+    expect(listing.summary).toEqual({ dirs: 1, files: 3, bytes: 10, free: null });
     expect(listing.path).toBe('/home/me');
+  });
+
+  it('tells its hooks when a listing starts (another folder or a reload of this one) and is done, and keeps the free space', async () => {
+    const backend = fakeBackend();
+    const calls: string[] = [];
+    const listing = new Listing(backend.ipc, 'left', {
+      onStart: (reload) => calls.push(reload ? 'reload' : 'start'),
+      onDone: () => calls.push('done'),
+    });
+
+    await listing.open('/a');
+    backend.last().emit(start(0, '/a'));
+    backend.last().emit({ kind: 'done', dirs: 0, files: 0, bytes: 0, free: 5000 });
+    expect(listing.summary?.free).toBe(5000);
+
+    await listing.reload();
+    backend.last().emit(start(0, '/a'));
+    backend.last().emit({ kind: 'done', dirs: 0, files: 0, bytes: 0, free: null });
+    await listing.open('/b');
+    backend.last().emit(start(0, '/b'));
+
+    expect(calls).toEqual(['start', 'done', 'reload', 'done', 'start']);
   });
 
   it('drops events of an earlier open', async () => {
@@ -63,7 +85,7 @@ describe('Listing', () => {
     expect(listing.slow).toBe(true);
 
     backend.last().emit(start(0));
-    backend.last().emit({ kind: 'done', dirs: 0, files: 0, bytes: 0 });
+    backend.last().emit({ kind: 'done', dirs: 0, files: 0, bytes: 0, free: null });
     expect(listing.slow).toBe(false);
   });
 
@@ -76,12 +98,12 @@ describe('Listing', () => {
     backend.last().emit({ kind: 'changed' });
     expect(backend.opens).toHaveLength(1);
 
-    backend.last().emit({ kind: 'done', dirs: 0, files: 0, bytes: 0 });
+    backend.last().emit({ kind: 'done', dirs: 0, files: 0, bytes: 0, free: null });
     expect(backend.opens).toHaveLength(2);
     expect(backend.last().args).toMatchObject({ path: '/x', child: null });
 
     backend.last().emit(start(0, '/x'));
-    backend.last().emit({ kind: 'done', dirs: 0, files: 0, bytes: 0 });
+    backend.last().emit({ kind: 'done', dirs: 0, files: 0, bytes: 0, free: null });
     backend.last().emit({ kind: 'changed' });
     expect(backend.opens).toHaveLength(3);
   });
@@ -123,13 +145,13 @@ describe('Listing keeps the current folder in view', () => {
     await listing.open('/x');
     backend.last().emit(start(2, '/x'));
     backend.last().emit({ kind: 'batch', offset: 0, entries: [entry('a'), entry('b')] });
-    backend.last().emit({ kind: 'done', dirs: 0, files: 2, bytes: 0 });
+    backend.last().emit({ kind: 'done', dirs: 0, files: 2, bytes: 0, free: null });
 
     backend.last().emit({ kind: 'changed' });
     backend.last().emit(start(3, '/x'));
 
     expect(listing.entries.map((e) => e?.name)).toEqual(['a', 'b', undefined]);
-    expect(listing.summary).toEqual({ dirs: 0, files: 2, bytes: 0 });
+    expect(listing.summary).toEqual({ dirs: 0, files: 2, bytes: 0, free: null });
 
     backend.last().emit({ kind: 'batch', offset: 0, entries: [entry('a'), entry('a2'), entry('b')] });
     expect(listing.entries.map((e) => e?.name)).toEqual(['a', 'a2', 'b']);
@@ -141,7 +163,7 @@ describe('Listing keeps the current folder in view', () => {
     await listing.open('/x');
     backend.last().emit(start(1, '/x'));
     backend.last().emit({ kind: 'batch', offset: 0, entries: [entry('locked', 'dir')] });
-    backend.last().emit({ kind: 'done', dirs: 1, files: 0, bytes: 0 });
+    backend.last().emit({ kind: 'done', dirs: 1, files: 0, bytes: 0, free: null });
 
     await listing.enter('locked');
     backend.last().emit({ kind: 'error', error: { code: 'io', message: 'You do not have permission to open this folder.' } });
@@ -152,9 +174,32 @@ describe('Listing keeps the current folder in view', () => {
     expect(listing.path).toBe('/x');
     expect(listing.entries.map((e) => e?.name)).toEqual(['locked']);
 
+    // The failed open dropped the backend's watch of /x: it is listed again, quietly (same notice, not loading).
+    expect(backend.opens).toHaveLength(3);
+    expect(backend.last().args).toMatchObject({ path: '/x', child: null });
+    backend.last().emit(start(1, '/x'));
+    backend.last().emit({ kind: 'batch', offset: 0, entries: [entry('locked', 'dir')] });
+    backend.last().emit({ kind: 'done', dirs: 1, files: 0, bytes: 0, free: null });
+    expect(listing.notice).toBe('You do not have permission to open this folder.');
+    expect(listing.entries.map((e) => e?.name)).toEqual(['locked']);
+
     await listing.setShowHidden(true); // reloads /x, not home
     expect(backend.last().args).toMatchObject({ path: '/x', child: null });
     expect(listing.notice).toBeUndefined();
+  });
+
+  it('a failed reload of the shown folder does not try to list it again', async () => {
+    const backend = fakeBackend();
+    const listing = new Listing(backend.ipc, 'left');
+    await listing.open('/x');
+    backend.last().emit(start(0, '/x'));
+    backend.last().emit({ kind: 'done', dirs: 0, files: 0, bytes: 0, free: null });
+
+    await listing.reload();
+    backend.last().emit({ kind: 'error', error: { code: 'io', message: 'Gone.' } });
+
+    expect(backend.opens).toHaveLength(2);
+    expect(listing.notice).toBe('Gone.');
   });
 });
 
@@ -167,6 +212,8 @@ describe('format', () => {
     expect(formatDate(null)).toBe('');
     expect(formatDate(new Date(2026, 10, 20, 7, 5).getTime())).toBe('2026-11-20 07:05');
     expect(formatSummary(1, 2, 2048)).toBe('1 folder · 2 files · 2.0 KB');
+    expect(formatSelection(1, 2, 2048)).toBe('Selected: 1 folder · 2 files · 2.0 KB');
+    expect(formatFree(5.7 * 1024 ** 3)).toBe('5.7 GB free');
   });
 
   it('splits extensions off files only', () => {

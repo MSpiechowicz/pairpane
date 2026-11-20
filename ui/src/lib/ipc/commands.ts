@@ -2,6 +2,7 @@ import type { AppInfo } from './bindings/AppInfo';
 import type { ListEvent } from './bindings/ListEvent';
 import type { MenuCommand } from './bindings/MenuCommand';
 import type { PaneId } from './bindings/PaneId';
+import type { SizeEvent } from './bindings/SizeEvent';
 import type { UpdateInfo } from './bindings/UpdateInfo';
 import type { UpdateProgress } from './bindings/UpdateProgress';
 import { cmd } from './command-spec';
@@ -24,6 +25,7 @@ export const commands = {
     },
     null
   >(),
+  pane_folder_size: cmd<{ pane: PaneId; path: string; name: string; onEvent: EventSink<SizeEvent> }, null>(),
 };
 
 export type CommandName = keyof typeof commands;

@@ -80,9 +80,35 @@ pub enum ListEvent {
         /// Sum of the file sizes.
         #[ts(type = "number")]
         bytes: u64,
+        /// Space available to the user on the folder's volume, in bytes; `null` when it cannot be read.
+        #[ts(type = "number | null")]
+        free: Option<u64>,
     },
     /// The folder changed on disk; open it again to see the change.
     Changed,
     /// The folder could not be listed.
     Error { error: IpcError },
+}
+
+/// What a folder-size job delivers: any number of `progress` events, then exactly one of `done`, `error` or
+/// `cancelled`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[ts(export)]
+pub enum SizeEvent {
+    /// The bytes counted so far.
+    Progress {
+        #[ts(type = "number")]
+        bytes: u64,
+    },
+    /// The folder, with everything below it, holds this many bytes of files.
+    Done {
+        #[ts(type = "number")]
+        bytes: u64,
+    },
+    /// The size could not be calculated.
+    Error { error: IpcError },
+    /// The job was stopped (the pane moved to another folder, or a newer job replaced it); every job ends with
+    /// `done`, `error` or this.
+    Cancelled,
 }

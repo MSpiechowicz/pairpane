@@ -9,6 +9,16 @@ export const SPINNER_DELAY_MS = 150;
 
 export type ListingStatus = 'loading' | 'ready' | 'error';
 
+/** What a pane's view needs to hear about a listing besides its (reactive) state. */
+export interface ListingHooks {
+  /** An open begins (any open, a silent one included), before any of its events. */
+  onOpen?: () => void;
+  /** A listing started. `reload`: the same folder again (a change on disk, hidden toggled), not another folder. */
+  onStart?: (reload: boolean) => void;
+  /** A listing delivered its last batch. */
+  onDone?: () => void;
+}
+
 /**
  * One pane's folder as the backend streams it: `start` sizes the list, batches fill it in order, `done` adds the
  * summary. Only the latest `open` of a pane may change its state; events of an earlier one are dropped.
@@ -30,12 +40,13 @@ export class Listing {
   error = $state<string | undefined>();
   /** Opening another folder failed; the current one stays listed and this says why. */
   notice = $state<string | undefined>();
-  summary = $state<{ dirs: number; files: number; bytes: number } | undefined>();
+  summary = $state<{ dirs: number; files: number; bytes: number; free: number | null } | undefined>();
   /** Milliseconds from `open` to the first batch (the first screen). */
   firstScreenMs = $state<number | undefined>();
 
   readonly #ipc: Transport;
   readonly #pane: PaneId;
+  readonly #hooks: ListingHooks;
   #showHidden = false;
   #generation = 0;
   #spinner: ReturnType<typeof setTimeout> | undefined;
@@ -54,31 +65,46 @@ export class Listing {
     this.#revision += 1;
   }
 
-  constructor(ipc: Transport, pane: PaneId) {
+  constructor(ipc: Transport, pane: PaneId, hooks: ListingHooks = {}) {
     this.#ipc = ipc;
     this.#pane = pane;
+    this.#hooks = hooks;
   }
 
   /** Opens `path` (`null`: the home folder), or its folder `child`. */
   open(path: string | null, child: string | null = null): Promise<void> {
+    return this.#open(path, child, false);
+  }
+
+  /**
+   * `quiet`: lists the shown folder again behind a failed open, only so the backend watches it once more; the
+   * notice stays and the pane does not show itself as loading.
+   */
+  #open(path: string | null, child: string | null, quiet: boolean): Promise<void> {
     const generation = ++this.#generation;
     const started = performance.now();
+    // Listing the shown folder again (a live update, hidden toggled) must not be answered by one more reload.
+    const reload = child === null && path === (this.path ?? null);
 
-    this.status = 'loading';
-    this.notice = undefined;
+    this.#hooks.onOpen?.();
     this.#stale = false;
     this.#started = false;
-    clearTimeout(this.#spinner);
-    this.slow = false;
-    this.#spinner = setTimeout(() => {
-      if (generation === this.#generation && this.status === 'loading') {
-        this.slow = true;
-      }
-    }, SPINNER_DELAY_MS);
+
+    if (!quiet) {
+      this.status = 'loading';
+      this.notice = undefined;
+      clearTimeout(this.#spinner);
+      this.slow = false;
+      this.#spinner = setTimeout(() => {
+        if (generation === this.#generation && this.status === 'loading') {
+          this.slow = true;
+        }
+      }, SPINNER_DELAY_MS);
+    }
 
     const onEvent = (event: ListEvent) => {
       if (generation === this.#generation) {
-        this.#apply(event, started);
+        this.#apply(event, started, reload);
       }
     };
 
@@ -87,7 +113,7 @@ export class Listing {
       .then(() => undefined)
       .catch((error: unknown) => {
         if (generation === this.#generation) {
-          this.#fail(IpcFailure.from(error).message);
+          this.#fail(IpcFailure.from(error).message, reload);
         }
       });
   }
@@ -107,7 +133,7 @@ export class Listing {
     return this.open(this.path ?? null, name);
   }
 
-  #apply(event: ListEvent, started: number) {
+  #apply(event: ListEvent, started: number, wasReload: boolean) {
     switch (event.kind) {
       case 'start': {
         // A reload of the same folder keeps showing the previous rows (and summary) until the new ones replace
@@ -129,6 +155,7 @@ export class Listing {
         if (event.total === 0) {
           this.firstScreenMs = performance.now() - started;
         }
+        this.#hooks.onStart?.(reload);
         break;
       }
       case 'batch': {
@@ -138,8 +165,9 @@ export class Listing {
         break;
       }
       case 'done':
-        this.summary = { dirs: event.dirs, files: event.files, bytes: event.bytes };
+        this.summary = { dirs: event.dirs, files: event.files, bytes: event.bytes, free: event.free };
         this.#settle('ready');
+        this.#hooks.onDone?.();
         if (this.#stale) {
           void this.reload();
         }
@@ -152,16 +180,22 @@ export class Listing {
         }
         break;
       case 'error':
-        this.#fail(event.error.message);
+        this.#fail(event.error.message, wasReload);
         break;
     }
   }
 
-  #fail(message: string) {
-    // Another folder could not be opened: stay in the current one and say why.
+  /** `wasReload`: the failed open was of the folder shown (nothing to go back to, or it would never end). */
+  #fail(message: string, wasReload: boolean) {
+    // Another folder could not be opened: stay in the current one and say why. The failed open made the backend
+    // stop watching the shown folder, so it is listed again quietly to bring the watch back.
     if (!this.#started && this.path !== undefined && this.error === undefined) {
       this.notice = message;
       this.#settle('ready');
+      if (!wasReload) {
+        void this.#open(this.path, null, true);
+      }
+
       return;
     }
 

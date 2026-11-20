@@ -3,4 +3,5 @@
 
 pub mod app;
 pub mod panes;
+pub mod sizes;
 pub mod updates;

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-pane-folder-size"
+description = "Enables the pane_folder_size command without any pre-configured scope."
+commands.allow = ["pane_folder_size"]
+
+[[permission]]
+identifier = "deny-pane-folder-size"
+description = "Denies the pane_folder_size command without any pre-configured scope."
+commands.deny = ["pane_folder_size"]

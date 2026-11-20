@@ -87,6 +87,40 @@ pub fn compare(a_key: &str, a_name: &str, b_key: &str, b_name: &str) -> Ordering
     a_key.cmp(b_key).then_with(|| a_name.cmp(b_name))
 }
 
+/// Bytes available to the user on the volume holding `path`; `None` when the platform cannot tell.
+pub fn free_space(path: &Path) -> Option<u64> {
+    fs4::available_space(path).ok()
+}
+
+/// The device (volume) an entry is on, to keep a folder walk on one filesystem. `None` on Windows, where the
+/// standard library exposes no volume without `unsafe`; there the walk relies on never following junctions
+/// and mount points, which is how other volumes are attached to a folder.
+#[cfg(unix)]
+pub fn device(metadata: &Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+
+    Some(metadata.dev())
+}
+
+#[cfg(not(unix))]
+pub fn device(_metadata: &Metadata) -> Option<u64> {
+    None
+}
+
+/// What identifies a directory on its filesystem (device and inode), to walk each one once even when a bind mount
+/// shows it twice. `None` on Windows, which has no mount tricks to the same folder that the walk would follow.
+#[cfg(unix)]
+pub fn identity(metadata: &Metadata) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+
+    Some((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(not(unix))]
+pub fn identity(_metadata: &Metadata) -> Option<(u64, u64)> {
+    None
+}
+
 /// Unix permission bits, or `None` on Windows.
 #[cfg(unix)]
 pub fn mode(metadata: &Metadata) -> Option<u32> {

@@ -1,29 +1,35 @@
 <script lang="ts">
-  import type { Entry } from '$lib/ipc/bindings/Entry';
-  import { formatDate, formatSize, formatSummary, iconClass, splitName } from '$lib/panes/format';
-  import type { Listing } from '$lib/panes/listing.svelte';
+  import ColumnHeader from '$lib/panes/ColumnHeader.svelte';
+  import { handleKey } from '$lib/panes/keys';
+  import PaneFooter from '$lib/panes/PaneFooter.svelte';
+  import PaneRow from '$lib/panes/PaneRow.svelte';
   import VirtualRows from '$lib/panes/VirtualRows.svelte';
+  import type { PaneView } from '$lib/panes/view.svelte';
 
   let {
     label,
-    listing,
+    view,
     active,
     onActivate,
   }: {
     /** Accessible name of the pane ("Left pane"). */
     label: string;
-    listing: Listing;
+    view: PaneView;
     active: boolean;
     onActivate: () => void;
   } = $props();
 
-  /** The `..` row leads to the parent folder; it comes first and is not an entry. */
-  const up = $derived(listing.parent !== null && listing.status !== 'error');
-  const count = $derived(listing.entries.length + (up ? 1 : 0));
+  const listing = $derived(view.listing);
+  const uid = $props.id();
+  let list = $state<HTMLElement>();
+  let pageSize = $state(1);
 
-  function entryAt(index: number): Entry | undefined {
-    return listing.entries[up ? index - 1 : index];
-  }
+  // The active pane's list holds the keyboard focus (Tab, a click or the start of the app make a pane active).
+  $effect(() => {
+    if (active) {
+      list?.focus();
+    }
+  });
 
   /** A root crumb (`/`, `C:\\`) already ends in a separator; no second one follows it. */
   const isRoot = (name: string) => name.endsWith('/') || name.endsWith('\\');
@@ -35,21 +41,61 @@
     return { update: scroll };
   }
 
-  function openRow(index: number) {
-    if (up && index === 0) {
-      void listing.open(listing.parent);
+  function onkeydown(event: KeyboardEvent) {
+    if (handleKey(view, event, pageSize)) {
+      event.preventDefault();
+    }
+  }
+
+  /** The row a mouse event hit (the list handles the mouse for all its rows). */
+  function rowOf(event: MouseEvent): number | undefined {
+    const option = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-row]') : null;
+    return option ? Number(option.dataset.row) : undefined;
+  }
+
+  function onclick(event: MouseEvent) {
+    const row = rowOf(event);
+    if (row === undefined) {
       return;
     }
 
-    const entry = entryAt(index);
-    if (entry?.kind === 'dir') {
-      void listing.enter(entry.name);
+    if (event.shiftKey) {
+      view.pick(row, 'range');
+    } else if (event.ctrlKey || event.metaKey) {
+      view.pick(row, 'toggle');
+    } else {
+      view.pick(row, 'cursor');
     }
+
+    list?.focus();
+  }
+
+  function ondblclick(event: MouseEvent) {
+    // Ctrl/Cmd/Shift clicks select (the clicks of a double click already did); they do not open.
+    if (event.ctrlKey || event.metaKey || event.shiftKey) {
+      return;
+    }
+
+    const row = rowOf(event);
+    if (row !== undefined) {
+      void view.open(row);
+    }
+  }
+
+  // Clicking anywhere in a pane makes it the active one and, unless it hit a control, focuses its list.
+  function activateOnClick(node: HTMLElement) {
+    const onclick = (event: MouseEvent) => {
+      onActivate();
+      if (!(event.target instanceof Element && event.target.closest('button, input'))) {
+        list?.focus();
+      }
+    };
+
+    node.addEventListener('click', onclick);
+    return () => node.removeEventListener('click', onclick);
   }
 </script>
 
-<!-- Clicking anywhere in a pane makes it the active one; Tab does the same from the keyboard (App). -->
-<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
 <section
   class="pane"
   data-pane
@@ -57,7 +103,7 @@
   aria-label={label}
   aria-current={active ? 'true' : undefined}
   aria-busy={listing.status === 'loading'}
-  onclick={onActivate}
+  {@attach activateOnClick}
 >
   <div class="phead">
     <button class="drive" type="button" aria-label="Drives">
@@ -82,35 +128,42 @@
     </div>
   </div>
 
-  <div class="head">
-    <span></span><span>Name</span><span>Ext</span><span class="r">Size</span><span>Modified</span>
-  </div>
+  <ColumnHeader {view} />
 
   <div class="rows">
     {#if listing.status === 'error'}
       <p class="message" role="alert">{listing.error}</p>
     {:else}
-      <!-- A new folder starts at the top; a reload of the same folder keeps the scroll position. -->
-      {#key listing.path}
-        <VirtualRows {count}>
-          {#snippet row(index)}
-            {@const entry = entryAt(index)}
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div class="row" class:d={entry?.kind === 'dir'} class:h={entry?.hidden} ondblclick={() => openRow(index)}>
-              {#if up && index === 0}
-                <span class="ic up">↰</span><span class="nm">..</span>
-              {:else if entry}
-                {@const { base, ext } = splitName(entry)}
-                <span class="ic {iconClass(entry)}"></span>
-                <span class="nm" title={entry.linkTarget ? `${entry.name} → ${entry.linkTarget}` : undefined}>{base}</span>
-                <span class="ex">{ext}</span>
-                <span class="sz">{#if entry.kind === 'dir'}<span class="dirtag">DIR</span>{:else}{formatSize(entry.size)}{/if}</span>
-                <span class="dt">{formatDate(entry.modified)}</span>
-              {/if}
-            </div>
-          {/snippet}
-        </VirtualRows>
-      {/key}
+      <div
+        class="list"
+        role="listbox"
+        tabindex="0"
+        aria-label="{label} files"
+        aria-multiselectable="true"
+        aria-activedescendant={view.cursor >= 0 ? `${uid}-${view.cursor}` : undefined}
+        bind:this={list}
+        {onkeydown}
+        {onclick}
+        {ondblclick}
+      >
+        <!-- A new folder starts at the top; a reload of the same folder keeps the scroll position. -->
+        {#key listing.path}
+          <VirtualRows count={view.count} active={view.cursor} bind:pageSize>
+            {#snippet row(index)}
+              {@const entry = view.entryAt(index)}
+              <PaneRow
+                id="{uid}-{index}"
+                {index}
+                {entry}
+                up={view.isUp(index)}
+                cursor={index === view.cursor}
+                selected={entry !== undefined && view.isSelected(entry.name)}
+                size={entry && view.sizes.text(entry)}
+              />
+            {/snippet}
+          </VirtualRows>
+        {/key}
+      </div>
       {#if listing.notice}
         <p class="notice" role="alert">{listing.notice}</p>
       {/if}
@@ -122,15 +175,15 @@
     {/if}
   </div>
 
-  <div class="foot">
-    {#if listing.summary}
-      {formatSummary(listing.summary.dirs, listing.summary.files, listing.summary.bytes)}
-    {/if}
-  </div>
+  <PaneFooter {view} onclosemask={() => list?.focus()} />
 </section>
 
 <style>
   .pane {
+    /* The columns of the header and of every row: icon, name, ext, size, modified. */
+    --pane-cols: 20px minmax(0, 1fr) 48px 74px 118px;
+    --cursor-line: color-mix(in srgb, var(--accent) 35%, transparent);
+    --cursor-bg: color-mix(in srgb, var(--text) 5%, transparent);
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -144,6 +197,8 @@
   }
 
   .pane.active {
+    --cursor-line: var(--accent);
+    --cursor-bg: color-mix(in srgb, var(--accent) 16%, transparent);
     border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
   }
 
@@ -255,145 +310,15 @@
     color: var(--line);
   }
 
-  .head,
-  .row {
-    display: grid;
-    grid-template-columns: 20px minmax(0, 1fr) 48px 74px 118px;
-    align-items: center;
-    gap: 8px;
-    padding: 0 10px;
-  }
-
-  .head {
-    height: 25px;
-    border-bottom: 1px solid var(--line);
-    font-size: 11px;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: var(--dim);
-    user-select: none;
-  }
-
-  .head .r {
-    text-align: right;
-  }
-
   .rows {
     position: relative;
     flex: 1;
     min-height: 0;
   }
 
-  .row {
-    height: 24px;
-    border-left: 2px solid transparent;
-    cursor: default;
-    user-select: none;
-  }
-
-  .row:hover {
-    background: color-mix(in srgb, var(--text) 4%, transparent);
-  }
-
-  .row.d .nm {
-    font-weight: 600;
-  }
-
-  .row.h {
-    opacity: 0.6;
-  }
-
-  .nm,
-  .ex,
-  .dt {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .ex,
-  .dt {
-    font-size: 12px;
-    color: var(--dim);
-  }
-
-  .sz {
-    font: 11.5px var(--font-mono);
-    color: var(--dim);
-    text-align: right;
-    white-space: nowrap;
-  }
-
-  .dirtag {
-    font-size: 10px;
-    letter-spacing: 0.06em;
-    opacity: 0.7;
-  }
-
-  .ic {
-    position: relative;
-    display: inline-block;
-    flex: none;
-    width: 16px;
-    height: 12px;
-  }
-
-  .ic.dir {
-    margin-top: 2px;
-    border-radius: 1px 3px 3px;
-    background: var(--dir);
-  }
-
-  .ic.dir::before {
-    content: '';
-    position: absolute;
-    top: -3px;
-    left: 0;
-    width: 7px;
-    height: 4px;
-    border-radius: 2px 2px 0 0;
-    background: var(--dir);
-  }
-
-  .ic.up {
-    color: var(--dim);
-    font-size: 14px;
-    line-height: 12px;
-    text-align: center;
-  }
-
-  .ic.f,
-  .ic.img,
-  .ic.code,
-  .ic.arc,
-  .ic.doc,
-  .ic.exe {
-    width: 12px;
-    height: 15px;
-    margin-left: 2px;
-    border-radius: 2px;
-    background: var(--fc, #8a93a8);
-    clip-path: polygon(0 0, 66% 0, 100% 30%, 100% 100%, 0 100%);
-  }
-
-  .ic.img {
-    --fc: #b98bff;
-  }
-
-  .ic.code {
-    --fc: #ff8a5b;
-  }
-
-  .ic.arc {
-    --fc: #e0b44c;
-  }
-
-  .ic.doc {
-    --fc: #6aa8ff;
-  }
-
-  .ic.exe {
-    --fc: #4cc38a;
+  .list {
+    height: 100%;
+    outline: none;
   }
 
   .message {
@@ -442,29 +367,9 @@
     }
   }
 
-  .foot {
-    height: 28px;
-    display: flex;
-    align-items: center;
-    padding: 0 10px;
-    border-top: 1px solid var(--line);
-    font-size: 12px;
-    color: var(--dim);
-    white-space: nowrap;
-    overflow: hidden;
-  }
-
   @media (max-width: 760px) {
-    .head,
-    .row {
-      grid-template-columns: 20px minmax(0, 1fr) 74px;
-    }
-
-    .head span:nth-child(3),
-    .head span:nth-child(5),
-    .ex,
-    .dt {
-      display: none;
+    .pane {
+      --pane-cols: 20px minmax(0, 1fr) 74px;
     }
   }
 </style>

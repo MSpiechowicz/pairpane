@@ -61,3 +61,13 @@ export function formatSummary(dirs: number, files: number, bytes: number): strin
 
   return `${plural(dirs, 'folder')} · ${plural(files, 'file')} · ${formatSize(bytes)}`;
 }
+
+/** `Selected: 1 folder · 2 files · 2.0 KB` */
+export function formatSelection(dirs: number, files: number, bytes: number): string {
+  return `Selected: ${formatSummary(dirs, files, bytes)}`;
+}
+
+/** `5.7 GB free` */
+export function formatFree(bytes: number): string {
+  return `${formatSize(bytes)} free`;
+}

@@ -3,7 +3,7 @@
 
   import { ipc } from '$lib/ipc/client';
   import type { AppInfo } from '$lib/ipc/bindings/AppInfo';
-  import { Listing } from '$lib/panes/listing.svelte';
+  import { PaneView } from '$lib/panes/view.svelte';
   import Dock from '$lib/shell/Dock.svelte';
   import Pane from '$lib/shell/Pane.svelte';
   import { Theme } from '$lib/shell/theme.svelte';
@@ -18,12 +18,12 @@
   let active = $state<Side>('left');
   let showHidden = $state(false);
 
-  const panes = { left: new Listing(ipc, 'left'), right: new Listing(ipc, 'right') };
+  const panes = { left: new PaneView(ipc, 'left'), right: new PaneView(ipc, 'right') };
 
   function toggleHidden() {
     showHidden = !showHidden;
-    void panes.left.setShowHidden(showHidden);
-    void panes.right.setShowHidden(showHidden);
+    void panes.left.listing.setShowHidden(showHidden);
+    void panes.right.listing.setShowHidden(showHidden);
   }
 
   const theme = new Theme();
@@ -32,13 +32,15 @@
   const nativeMenu = /Mac/.test(navigator.userAgent);
 
   /**
-   * Tab switches the active pane while focus is in a pane or nowhere (the page itself). In the top bar, the menus
-   * and the dock it moves focus as usual, so every control stays reachable from the keyboard.
+   * Tab switches the active pane while focus is in a pane's list or nowhere (the page itself). In the top bar, the
+   * menus, the dock and a pane's text fields (the mask prompt) it moves focus as usual, so every control stays
+   * reachable from the keyboard.
    */
   function switchPane(event: KeyboardEvent) {
     const target = event.target;
     const inPane = target === document.body || (target instanceof Element && target.closest('[data-pane]'));
-    if (event.key !== 'Tab' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || !inPane) {
+    const typing = target instanceof Element && target.closest('input, textarea');
+    if (event.key !== 'Tab' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || !inPane || typing) {
       return;
     }
 
@@ -48,8 +50,8 @@
 
   onMount(async () => {
     // Both panes start in the home folder.
-    void panes.left.open(null);
-    void panes.right.open(null);
+    void panes.left.listing.open(null);
+    void panes.right.listing.open(null);
 
     try {
       info = await ipc.invoke('app_info', undefined);
@@ -89,8 +91,8 @@
   />
 
   <main class="panes">
-    <Pane label="Left pane" listing={panes.left} active={active === 'left'} onActivate={() => (active = 'left')} />
-    <Pane label="Right pane" listing={panes.right} active={active === 'right'} onActivate={() => (active = 'right')} />
+    <Pane label="Left pane" view={panes.left} active={active === 'left'} onActivate={() => (active = 'left')} />
+    <Pane label="Right pane" view={panes.right} active={active === 'right'} onActivate={() => (active = 'right')} />
   </main>
 
   <Dock />

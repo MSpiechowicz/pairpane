@@ -9,6 +9,7 @@
     "allow-update-install",
     "allow-app-relaunch",
     "allow-menu-subscribe",
-    "allow-pane-open"
+    "allow-pane-open",
+    "allow-pane-folder-size"
   ]
 }

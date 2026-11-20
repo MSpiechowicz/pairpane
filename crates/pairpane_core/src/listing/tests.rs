@@ -110,14 +110,17 @@ fn start_batches_and_done_describe_the_folder() {
     assert_eq!(listed[1].kind, EntryKind::File);
     assert_eq!(listed[1].size, 5);
     assert!(listed[1].modified.is_some_and(|millis| millis > 1_600_000_000_000));
-    assert_eq!(
-        events.last(),
-        Some(&ListEvent::Done {
-            dirs: 1,
-            files: 2,
-            bytes: 10
-        })
-    );
+    let Some(ListEvent::Done {
+        dirs,
+        files,
+        bytes,
+        free,
+    }) = events.last()
+    else {
+        panic!("last event is done: {:?}", events.last());
+    };
+    assert_eq!((*dirs, *files, *bytes), (1, 2, 10));
+    assert!(free.is_some(), "the volume's free space is reported");
 }
 
 #[test]

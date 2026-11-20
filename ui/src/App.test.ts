@@ -72,6 +72,22 @@ describe('App', () => {
     expect(pane('Right pane')).toHaveAttribute('aria-current', 'true');
   });
 
+  it('the active pane`s list has the focus, and Tab in the mask prompt moves focus as usual', async () => {
+    backend(() => Promise.resolve({ name: 'Pairpane', version: '0.1.0' }));
+    render(App);
+    const lists = screen.getAllByRole('listbox');
+    expect(lists[0]).toHaveFocus();
+
+    await fireEvent.keyDown(lists[0], { key: 'Tab' });
+    expect(pane('Right pane')).toHaveAttribute('aria-current', 'true');
+    expect(lists[1]).toHaveFocus();
+
+    await fireEvent.keyDown(lists[1], { key: '+' });
+    const mask = await screen.findByRole('textbox', { name: /Select/ });
+    expect(await fireEvent.keyDown(mask, { key: 'Tab' })).toBe(true);
+    expect(pane('Right pane')).toHaveAttribute('aria-current', 'true');
+  });
+
   it('Settings > Check for Updates… runs a manual update check', async () => {
     backend(() => Promise.resolve({ name: 'Pairpane', version: '0.1.0' }));
     render(App);

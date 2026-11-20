@@ -4,6 +4,9 @@
 //! streaming [`ListEvent`]s over the pane's channel, so a slow disk never blocks the window (the pane shows a
 //! spinner meanwhile). Opening another folder in the same pane cancels the earlier listing and stops watching the
 //! earlier folder; a late, slow call never replaces a newer one (each open has a generation).
+//!
+//! The pane's size jobs (`sizes.rs`) belong to the latest folder that listed: they move on only once another
+//! folder's listing has started, so an open that fails leaves the pane, and its jobs, as they were.
 
 use std::collections::HashMap;
 use std::io;
@@ -18,14 +21,17 @@ use tauri::State;
 use tauri::async_runtime;
 use tauri::ipc::Channel;
 
+use super::sizes::Sizing;
 use crate::error::{CommandError, CommandResult};
 
-/// What runs for one pane: its latest open (by generation), whose listing the next open cancels, and the watch
-/// on its folder.
+/// What runs for one pane: its latest open (by generation), whose listing the next open cancels, the watch
+/// on its folder, and its size jobs.
 struct Slot {
     generation: u64,
     folder: PathBuf,
     cancel: Arc<AtomicBool>,
+    /// Outlives opens: it follows the folder that last listed, not the one last asked for.
+    sizing: Sizing,
     watch: Option<Watch>,
 }
 
@@ -45,6 +51,13 @@ pub struct Panes {
     generations: AtomicU64,
 }
 
+impl Panes {
+    /// Runs `job` on the size state of `pane`; `None` when the pane was never opened.
+    pub(super) fn with_sizing<R>(&self, pane: PaneId, job: impl FnOnce(&mut Sizing) -> R) -> Option<R> {
+        lock(&self.slots).get_mut(&pane).map(|slot| job(&mut slot.sizing))
+    }
+}
+
 /// Lists a folder into `pane` and watches it: `path` (absolute), or the home folder when it is `null`; with
 /// `child`, the folder of that name inside it. Everything after the arguments are checked, including a folder
 /// that cannot be read, arrives on `on_event`.
@@ -61,34 +74,9 @@ pub async fn pane_open(
     let generation = panes.generations.fetch_add(1, Ordering::Relaxed) + 1;
     let cancel = Arc::new(AtomicBool::new(false));
 
-    let earlier = {
-        let mut slots = lock(&panes.slots);
-        // The same folder again (a reload after a change, hidden files toggled): keep its watch.
-        let kept = slots
-            .get_mut(&pane)
-            .filter(|slot| slot.folder == folder)
-            .and_then(|slot| slot.watch.take());
-        if let Some(kept) = &kept {
-            *kept.sink.lock().unwrap_or_else(PoisonError::into_inner) = on_event.clone();
-        }
-        let watched = kept.is_some();
-        let earlier = slots.insert(
-            pane,
-            Slot {
-                generation,
-                folder: folder.clone(),
-                cancel: Arc::clone(&cancel),
-                watch: kept,
-            },
-        );
-        (earlier, watched)
-    };
-    let (earlier, watched) = earlier;
+    let (earlier, watched) = replace_slot(&mut lock(&panes.slots), pane, generation, &folder, &cancel, &on_event);
     // Dropped outside the lock: stopping a watch may wait on the OS.
-    if let Some(earlier) = earlier {
-        earlier.cancel.store(true, Ordering::Relaxed);
-        drop(earlier);
-    }
+    drop(earlier);
 
     let slots = Arc::clone(&panes.slots);
     async_runtime::spawn_blocking(move || {
@@ -98,7 +86,8 @@ pub async fn pane_open(
             set_watch(&slots, pane, generation, start_watch(&folder, &on_event));
         }
 
-        let failed = list(&folder, show_hidden, &cancel, &on_event);
+        let started = || claim_sizing(&slots, pane, generation, &folder);
+        let failed = list(&folder, show_hidden, &cancel, &on_event, started);
         if failed {
             // A folder that cannot be listed is not watched (a file changing would re-list it forever).
             set_watch(&slots, pane, generation, None);
@@ -106,6 +95,61 @@ pub async fn pane_open(
     });
 
     Ok(())
+}
+
+/// Makes `folder` the pane's latest open and returns the slot it replaced (to drop outside the lock; its listing
+/// is cancelled) and whether the pane's watch was kept. The same folder again (a reload after a change, hidden
+/// files toggled) keeps its watch, retargeted to `on_event`. The size jobs always stay: they move to `folder` only
+/// when it lists (see [`claim_sizing`]).
+fn replace_slot(
+    slots: &mut HashMap<PaneId, Slot>,
+    pane: PaneId,
+    generation: u64,
+    folder: &Path,
+    cancel: &Arc<AtomicBool>,
+    on_event: &Channel<ListEvent>,
+) -> (Option<Slot>, bool) {
+    let mut earlier = slots.remove(&pane);
+
+    let mut kept = None;
+    let mut sizing = Sizing::default();
+    if let Some(slot) = earlier.as_mut() {
+        sizing = std::mem::take(&mut slot.sizing);
+        if slot.folder == folder {
+            kept = slot.watch.take();
+        }
+    }
+    if let Some(kept) = &kept {
+        *kept.sink.lock().unwrap_or_else(PoisonError::into_inner) = on_event.clone();
+    }
+
+    let watched = kept.is_some();
+    slots.insert(
+        pane,
+        Slot {
+            generation,
+            folder: folder.to_owned(),
+            cancel: Arc::clone(cancel),
+            sizing,
+            watch: kept,
+        },
+    );
+
+    if let Some(earlier) = &earlier {
+        earlier.cancel.store(true, Ordering::Relaxed);
+    }
+
+    (earlier, watched)
+}
+
+/// Moves the pane's size jobs to `folder`, whose listing has started, if `generation` is still the pane's latest
+/// open: a late listing never takes them from a newer open.
+fn claim_sizing(slots: &Slots, pane: PaneId, generation: u64, folder: &Path) {
+    if let Some(slot) = lock(slots).get_mut(&pane)
+        && slot.generation == generation
+    {
+        slot.sizing.move_to(folder);
+    }
 }
 
 /// Watches `folder`, sending its changes to `on_event` (or to the channel of a later reload); `None` when the
@@ -140,15 +184,28 @@ fn set_watch(slots: &Slots, pane: PaneId, generation: u64, watch: Option<Watch>)
     drop(replaced);
 }
 
-/// Lists `folder` onto `on_event`; `true` when it could not be listed.
-fn list(folder: &Path, show_hidden: bool, cancel: &AtomicBool, on_event: &Channel<ListEvent>) -> bool {
+/// Lists `folder` onto `on_event`, calling `on_start` as the first pass ends (just before `start` is sent); `true`
+/// when it could not be listed.
+fn list(
+    folder: &Path,
+    show_hidden: bool,
+    cancel: &AtomicBool,
+    on_event: &Channel<ListEvent>,
+    on_start: impl FnOnce(),
+) -> bool {
     let started = Instant::now();
     let mut first_batch = None;
     let mut total = 0;
+    let mut on_start = Some(on_start);
     // A closed channel only means the page went away; the next `pane_open` starts over.
     let send = |event: ListEvent| {
         match &event {
-            ListEvent::Start { total: count, .. } => total = *count,
+            ListEvent::Start { total: count, .. } => {
+                total = *count;
+                if let Some(on_start) = on_start.take() {
+                    on_start();
+                }
+            }
             ListEvent::Batch { .. } => {
                 first_batch.get_or_insert_with(|| started.elapsed());
             }
@@ -184,7 +241,7 @@ fn lock(slots: &Slots) -> std::sync::MutexGuard<'_, HashMap<PaneId, Slot>> {
 }
 
 /// The folder to list: `path` or the home folder, plus `child` when given, within the platform's path rules.
-fn resolve(path: Option<String>, child: Option<&str>) -> CommandResult<PathBuf> {
+pub(super) fn resolve(path: Option<String>, child: Option<&str>) -> CommandResult<PathBuf> {
     let base = match path {
         Some(path) => PathBuf::from(path),
         None => std::env::home_dir()
@@ -209,15 +266,17 @@ fn resolve(path: Option<String>, child: Option<&str>) -> CommandResult<PathBuf> 
 
 /// What the pane says when its folder cannot be listed.
 fn list_error(error: &io::Error) -> IpcError {
+    folder_error(error, "open this folder", "Cannot open this folder")
+}
+
+/// A folder error for the user: `denied` finishes "You do not have permission to …", `failed` leads any other error.
+pub(super) fn folder_error(error: &io::Error, denied: &str, failed: &str) -> IpcError {
     let (code, message) = match error.kind() {
         io::ErrorKind::NotFound => (IpcErrorCode::NotFound, "This folder does not exist.".to_owned()),
-        io::ErrorKind::PermissionDenied => (
-            IpcErrorCode::Io,
-            "You do not have permission to open this folder.".to_owned(),
-        ),
+        io::ErrorKind::PermissionDenied => (IpcErrorCode::Io, format!("You do not have permission to {denied}.")),
         io::ErrorKind::NotADirectory => (IpcErrorCode::InvalidInput, "This is not a folder.".to_owned()),
         io::ErrorKind::InvalidInput => (IpcErrorCode::InvalidInput, error.to_string()),
-        _ => (IpcErrorCode::Io, format!("Cannot open this folder: {error}")),
+        _ => (IpcErrorCode::Io, format!("{failed}: {error}")),
     };
 
     IpcError::new(code, message)
@@ -226,6 +285,49 @@ fn list_error(error: &io::Error) -> IpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn root() -> &'static str {
+        if cfg!(windows) { "C:\\data" } else { "/data" }
+    }
+
+    /// Opens `folder` in the left pane of `slots` and returns what it replaced.
+    fn open(slots: &Slots, generation: u64, folder: &Path) -> Option<Slot> {
+        let (earlier, _) = replace_slot(
+            &mut lock(slots),
+            PaneId::Left,
+            generation,
+            folder,
+            &Arc::new(AtomicBool::new(false)),
+            &Channel::new(|_| Ok(())),
+        );
+
+        earlier
+    }
+
+    /// The listing of `folder` opened as `generation` has started.
+    fn start(slots: &Slots, generation: u64, folder: &Path) {
+        claim_sizing(slots, PaneId::Left, generation, folder);
+    }
+
+    /// Starts a size job for `name` inside `path` in the left pane.
+    fn size_job(slots: &Slots, path: &Path, name: &str) -> CommandResult<Arc<AtomicBool>> {
+        let slot = lock(slots)
+            .get_mut(&PaneId::Left)
+            .map(|slot| slot.sizing.begin(path.to_string_lossy().into_owned(), name));
+
+        slot.expect("open pane").map(|(_, stop)| stop)
+    }
+
+    /// A pane whose folder (generation 1) has listed and has a size job running in it.
+    fn measuring() -> (Slots, PathBuf, Arc<AtomicBool>) {
+        let slots = Slots::default();
+        let folder = PathBuf::from(root());
+        open(&slots, 1, &folder);
+        start(&slots, 1, &folder);
+        let stop = size_job(&slots, &folder, "photos").expect("job");
+
+        (slots, folder, stop)
+    }
 
     #[test]
     fn a_child_must_be_a_plain_name() {
@@ -270,5 +372,66 @@ mod tests {
         assert_eq!(not_found.code, IpcErrorCode::NotFound);
         assert_eq!(denied.code, IpcErrorCode::Io);
         assert!(denied.message.contains("permission"));
+    }
+
+    #[test]
+    fn reopening_the_same_folder_keeps_its_size_job_and_listing_another_stops_it() {
+        let (slots, folder, stop) = measuring();
+        let folder = folder.as_path();
+
+        let earlier = open(&slots, 2, folder).expect("replaced");
+        start(&slots, 2, folder);
+        assert!(earlier.cancel.load(Ordering::Relaxed), "the earlier listing stops");
+        assert!(!stop.load(Ordering::Relaxed), "a reload leaves the size job running");
+
+        let photos = folder.join("photos");
+        open(&slots, 3, &photos);
+        start(&slots, 3, &photos);
+        assert!(stop.load(Ordering::Relaxed), "a listed folder stops the job");
+        assert!(size_job(&slots, folder, "photos").is_err());
+        assert!(size_job(&slots, &photos, "2024").is_ok());
+    }
+
+    #[test]
+    fn a_failed_open_leaves_the_size_job_and_target_of_the_shown_folder() {
+        let (slots, folder, stop) = measuring();
+        let folder = folder.as_path();
+
+        // The open of `locked` fails: its listing never starts.
+        let locked = folder.join("locked");
+        let earlier = open(&slots, 2, &locked).expect("replaced");
+
+        assert!(earlier.cancel.load(Ordering::Relaxed), "the earlier listing stops");
+        assert!(!stop.load(Ordering::Relaxed), "the shown folder's job keeps running");
+        assert!(
+            size_job(&slots, folder, "other").is_ok(),
+            "its folders can still be measured"
+        );
+        assert!(
+            size_job(&slots, &locked, "x").is_err(),
+            "the folder that failed is not the target"
+        );
+    }
+
+    #[test]
+    fn a_late_listing_never_takes_the_size_jobs_from_a_newer_open() {
+        let (slots, folder, stop) = measuring();
+        let folder = folder.as_path();
+
+        let photos = folder.join("photos");
+        let other = folder.join("other");
+        open(&slots, 2, &photos);
+        open(&slots, 3, &other);
+        start(&slots, 2, &photos);
+
+        assert!(
+            !stop.load(Ordering::Relaxed),
+            "the superseded open does not move the jobs"
+        );
+
+        start(&slots, 3, &other);
+        assert!(stop.load(Ordering::Relaxed), "the latest open does");
+        assert!(size_job(&slots, folder, "photos").is_err());
+        assert!(size_job(&slots, &other, "x").is_ok());
     }
 }

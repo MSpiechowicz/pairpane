@@ -51,6 +51,7 @@ pub fn run() -> ExitCode {
             commands::updates::app_relaunch,
             menu::menu_subscribe,
             commands::panes::pane_open,
+            commands::sizes::pane_folder_size,
         ])
         .run(tauri::generate_context!());
 

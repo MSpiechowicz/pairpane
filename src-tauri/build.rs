@@ -14,6 +14,7 @@ const COMMANDS: &[&str] = &[
     "app_relaunch",
     "menu_subscribe",
     "pane_open",
+    "pane_folder_size",
 ];
 
 fn main() {

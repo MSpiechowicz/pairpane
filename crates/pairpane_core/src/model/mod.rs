@@ -11,5 +11,5 @@ mod update;
 
 pub use app::AppInfo;
 pub use ipc_error::{IpcError, IpcErrorCode};
-pub use listing::{Crumb, Entry, EntryKind, ListEvent, PaneId};
+pub use listing::{Crumb, Entry, EntryKind, ListEvent, PaneId, SizeEvent};
 pub use update::{MAX_UPDATE_NOTES_BYTES, MenuCommand, UpdateInfo, UpdatePhase, UpdateProgress};
