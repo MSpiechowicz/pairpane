@@ -124,7 +124,10 @@ mod windows {
         let temp = TempDir::new().expect("temp dir");
         let link = temp.path().join("a");
 
-        if symlink_dir(r"C:somewhere", &link).is_err() {
+        // Without the privilege, or when Windows stores the target in another form, there is nothing to test.
+        if symlink_dir(r"C:somewhere", &link).is_err()
+            || fs::read_link(&link).ok().as_deref() != Some(Path::new(r"C:somewhere"))
+        {
             return;
         }
 
@@ -204,19 +207,22 @@ mod unix {
 
     #[test]
     fn loops_and_endless_chains_have_no_target() {
-        let (temp, _) = setup();
-        symlink("self", temp.path().join("self")).expect("link");
-        symlink("two", temp.path().join("one")).expect("link");
-        symlink("one", temp.path().join("two")).expect("link");
-        symlink(temp.path().join("real"), temp.path().join("link-0")).expect("link");
+        let (temp, real) = setup();
+        // The temp folder's own path may hold links (`/var` is one on macOS) that would count against the limit.
+        let base = real.parent().expect("temp folder").to_owned();
+        symlink("self", base.join("self")).expect("link");
+        symlink("two", base.join("one")).expect("link");
+        symlink("one", base.join("two")).expect("link");
+        symlink(&real, base.join("link-0")).expect("link");
         for index in 1..=MAX_LINKS {
-            symlink(format!("link-{}", index - 1), temp.path().join(format!("link-{index}"))).expect("link");
+            symlink(format!("link-{}", index - 1), base.join(format!("link-{index}"))).expect("link");
         }
 
-        assert_eq!(local_target(&temp.path().join("self")), None);
-        assert_eq!(local_target(&temp.path().join("one")), None);
-        assert_eq!(local_target(&temp.path().join(format!("link-{MAX_LINKS}"))), None);
-        assert!(local_target(&temp.path().join(format!("link-{}", MAX_LINKS - 2))).is_some());
+        assert_eq!(local_target(&base.join("self")), None);
+        assert_eq!(local_target(&base.join("one")), None);
+        assert_eq!(local_target(&base.join(format!("link-{MAX_LINKS}"))), None);
+        assert!(local_target(&base.join(format!("link-{}", MAX_LINKS - 2))).is_some());
+        drop(temp);
     }
 
     #[test]
