@@ -1,0 +1,431 @@
+name: Release
+
+# CI is the only go/no-go gate: this workflow runs no tests. It starts after CI succeeded for a push to main and
+# releases exactly the commit CI tested. semantic-release reads the Conventional Commits since the last tag
+# (fix: -> patch, feat: -> minor, "feat!:" or a "BREAKING CHANGE:" footer -> major; other types do not release),
+# bumps package.json/Cargo.toml/Cargo.lock, updates CHANGELOG.md, pushes the release commit and the vX.Y.Z tag and
+# creates a DRAFT GitHub release. Then, each in its own job:
+#   verify  - checks the release commit is exactly the CI-tested commit plus the version bump;
+#   bundle  - builds the installers on every OS; read-only token, no secrets;
+#   sign    - signs the updater artifacts; the only job with the signing key, runs nothing but the Tauri signer;
+#   publish - verifies every signature against the committed public key, uploads everything, writes latest.json and
+#             checksums.txt and only then publishes the release.
+# A failure anywhere leaves a draft, which install.sh and the updater never see. See docs/release-and-updater-keys.md.
+on:
+  workflow_run:
+    workflows: [CI] # the CI workflow's `name`; renaming it silently breaks this chain
+    types: [completed]
+    branches: [main]
+
+# Releases run one at a time and are never cancelled half-way (a cancelled run could leave a tag without bundles).
+# Runs that will not release (failed CI, pull requests) get their own group, so they never displace a pending release.
+concurrency:
+  group: >-
+    ${{ (github.event.workflow_run.conclusion == 'success'
+    && github.event.workflow_run.event == 'push'
+    && github.event.workflow_run.head_branch == 'main'
+    && github.event.workflow_run.head_repository.full_name == github.repository)
+    && 'release' || format('release-skip-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  BUN_VERSION: 1.4.2
+  NODE_VERSION: 26.13.1
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    name: Version and draft release
+    # workflow_run also fires for CI runs of pull requests from forks (in this repository's context, with secrets),
+    # and a fork's branch can be called main: require a successful push run of this repository's main.
+    if: >-
+      github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main'
+      && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write # push the release commit + tag, create the draft release
+    outputs:
+      # Written by the exec plugin's successCmd (see .releaserc.json). Empty when nothing was released.
+      released: ${{ steps.semantic-release.outputs.released }}
+      version: ${{ steps.semantic-release.outputs.version }}
+      sha: ${{ steps.semantic-release.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The commit CI validated. If main has moved on since, semantic-release sees a stale branch and does
+          # nothing; the newer push gets its own CI run and its own release run.
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0 # semantic-release needs the full history and tags
+          persist-credentials: false # semantic-release authenticates with GITHUB_TOKEN itself
+      - name: The commit is on main
+        run: |
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::$(git rev-parse HEAD) is not on main; refusing to release it."
+            exit 1
+          fi
+      # Runs before any tag exists: a release without the updater public key and its signing secret would install
+      # fine but could never update. Only whether the secret is set reaches this step, never its value.
+      - name: Check the updater key is configured
+        env:
+          HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          pubkey=$(jq -r '.plugins.updater.pubkey // ""' src-tauri/tauri.conf.json)
+          if [[ -z "$pubkey" || "$pubkey" == NOT_CONFIGURED* ]]; then
+            echo "::error::plugins.updater.pubkey in src-tauri/tauri.conf.json is still the placeholder. See docs/release-and-updater-keys.md."
+            exit 1
+          fi
+          if [[ "$HAS_SIGNING_KEY" != 'true' ]]; then
+            echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is not set. See docs/release-and-updater-keys.md."
+            exit 1
+          fi
+      # Node and Bun are downloaded and checked against pinned hashes before they run: this job holds a write token.
+      # No caches anywhere in this workflow: any CI run on main can write them.
+      - name: Install Node.js (verified)
+        run: .github/scripts/install-node.sh
+      - name: Install Bun (verified)
+        run: .github/scripts/install-bun.sh
+      # --ignore-scripts: no dependency code (and no repo git hook via `prepare`) runs during the install.
+      - run: bun install --frozen-lockfile --ignore-scripts
+      # semantic-release numbers a first release 1.0.0. A v0.0.0 tag on the root commit makes the first `feat:`
+      # release 0.1.0. semantic-release pushes it together with v0.1.0 (harmless: it has no GitHub release), and
+      # once any v* tag exists this step does nothing.
+      - name: Baseline tag for the first release
+        run: |
+          if [ -z "$(git tag --list 'v*')" ]; then
+            git tag v0.0.0 "$(git rev-list --max-parents=0 HEAD | tail -n 1)"
+          fi
+      - name: semantic-release
+        id: semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./node_modules/.bin/semantic-release
+
+  verify:
+    name: Verify the release commit
+    needs: release
+    if: ${{ needs.release.outputs.released == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.sha }}
+          fetch-depth: 2 # the release commit and its parent
+          persist-credentials: false
+      # The release job runs semantic-release's npm dependencies with a write token and pushes the release commit.
+      # Before anything from it is built or trusted, this checks it is exactly the CI-tested commit plus the version
+      # bump: each version file must equal the tested file with only the version replaced (CHANGELOG.md is free text
+      # and read by nothing in the build). The check lives here, in the workflow file, because a workflow token
+      # cannot change workflow files; a script from the release commit could be replaced by it.
+      - name: The release commit is the tested commit plus the version bump
+        env:
+          SHA: ${{ needs.release.outputs.sha }}
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || fail "version '$VERSION' is not X.Y.Z"
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ && "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "bad commit SHA"
+          [[ "$(git rev-parse "$SHA^")" == "$TESTED_SHA" ]] || fail "release commit $SHA is not a child of the CI-tested commit $TESTED_SHA"
+          while IFS= read -r file; do
+            case "$file" in
+              package.json | Cargo.toml | Cargo.lock | CHANGELOG.md) ;;
+              *) fail "release commit changes $file; only the version files may change" ;;
+            esac
+          done < <(git diff --name-only "$TESTED_SHA" "$SHA")
+          expect_bump() {
+            if ! diff <(git show "$TESTED_SHA:$1" | awk -v v="$VERSION" "$2") <(git show "$SHA:$1"); then
+              fail "$1 changes more than its version"
+            fi
+          }
+          # shellcheck disable=SC2016 # an awk program, not shell
+          expect_bump package.json '
+            !done && /^  "version": "[^"]*",$/ { print "  \"version\": \"" v "\","; done = 1; next }
+            { print }'
+          # shellcheck disable=SC2016 # an awk program, not shell
+          expect_bump Cargo.toml '
+            /^\[/ { section = $0 }
+            section == "[workspace.package]" && /^version = "[^"]*"$/ { print "version = \"" v "\""; next }
+            { print }'
+          # shellcheck disable=SC2016 # an awk program, not shell
+          expect_bump Cargo.lock '
+            /^\[\[package\]\]$/ { own = 0 }
+            /^name = "pairpane_(core|app)"$/ { own = 1 }
+            own && /^version = "[^"]*"$/ { print "version = \"" v "\""; own = 0; next }
+            { print }'
+          echo "release commit $SHA = $TESTED_SHA + version $VERSION"
+
+  bundle:
+    name: Bundle (${{ matrix.name }})
+    needs: [release, verify]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    permissions:
+      contents: read # no secrets and no write access while third-party build code runs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64 (AppImage, deb, rpm)
+            id: linux-x64
+            os: ubuntu-22.04 # oldest supported glibc, so the binaries run on older distributions too
+            args: --bundles appimage,deb,rpm
+          - name: macOS arm64
+            id: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            arch: aarch64
+            args: --target aarch64-apple-darwin --bundles app,dmg
+          - name: macOS x64
+            id: macos-x64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            arch: x64
+            args: --target x86_64-apple-darwin --bundles app,dmg
+          - name: Windows x64 (NSIS, MSI)
+            id: windows-x64
+            os: windows-latest
+            args: --bundles nsis,msi
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.sha }} # the verified release commit, not a name that could be re-pointed
+          persist-credentials: false
+      - name: The tag points at the release commit
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          SHA: ${{ needs.release.outputs.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "refs/tags/v$VERSION:refs/tags/v$VERSION"
+          if [[ "$(git rev-parse "refs/tags/v$VERSION^{commit}")" != "$SHA" ]]; then
+            echo "::error::tag v$VERSION does not point at the release commit $SHA"
+            exit 1
+          fi
+      - name: Install Linux system libraries
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libdbus-1-dev librsvg2-dev patchelf file
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Add Rust target
+        if: ${{ matrix.target != '' }}
+        run: rustup target add "$TARGET"
+        env:
+          TARGET: ${{ matrix.target }}
+      - name: Install Bun (verified)
+        run: .github/scripts/install-bun.sh
+      - run: bun install --frozen-lockfile --ignore-scripts
+      # Always `tauri build` (custom-protocol feature on); a plain cargo build would load the dev server URL.
+      # `-- --locked`: cargo uses exactly Cargo.lock.
+      - name: Build the installers
+        env:
+          ARGS: ${{ matrix.args }}
+        run: |
+          # shellcheck disable=SC2086 # ARGS holds several flags on purpose
+          bun tauri build $ARGS -- --locked
+      # Collects the installers under fixed names. macOS updates use the .app as a .tar.gz, made here.
+      - name: Collect the installers
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir dist
+          case "$RUNNER_OS" in
+            Linux)
+              cp target/release/bundle/appimage/*.AppImage target/release/bundle/deb/*.deb \
+                target/release/bundle/rpm/*.rpm dist/
+              ;;
+            macOS)
+              bundle="target/$TARGET/release/bundle"
+              cp "$bundle"/dmg/*.dmg dist/
+              COPYFILE_DISABLE=1 tar -czf "dist/Pairpane_${VERSION}_${ARCH}.app.tar.gz" -C "$bundle/macos" Pairpane.app
+              ;;
+            Windows)
+              cp target/release/bundle/msi/*.msi target/release/bundle/nsis/*-setup.exe dist/
+              ;;
+          esac
+          ls -l dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bundle-${{ matrix.id }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  sign:
+    name: Sign updater artifacts
+    needs: [release, bundle]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The only job with the signing key. It runs nothing from the repository or from the release commit (which the
+    # release job's npm dependencies wrote): only what this workflow file pins, which a workflow token cannot change.
+    permissions: {}
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      # One directory per build leg, by exact name, so one leg cannot overwrite or add another platform's files.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bundle-linux-x64
+          path: legs/linux-x64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bundle-macos-aarch64
+          path: legs/macos-aarch64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bundle-macos-x64
+          path: legs/macos-x64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bundle-windows-x64
+          path: legs/windows-x64
+      # Every leg must contain exactly its expected files; only those are signed and published.
+      - name: Check the installers
+        run: |
+          expect() {
+            local leg="$1"; shift
+            if ! diff <(find "legs/$leg" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort) <(printf '%s\n' "$@" | sort); then
+              echo "::error::legs/$leg does not contain exactly the expected files"
+              exit 1
+            fi
+          }
+          v="$VERSION"
+          expect linux-x64 "Pairpane_${v}_amd64.AppImage" "Pairpane_${v}_amd64.deb" "Pairpane-${v}-1.x86_64.rpm"
+          expect macos-aarch64 "Pairpane_${v}_aarch64.dmg" "Pairpane_${v}_aarch64.app.tar.gz"
+          expect macos-x64 "Pairpane_${v}_x64.dmg" "Pairpane_${v}_x64.app.tar.gz"
+          expect windows-x64 "Pairpane_${v}_x64_en-US.msi" "Pairpane_${v}_x64-setup.exe"
+          mkdir dist
+          mv legs/*/* dist/
+      # The Tauri CLI 2.12.6 packages, checked against the SHA-512 integrity in bun.lock before they are unpacked,
+      # and run with the runner image's Node. Bump these together with @tauri-apps/cli in package.json.
+      - name: Install the Tauri signer (verified)
+        run: |
+          install_pkg() {
+            local name="$1" url="$2" integrity="$3" dir="$RUNNER_TEMP/signer/node_modules/$1"
+            curl -fsSL --retry 3 -o "$RUNNER_TEMP/pkg.tgz" "$url"
+            actual="sha512-$(openssl dgst -sha512 -binary "$RUNNER_TEMP/pkg.tgz" | base64 -w0)"
+            if [[ "$actual" != "$integrity" ]]; then
+              echo "::error::$name has integrity $actual, expected $integrity"
+              exit 1
+            fi
+            mkdir -p "$dir"
+            tar -xzf "$RUNNER_TEMP/pkg.tgz" -C "$dir" --strip-components=1
+          }
+          install_pkg @tauri-apps/cli \
+            https://registry.npmjs.org/@tauri-apps/cli/-/cli-2.12.6.tgz \
+            "sha512-/cOeQgqq8PBDPODOjjT0YHs4qxKCHcQMWMiBm4rLM3JNr9mZE+PHNKOK4zAkhIUtYMNL/0fweW48VNvzD1AbqA=="
+          install_pkg @tauri-apps/cli-linux-x64-gnu \
+            https://registry.npmjs.org/@tauri-apps/cli-linux-x64-gnu/-/cli-linux-x64-gnu-2.12.6.tgz \
+            "sha512-ZAb4/CHRma3ErjL2RGfHjITTUBIs4zySf0hIli9BddOtEdSx0ze0hEgxl+HfBVc5OEW/QmbiZ2E2+CkkHc8Pcg=="
+      - name: Sign the updater artifacts
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          v="$VERSION"
+          for name in "Pairpane_${v}_amd64.AppImage" "Pairpane_${v}_amd64.deb" "Pairpane-${v}-1.x86_64.rpm" \
+            "Pairpane_${v}_aarch64.app.tar.gz" "Pairpane_${v}_x64.app.tar.gz" \
+            "Pairpane_${v}_x64_en-US.msi" "Pairpane_${v}_x64-setup.exe"; do
+            node "$RUNNER_TEMP/signer/node_modules/@tauri-apps/cli/tauri.js" signer sign --app-version "$v" "dist/$name" \
+              >/dev/null
+          done
+          ls -l dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signed
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: [release, verify, sign]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # upload the assets, un-draft the release
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.sha }} # verified: tauri.conf.json (the public key) is the CI-tested one
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signed
+          path: dist
+      # Exactly the expected installers, each updater artifact with a signature made by the committed public key for
+      # this file name and this version: a key mismatch, a tampered file or a replayed older signature fails here.
+      - name: Verify the files and every signature
+        run: |
+          v="$VERSION"
+          updater=("Pairpane_${v}_amd64.AppImage" "Pairpane_${v}_amd64.deb" "Pairpane-${v}-1.x86_64.rpm"
+            "Pairpane_${v}_aarch64.app.tar.gz" "Pairpane_${v}_x64.app.tar.gz"
+            "Pairpane_${v}_x64_en-US.msi" "Pairpane_${v}_x64-setup.exe")
+          expected=("${updater[@]}" "Pairpane_${v}_aarch64.dmg" "Pairpane_${v}_x64.dmg")
+          for name in "${updater[@]}"; do expected+=("$name.sig"); done
+          if ! diff <(find dist -mindepth 1 -maxdepth 1 -printf '%f\n' | sort) <(printf '%s\n' "${expected[@]}" | sort); then
+            echo "::error::the signed artifact does not contain exactly the expected files"
+            exit 1
+          fi
+          sudo apt-get update
+          sudo apt-get install -y minisign
+          jq -r '.plugins.updater.pubkey' src-tauri/tauri.conf.json | base64 -d > "$RUNNER_TEMP/updater.pub"
+          for name in "${updater[@]}"; do
+            base64 -d < "dist/$name.sig" > "$RUNNER_TEMP/current.minisig"
+            output="$(minisign -V -m "dist/$name" -p "$RUNNER_TEMP/updater.pub" -x "$RUNNER_TEMP/current.minisig")"
+            comment="$(sed -n 's/^Trusted comment: //p' <<< "$output" | tr '\t' '\n')"
+            if ! grep -qxF "file:$name" <<< "$comment" || ! grep -qxF "version:$v" <<< "$comment"; then
+              echo "::error::the signature of $name is not bound to file $name and version $v"
+              exit 1
+            fi
+          done
+          echo "${#updater[@]} signatures verified"
+      - name: Write latest.json
+        run: |
+          v="$VERSION"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/v$v"
+          entry() {
+            jq -n --arg url "$base/$1" --rawfile signature "dist/$1.sig" \
+              '{signature: ($signature | rtrimstr("\n")), url: $url}'
+          }
+          appimage="$(entry "Pairpane_${v}_amd64.AppImage")"
+          deb="$(entry "Pairpane_${v}_amd64.deb")"
+          rpm="$(entry "Pairpane-${v}-1.x86_64.rpm")"
+          mac_arm="$(entry "Pairpane_${v}_aarch64.app.tar.gz")"
+          mac_x64="$(entry "Pairpane_${v}_x64.app.tar.gz")"
+          msi="$(entry "Pairpane_${v}_x64_en-US.msi")"
+          nsis="$(entry "Pairpane_${v}_x64-setup.exe")"
+          jq -n --arg version "$v" --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
+            --argjson appimage "$appimage" --argjson deb "$deb" --argjson rpm "$rpm" \
+            --argjson mac_arm "$mac_arm" --argjson mac_x64 "$mac_x64" --argjson msi "$msi" --argjson nsis "$nsis" \
+            '{version: $version, notes: "", pub_date: $pub_date, platforms: {
+              "linux-x86_64": $appimage, "linux-x86_64-appimage": $appimage,
+              "linux-x86_64-deb": $deb, "linux-x86_64-rpm": $rpm,
+              "darwin-aarch64": $mac_arm, "darwin-aarch64-app": $mac_arm,
+              "darwin-x86_64": $mac_x64, "darwin-x86_64-app": $mac_x64,
+              "windows-x86_64": $msi, "windows-x86_64-msi": $msi, "windows-x86_64-nsis": $nsis}}' > dist/latest.json
+      # install.sh / install.ps1 (#4) install nothing without a SHA-256 to compare against.
+      - name: Write checksums.txt
+        run: (cd dist && sha256sum -- * > "$RUNNER_TEMP/checksums.txt") && mv "$RUNNER_TEMP/checksums.txt" dist/
+      - name: Upload to the draft release and publish it as latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "v$VERSION" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest
