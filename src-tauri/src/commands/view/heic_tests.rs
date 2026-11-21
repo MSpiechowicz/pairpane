@@ -16,6 +16,11 @@ use super::*;
 const TINY_HEIC: &[u8] = include_bytes!("../../../../crates/pairpane_core/src/view/heic_testdata/tiny.heic");
 
 /// An AV1 image in a file of the brands `mif1` and `heic`: the viewer takes it for a HEIC image, and its items say it is not.
+// Used only where the backend decodes (see the tests below).
+#[cfg(any(
+    windows,
+    all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))
+))]
 const AV1_HEIC: &[u8] = include_bytes!("../../../../crates/pairpane_core/src/view/heic_testdata/av1_mif1_heic.heic");
 
 /// Where a helper would be; the tests that must not start one never reach it.
