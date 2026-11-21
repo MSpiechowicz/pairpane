@@ -1,3 +1,14 @@
+# [0.9.0](https://github.com/MSpiechowicz/pairpane/compare/v0.8.0...v0.9.0) (2026-11-21)
+
+
+### Features
+
+* delete to Trash with undo, rename, new folder, new file and links ([e44efbb](https://github.com/MSpiechowicz/pairpane/commit/e44efbba60e0d01d67b4a0935be62af08266d8c4)), closes [#12](https://github.com/MSpiechowicz/pairpane/issues/12)
+
+### Bug Fixes
+
+* report taken names and missing items correctly on Windows ([1f64734](https://github.com/MSpiechowicz/pairpane/commit/1f647344e8498df21df6188ba52ddf147006a530))
+
 # [0.8.0](https://github.com/MSpiechowicz/pairpane/compare/v0.7.0...v0.8.0) (2026-11-20)
 
 
