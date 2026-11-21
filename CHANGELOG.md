@@ -1,3 +1,10 @@
+# [0.11.0](https://github.com/MSpiechowicz/pairpane/compare/v0.10.0...v0.11.0) (2026-11-21)
+
+
+### Features
+
+* change hidden, system and archive attributes on Windows ([850d694](https://github.com/MSpiechowicz/pairpane/commit/850d694e8a748a6d92eda091ce07c690ac45b746)), closes [#13](https://github.com/MSpiechowicz/pairpane/issues/13)
+
 # [0.10.0](https://github.com/MSpiechowicz/pairpane/compare/v0.9.0...v0.10.0) (2026-11-21)
 
 
