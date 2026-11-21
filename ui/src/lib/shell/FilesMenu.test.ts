@@ -14,13 +14,29 @@ describe('FilesMenu', () => {
     expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveAttribute('aria-keyshortcuts', 'F8');
     expect(screen.getByRole('menuitem', { name: 'Create symbolic link…' })).not.toHaveAttribute('aria-keyshortcuts');
     expect(screen.getByRole('menuitem', { name: 'Create hard link…' })).toBeEnabled();
+    expect(screen.getByRole('menuitem', { name: 'Properties' })).toHaveAttribute('aria-keyshortcuts', 'Alt+Enter');
+    expect(screen.getByRole('menuitem', { name: 'Change attributes…' })).not.toHaveAttribute('aria-keyshortcuts');
   });
 
   it('reports the action of the item that was clicked', async () => {
     const onChoose = vi.fn();
     render(FilesMenu, { onChoose });
 
-    for (const name of ['New folder', 'New file', 'Rename', 'Delete', 'Create symbolic link…', 'Create hard link…']) {
+    const names = [
+      'New folder',
+      'New file',
+      'Rename',
+      'Delete',
+      'Create symbolic link…',
+      'Create hard link…',
+      'Properties',
+      'Change attributes…',
+      'Create checksum file…',
+      'Verify checksum file',
+      'Split file…',
+      'Combine files…',
+    ];
+    for (const name of names) {
       await fireEvent.click(screen.getByRole('menuitem', { name }));
     }
 
@@ -31,6 +47,12 @@ describe('FilesMenu', () => {
       'trash',
       'symlink',
       'hardlink',
+      'properties',
+      'attributes',
+      'checksum',
+      'verifyChecksum',
+      'split',
+      'combine',
     ]);
   });
 });

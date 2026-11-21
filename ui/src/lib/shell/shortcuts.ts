@@ -20,6 +20,7 @@ export type Action =
   | 'newFile'
   | 'trash'
   | 'deletePermanently'
+  | 'properties'
   | 'transfers';
 
 /** Ctrl + key. (Ctrl on every OS: on macOS Cmd+W already closes the window.) */
@@ -61,6 +62,8 @@ function withAlt(event: KeyboardEvent): Action | undefined {
       return 'driveMenuLeft';
     case 'F2':
       return 'driveMenuRight';
+    case 'Enter':
+      return 'properties';
     default:
       return undefined;
   }

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { PaneView } from '$lib/panes/view.svelte';
 
 import { deliver, entry, fakeBackend } from '../../../tests/panes';
-import { requestFor, stemLength, targets } from './targets';
+import { chosen, isFirstPart, requestFor, stemLength, targets } from './targets';
 
 /** A pane that has listed `path` (rows: `..`, docs, a.txt, b.md, c.txt). */
 async function shown(path = '/work') {
@@ -74,7 +74,62 @@ describe('targets', () => {
   });
 });
 
+describe('chosen', () => {
+  it('is the entries targets names, in the folder`s order', async () => {
+    const view = await shown();
+    view.pick(4, 'toggle');
+    view.pick(2, 'toggle');
+
+    expect(chosen(view).map((item) => item.name)).toEqual(['a.txt', 'c.txt']);
+    expect(chosen(view)[0]).toMatchObject({ name: 'a.txt', kind: 'file' });
+  });
+
+  it('is the entry under the cursor when nothing is selected, and nothing on `..`', async () => {
+    const view = await shown();
+    expect(chosen(view)).toEqual([]);
+
+    view.setCursor(1);
+    expect(chosen(view).map((item) => item.name)).toEqual(['docs']);
+  });
+});
+
+describe('isFirstPart', () => {
+  it('is a name that ends in .001', () => {
+    expect(isFirstPart('movie.mkv.001')).toBe(true);
+    expect(isFirstPart('a.001')).toBe(true);
+    expect(isFirstPart('movie.mkv.002')).toBe(false);
+    expect(isFirstPart('movie.mkv.0010')).toBe(false);
+    expect(isFirstPart('001')).toBe(false);
+  });
+});
+
 describe('requestFor', () => {
+  it('combines the first part under the cursor into the other pane`s folder', async () => {
+    const backend = fakeBackend();
+    const source = new PaneView(backend.ipc, 'left');
+    await deliver(backend, () => source.listing.open('/work'), '/work', [
+      entry('movie.mkv.001', 'file'),
+      entry('movie.mkv.002', 'file'),
+      entry('old.001', 'dir'),
+    ]);
+    const other = await shown('/restore');
+
+    source.setCursor(1);
+    expect(requestFor('combine', source, other)).toEqual({
+      kind: 'combine',
+      from: '/work',
+      name: 'movie.mkv.001',
+      to: '/restore',
+    });
+
+    source.setCursor(2);
+    expect(requestFor('combine', source, other)).toBeUndefined();
+    source.setCursor(3); // a folder
+    expect(requestFor('combine', source, other)).toBeUndefined();
+    source.setCursor(0);
+    expect(requestFor('combine', source, other)).toBeUndefined();
+  });
+
   it('offers the other pane`s folder as the target of a copy or move', async () => {
     const source = await shown('/work');
     const other = await shown('/backup');

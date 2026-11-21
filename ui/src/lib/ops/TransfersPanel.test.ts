@@ -27,6 +27,19 @@ const progress = (id: number, doneBytes: number, totalBytes: number): OpsEvent =
   etaSecs: 65,
 });
 
+/** The progress of a job that has gone through `files` files. */
+const counted = (id: number, files: number): OpsEvent => ({
+  kind: 'progress',
+  id,
+  doneBytes: 0,
+  totalBytes: 0,
+  doneFiles: files,
+  totalFiles: files,
+  current: null,
+  bytesPerSec: 0,
+  etaSecs: null,
+});
+
 const ended = (id: number, extra: Partial<Extract<OpsEvent, { kind: 'ended' }>> = {}): OpsEvent => ({
   kind: 'ended',
   id,
@@ -148,6 +161,73 @@ describe('TransfersPanel', () => {
 
     await fireEvent.click(document.body);
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('TransfersPanel file tools', () => {
+  it('names each kind of job, and says where the parts of a split or a combine go', async () => {
+    const { transfers, send } = await store();
+    send(
+      { kind: 'added', job: job(1, { kind: 'checksum', label: 'a.iso', to: '/data' }) },
+      { kind: 'added', job: job(2, { kind: 'verifyChecksum', label: 'a.iso.sha256', to: '/data' }) },
+      { kind: 'added', job: job(3, { kind: 'split', label: 'movie.mkv', to: '/backup' }) },
+      { kind: 'added', job: job(4, { kind: 'combine', label: 'movie.mkv.001', to: '/restore' }) },
+      { kind: 'added', job: job(5, { kind: 'attributes', label: '3 items', to: '/data' }) },
+    );
+    render(TransfersPanel, { transfers, onClose: vi.fn() });
+
+    expect(['Checksum', 'Verify', 'Split', 'Combine', 'Attributes'].map((kind) => screen.getByText(kind))).toHaveLength(5);
+    expect(screen.getByText('→ /backup')).toBeInTheDocument();
+    expect(screen.getByText('→ /restore')).toBeInTheDocument();
+    expect(screen.queryByText('→ /data')).not.toBeInTheDocument();
+  });
+
+  it('says where a tool is before there is a speed to show', async () => {
+    const { transfers, send } = await store();
+    send(
+      { kind: 'added', job: job(1, { kind: 'checksum', phase: 'hashing', label: 'a' }) },
+      { kind: 'added', job: job(2, { kind: 'split', phase: 'splitting', label: 'b' }) },
+      { kind: 'added', job: job(3, { kind: 'combine', phase: 'combining', label: 'c' }) },
+      { kind: 'added', job: job(4, { kind: 'attributes', phase: 'changing', label: 'd' }) },
+    );
+    render(TransfersPanel, { transfers, onClose: vi.fn() });
+
+    for (const text of ['Hashing…', 'Splitting…', 'Combining…', 'Changing…']) {
+      expect(screen.getByText(text)).toBeInTheDocument();
+    }
+  });
+
+  it('a finished check says how many files were right, and how many were not', async () => {
+    const { transfers, send } = await store();
+    const verify = job(1, { kind: 'verifyChecksum', label: 'a.iso.sha256' });
+    const error = (message: string) => ({ code: 'io' as const, message });
+    send(
+      { kind: 'added', job: verify },
+      counted(1, 10),
+      ended(1, {
+        errors: [{ path: 'x.bin', error: error('the checksum does not match') }],
+        moreErrors: 1,
+      }),
+    );
+    render(TransfersPanel, { transfers, onClose: vi.fn() });
+
+    expect(screen.getByText('Done · 8 ok · 2 errors')).toBeInTheDocument();
+  });
+
+  it('a check that found nothing wrong says so', async () => {
+    const { transfers, send } = await store();
+    send({ kind: 'added', job: job(1, { kind: 'verifyChecksum' }) }, counted(1, 3), ended(1));
+    render(TransfersPanel, { transfers, onClose: vi.fn() });
+
+    expect(screen.getByText('Done · 3 ok')).toBeInTheDocument();
+  });
+
+  it('other jobs do not count files as right', async () => {
+    const { transfers, send } = await store();
+    send({ kind: 'added', job: job(1, { kind: 'checksum' }) }, counted(1, 3), ended(1));
+    render(TransfersPanel, { transfers, onClose: vi.fn() });
+
+    expect(screen.getByText('Done')).toBeInTheDocument();
   });
 });
 

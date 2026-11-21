@@ -9,8 +9,9 @@ import type { PaneView } from '$lib/panes/view.svelte';
 
 import { type FileAction, type Notice, trashName, what } from './dialogs';
 import { type DialogKind, type OpRequest, requestFor, targets } from './targets';
+import { isTool, ItemTools } from './tools.svelte';
 
-/** The copy, move, rename, new item or link dialog that is open, and the panes it works between. */
+/** The copy, move, combine, rename, new item or link dialog that is open, and the panes it works between. */
 export interface OpenDialog {
   request: OpRequest;
   source: PaneView;
@@ -40,6 +41,7 @@ const DIALOGS: Partial<Record<FileAction, DialogKind>> = {
   newFile: 'mkfile',
   symlink: 'symlink',
   hardlink: 'hardlink',
+  combine: 'combine',
 };
 
 /**
@@ -52,6 +54,7 @@ export class FileActions {
   removal = $state.raw<Removal | undefined>();
   toast = $state.raw<ToastState | undefined>();
   readonly rename: InlineRename;
+  readonly tools: ItemTools;
 
   readonly #ipc: Transport;
   readonly #panes: Record<PaneId, PaneTabs>;
@@ -63,11 +66,12 @@ export class FileActions {
     this.#panes = panes;
     this.#active = active;
     this.rename = new InlineRename(ipc, (text) => this.say(text, true));
+    this.tools = new ItemTools(ipc, (text, error) => this.say(text, error));
   }
 
   /** A dialog has the keyboard: the shortcuts and Tab are its own then. */
   get modal(): boolean {
-    return this.dialog !== undefined || this.removal !== undefined;
+    return this.dialog !== undefined || this.removal !== undefined || this.tools.modal;
   }
 
   /** Does what the key or menu item asks, for the active pane; nothing when there is nothing to act on. */
@@ -78,20 +82,39 @@ export class FileActions {
     } else if (action === 'trash' || action === 'deletePermanently') {
       this.#ask(action === 'deletePermanently');
     } else {
-      this.#open(DIALOGS[action] as DialogKind);
+      const active = this.#active();
+      const source = this.#panes[active].view;
+      const other = this.#panes[active === 'left' ? 'right' : 'left'].view;
+
+      if (isTool(action)) {
+        this.tools.run(action, source, other);
+      } else {
+        this.#open(DIALOGS[action] as DialogKind, source, other);
+      }
     }
 
     this.#settle();
   }
 
-  #open(kind: DialogKind) {
-    const active = this.#active();
-    const source = this.#panes[active].view;
-    const other = this.#panes[active === 'left' ? 'right' : 'left'].view;
+  #open(kind: DialogKind, source: PaneView, other: PaneView) {
     const request = requestFor(kind, source, other);
     if (request !== undefined) {
       this.dialog = { request, source, other };
+    } else if (kind === 'combine' && source.entryAt(source.cursor) !== undefined) {
+      this.say('Choose the first part of a split file, named like “video.mkv.001”.', true);
     }
+  }
+
+  /** The tool's dialog closed without doing anything. */
+  closeTool() {
+    this.tools.close();
+    this.#settle();
+  }
+
+  /** A tool's job started. */
+  toolDone(output?: string) {
+    this.tools.done(output);
+    this.#settle();
   }
 
   /** The dialog closed without doing anything. */
@@ -111,7 +134,7 @@ export class FileActions {
         source.deselect(request.names);
       } else if (request.kind === 'symlink' || request.kind === 'hardlink') {
         other.pointAt(name);
-      } else {
+      } else if (request.kind !== 'combine') {
         source.pointAt(name);
       }
     }

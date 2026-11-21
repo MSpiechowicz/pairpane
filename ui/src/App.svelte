@@ -10,6 +10,7 @@
   import { Transfers } from '$lib/ops/transfers.svelte';
   import TransfersChip from '$lib/ops/TransfersChip.svelte';
   import TransfersPanel from '$lib/ops/TransfersPanel.svelte';
+  import ToolDialogs from '$lib/ops/ToolDialogs.svelte';
   import { focusActiveList } from '$lib/panes/focus';
   import { Hotlist } from '$lib/panes/hotlist.svelte';
   import { PaneTabs } from '$lib/panes/tabs.svelte';
@@ -161,6 +162,7 @@
       case 'newFile':
       case 'trash':
       case 'deletePermanently':
+      case 'properties':
         files.run(action);
         break;
       case 'transfers':
@@ -277,6 +279,10 @@
     onDone={(name) => files.dialogDone(name)}
     onNotice={(notice) => files.say(notice.text, notice.error)}
   />
+{/if}
+
+{#if files.tools.dialog}
+  <ToolDialogs {ipc} dialog={files.tools.dialog} onClose={() => files.closeTool()} onDone={(output) => files.toolDone(output)} />
 {/if}
 
 {#if files.removal}

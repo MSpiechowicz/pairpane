@@ -17,9 +17,26 @@
     scanning: 'Scanning…',
     copying: 'Copying…',
     verifying: 'Verifying…',
+    hashing: 'Hashing…',
+    splitting: 'Splitting…',
+    combining: 'Combining…',
+    changing: 'Changing…',
     waiting: 'Waiting for your answer',
     cancelling: 'Cancelling…',
   } as const;
+
+  const KINDS = {
+    copy: 'Copy',
+    move: 'Move',
+    checksum: 'Checksum',
+    verifyChecksum: 'Verify',
+    split: 'Split',
+    combine: 'Combine',
+    attributes: 'Attributes',
+  } as const;
+
+  /** The jobs that put things into a folder of their own: the row says where. */
+  const TARGETED: ReadonlySet<string> = new Set(['copy', 'move', 'split', 'combine']);
 
   const errorCount = (result: JobResult) => result.errors.length + result.moreErrors;
 
@@ -33,6 +50,12 @@
     const parts = [{ done: 'Done', cancelled: 'Cancelled', failed: 'Failed' }[result.outcome.kind]];
     if (result.skipped > 0) {
       parts.push(`${result.skipped} skipped`);
+    }
+
+    // A check says how many files were right.
+    const ok = Math.max(0, job.doneFiles - errorCount(result));
+    if (job.kind === 'verifyChecksum' && ok > 0) {
+      parts.push(`${ok} ok`);
     }
 
     if (errorCount(result) > 0) {
@@ -83,8 +106,12 @@
     {@const percent = job.result?.outcome.kind === 'done' ? 100 : percentDone(job)}
     {@const result = job.result}
     <div class="job" class:leaving={job.leaving}>
-      <span class="name" title={job.label}><span class="dim">{job.kind === 'copy' ? 'Copy' : 'Move'}</span> {job.label}</span>
-      <span class="to dim" title={job.to}>→ {job.to}</span>
+      <span class="name" title={job.label}><span class="dim">{KINDS[job.kind]}</span> {job.label}</span>
+      {#if TARGETED.has(job.kind)}
+        <span class="to dim" title={job.to}>→ {job.to}</span>
+      {:else}
+        <span></span>
+      {/if}
       <div
         class="h-1 overflow-hidden rounded bg-line"
         role="progressbar"

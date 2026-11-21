@@ -13,6 +13,9 @@ use super::volume::{self, VolumeKey};
 /// Decides the volume of a target folder.
 pub(super) type Keyer = Arc<dyn Fn(&Path) -> VolumeKey + Send + Sync>;
 
+/// What a test runs before a folder is opened by a walk, given the folder's path relative to the job's folder.
+pub(super) type OpenHook = Arc<dyn Fn(&str) + Send + Sync>;
+
 #[derive(Clone, Default)]
 pub(super) struct Hooks {
     /// Decides the volume of a target folder.
@@ -35,6 +38,9 @@ pub(super) struct Hooks {
     /// No two paths compare equal as one file: the case of a Windows alias that the check of a conflict does not see
     /// through (the identities are still read, by the checks that come after it).
     pub(super) blind_identity: bool,
+    /// Called with the path (relative to the job's folder) of each folder a handle walk is about to open, after it was
+    /// looked at: a test swaps the folder for a link there.
+    pub(super) before_open: Option<OpenHook>,
     /// No identity can be read, as when a Windows ACL refuses the open while the names are unchanged.
     pub(super) unreadable_identity: bool,
 }

@@ -51,6 +51,13 @@ sysinfo = { version = "0.40", default-features = false, features = ["disk"] }
 # is for `getuid`: the Trash folders must belong to the user (pairpane_core::ops::trash).
 blake3 = { version = "1.8.7", default-features = false, features = ["std"] }
 rustix = { version = "1.1.6", default-features = false, features = ["fs", "process", "std"] }
+# Checksum files and file splitting (pairpane_core::ops): SHA-256 and MD5 (RustCrypto, both on digest 0.10, safe Rust)
+# next to the BLAKE3 above, a CRC-32 for the `.crc` file of a split (Total Commander's format), and, on Unix only, the
+# names of a file's owner and group (`uzers`, a safe wrapper of getpwuid_r and getgrgid_r).
+sha2 = { version = "0.10.9", default-features = false }
+md-5 = { version = "0.10.6", default-features = false }
+crc32fast = { version = "1.5.5", default-features = false, features = ["std"] }
+uzers = { version = "0.12.2", default-features = false, features = ["cache"] }
 # Windows only: the identity of a file or folder (volume serial number and file index, from a handle the caller opens
 # without following links), so two spellings of one place (8.3 names, case, a volume GUID path) compare equal. A safe
 # API over `winapi-util`; both are in the lockfile already through `walkdir`.

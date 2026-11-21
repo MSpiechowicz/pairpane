@@ -30,6 +30,10 @@ const ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 #[cfg(windows)]
 const WRITE_ATTRIBUTES: u32 = 0x0100;
 
+/// Windows `FILE_READ_ATTRIBUTES`.
+#[cfg(windows)]
+const READ_ATTRIBUTES: u32 = 0x0080;
+
 fn changed() -> io::Error {
     refusal(io::ErrorKind::Other, "it changed while it was being copied")
 }
@@ -49,11 +53,9 @@ pub(super) fn source(path: &Path, seen: &Metadata) -> io::Result<File> {
 
 #[cfg(unix)]
 fn open_source(path: &Path) -> io::Result<(File, Metadata)> {
-    use rustix::fs::OFlags;
-
-    // `NOCTTY`: a terminal that slips in as the source (a swapped device file) must not become the job's terminal.
-    let flags = (OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY).bits();
-    let file = OpenOptions::new().read(true).custom_flags(flags as i32).open(path)?;
+    // `NOCTTY` (in `no_follow`): a terminal that slips in as the source (a swapped device file) must not become the
+    // job's terminal.
+    let file = no_follow(path)?;
     let metadata = file.metadata()?;
 
     Ok((file, metadata))
@@ -99,11 +101,7 @@ pub(super) fn create_new(path: &Path) -> io::Result<File> {
 /// times and permissions through this handle, even when the clone is read-only like its source.
 #[cfg(target_os = "macos")]
 pub(super) fn existing(path: &Path) -> io::Result<File> {
-    use rustix::fs::OFlags;
-
-    let flags = (OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY).bits();
-
-    OpenOptions::new().read(true).custom_flags(flags as i32).open(path)
+    no_follow(path)
 }
 
 /// Creates the folder `path`; fails when anything is there. With `private`, on Unix only the owner may enter
@@ -134,10 +132,51 @@ pub(super) fn folder(path: &Path) -> io::Result<File> {
     OpenOptions::new().read(true).custom_flags(flags as i32).open(path)
 }
 
+/// Opens the folder `path` that a job's items are in, following a link there: the pane showed that path, and a link to
+/// a folder is the folder. Nothing inside is reached through a link by this handle.
+#[cfg(unix)]
+pub(super) fn root_folder(path: &Path) -> io::Result<File> {
+    use rustix::fs::OFlags;
+
+    let flags = (OFlags::DIRECTORY | OFlags::CLOEXEC).bits();
+
+    OpenOptions::new().read(true).custom_flags(flags as i32).open(path)
+}
+
 #[cfg(windows)]
 pub(super) fn folder(path: &Path) -> io::Result<File> {
     OpenOptions::new()
         .access_mode(WRITE_ATTRIBUTES)
         .custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT)
         .open(path)
+}
+
+/// Opens the file or folder `path` to change its attributes and times, without following a link: with no access to its
+/// data (so a read-only file opens too). A link that was swapped in is refused.
+#[cfg(windows)]
+pub(super) fn attributes(path: &Path) -> io::Result<File> {
+    let file = OpenOptions::new()
+        .access_mode(READ_ATTRIBUTES | WRITE_ATTRIBUTES)
+        .custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT)
+        .open(path)?;
+
+    if file.metadata()?.file_type().is_symlink() {
+        return Err(refusal(
+            io::ErrorKind::Other,
+            "it changed while its attributes were being changed",
+        ));
+    }
+
+    Ok(file)
+}
+
+/// Opens the file at `path` for its handle (to set its permissions), refusing a link; never waits on a pipe and never
+/// takes a terminal. Whether it is the file that was seen is for the caller to check.
+#[cfg(unix)]
+pub(super) fn no_follow(path: &Path) -> io::Result<File> {
+    use rustix::fs::OFlags;
+
+    let flags = (OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY).bits();
+
+    OpenOptions::new().read(true).custom_flags(flags as i32).open(path)
 }

@@ -11,17 +11,21 @@ publish = false
 [dependencies]
 base64.workspace = true
 blake3.workspace = true
+crc32fast.workspace = true
 fs4.workspace = true
+md-5.workspace = true
 minisign-verify.workspace = true
 notify.workspace = true
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tracing.workspace = true
 ts-rs.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
+uzers.workspace = true
 
 # The freedesktop Trash is done in pairpane_core::ops::trash::freedesktop on these systems.
 [target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]

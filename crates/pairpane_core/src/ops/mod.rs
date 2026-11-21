@@ -1,7 +1,9 @@
-//! Copy and move jobs with a background queue: the public API of the engine.
+//! Copy, move and file-tool jobs with a background queue: the public API of the engine.
 //!
-//! A job copies or moves the named items of one folder into another. It runs on a worker thread of the engine,
-//! never on the caller's thread, and reports through a [`Sink`] of [`OpsEvent`]s.
+//! A job copies or moves the named items of one folder into another, or does one of the file tools to them (a
+//! checksum file, the check of one, splitting a file, joining its parts, changing permissions and times; see
+//! [`Task`]). It runs on a worker thread of the engine, never on the caller's thread, and reports through a
+//! [`Sink`] of [`OpsEvent`]s.
 //!
 //! # Contract
 //!
@@ -28,6 +30,15 @@
 //! "The same file" and "into itself" are decided by identity (device and inode; on Windows volume serial and file
 //! index), not by the spelling of a path. A move never deletes a source that is the committed target.
 //!
+//! # What the file tools do to the filesystem
+//!
+//! The tools read and change files by the same rules: nothing is opened through a link (a link in the selection, or
+//! inside a selected folder, is skipped and counted, never followed), and what a tool writes goes to a temporary
+//! file first and is put in place with a rename that refuses to replace, so a name that is taken is never
+//! overwritten. A checksum file, the parts of a split and the file a combine joins are removed again when the job is
+//! cancelled or fails. Changing permissions and times works on the item itself and never on what a link leads to:
+//! times through the folder and the name (no-follow), permissions through a handle opened without following links.
+//!
 //! # Known limits, accepted
 //!
 //! - The walk lists folders by path (`read_dir`, `symlink_metadata`), not through handles (`openat`): a folder swapped
@@ -37,6 +48,21 @@
 //! - On Windows the paths are resolved once and then used by name; a link swapped in later is the same race.
 //! - A worker stuck on a folder that does not answer (a hung mount) keeps its slot, and so does a lookup of its
 //!   volume; [`Engine::shutdown`] gives up on it after its timeout.
+//! - Changing the permissions of an item that cannot be opened (no read permission, so a no-follow open fails) goes
+//!   through a handle taken from the folder's own handle that needs no permission and never follows a link (Linux: an
+//!   `O_PATH` handle changed through `/proc/self/fd`; where `/proc` is missing the item is refused; other Unix: `fstatat`
+//!   and `fchmodat` with no-follow). It is checked to be the item that was seen. What is left: the item can be replaced
+//!   by another file of the same owner and kind between the check and the change only in a folder the user can write to,
+//!   and then the one changed is a file inside that folder.
+//! - The checksum file and the attribute change walk the tree by handle on Unix (`held`): the job's folder is opened once
+//!   (a link to it is followed, as the pane showed it) and every step after is relative to a handle, compared with what
+//!   was seen, so a folder swapped for a link during the walk is refused and nothing is read or changed through it. The
+//!   checksum check does the same for each file it lists (`listed`). A copy, a move, a split and a combine still use
+//!   paths below the job's folder (files are opened without following a link). On Windows all of them check the way by
+//!   name and open without following a link: a folder swapped for a link between the look and the open is the same race
+//!   the other Windows jobs have, needing write access to the folders involved.
+//! - On Windows only the read-only attribute can be set (hidden, system and archive are shown, not changed), and
+//!   only on files; a folder takes the times alone.
 //! - Two jobs for one volume start in submit order once both volumes are known; while an earlier job's volume is
 //!   still being looked up, a later job that is ready does not wait for it (see `engine`).
 //!
@@ -49,29 +75,46 @@
 //! (existing targets and their questions), `verify` (BLAKE3), `rename` (no-replace rename), `progress` and `rate`
 //! (counters, speed), `report` (error texts), `hooks` (test switches).
 //!
+//! The file tools: `task` (the start of each and what they share), `digest` (checksums and the checksum-file
+//! format), `checksum`, `checksum_verify` and `listed` (opening the files it lists), `split`, `combine`, `held` (walking a tree by
+//! handle), `attrs` and `attrs_apply`, `partial` (temporary files that clean up after themselves) and `props` (the
+//! Properties of an item).
+//!
 //! Outside the engine, single changes that are not jobs: `items` (new folders and files, links, permanent
 //! delete) and `trash` (move to the Trash, put back). Each is a plain blocking function; the caller runs it off the
 //! command thread.
 
 mod announce;
+mod attrs;
+mod attrs_apply;
+mod checksum;
+mod checksum_verify;
+mod combine;
 mod conflict;
 mod control;
 mod copy;
 mod delete;
+mod digest;
 mod engine;
 mod fast;
+mod held;
 mod hooks;
 mod identity;
 mod items;
 mod job;
+mod listed;
 mod meta;
 mod open;
+mod partial;
 mod plan;
 mod progress;
+mod props;
 mod rate;
 mod rename;
 mod report;
 mod runnable;
+mod split;
+mod task;
 mod transfer;
 mod trash;
 mod validate;
@@ -81,6 +124,14 @@ mod volume;
 #[cfg(test)]
 mod announce_tests;
 #[cfg(test)]
+mod attrs_tests;
+#[cfg(all(test, unix))]
+mod attrs_unix_tests;
+#[cfg(test)]
+mod checksum_tests;
+#[cfg(test)]
+mod combine_tests;
+#[cfg(test)]
 mod conflict_tests;
 #[cfg(test)]
 mod control_tests;
@@ -89,15 +140,23 @@ mod copy_tests;
 #[cfg(test)]
 mod delete_tests;
 #[cfg(test)]
+mod digest_tests;
+#[cfg(test)]
 mod engine_tests;
 #[cfg(test)]
 mod failure_tests;
+#[cfg(all(test, unix))]
+mod held_tests;
 #[cfg(test)]
 mod items_tests;
 #[cfg(test)]
 mod move_tests;
 #[cfg(test)]
 mod plan_tests;
+#[cfg(test)]
+mod props_tests;
+#[cfg(test)]
+mod split_tests;
 #[cfg(test)]
 mod testing;
 #[cfg(test)]
@@ -114,7 +173,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::model::{IpcError, IpcErrorCode, LinkKind, OpKind, OpsEvent};
+use crate::model::{
+    AttributeChange, HashAlgorithm, IpcError, IpcErrorCode, ItemProperties, LinkKind, OpKind, OpsEvent,
+};
 
 /// Most destination volumes that copy at the same time.
 pub const MAX_WORKERS: usize = 4;
@@ -134,19 +195,78 @@ pub const MAX_NAMES_BYTES: usize = 8 * 1024 * 1024;
 /// Where the engine sends its events.
 pub type Sink = Arc<dyn Fn(OpsEvent) + Send + Sync>;
 
-/// A copy or move to start. Paths are what the webview sent, already checked for syntax by the caller
+/// The shortest part a split may make, in bytes.
+pub const MIN_PART_SIZE: u64 = 1_024;
+
+/// The most parts a split may make: the numbers of the parts (`.001`) have three digits.
+pub const MAX_PARTS: u64 = 999;
+
+/// What a job does. [`Task::Transfer`] is the copy or move that [`Request::kind`] names; every other task has
+/// its own [`OpKind`] (see [`Task::kind`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Task {
+    /// A copy or a move.
+    Transfer,
+    /// Writes the checksum file `output` (a plain file name) into `from`, for all the items.
+    Checksum { algorithm: HashAlgorithm, output: String },
+    /// Checks the files that the checksum file (the one item) lists, relative to the folder it is in.
+    VerifyChecksum,
+    /// Cuts the file (the one item) into parts of `part_size` bytes ([`MIN_PART_SIZE`] or more) in `to`.
+    Split { part_size: u64 },
+    /// Joins the parts of the file whose first part (`.001`) is the one item, into `to`.
+    Combine,
+    /// Changes permissions and times of the items in place.
+    Attributes(AttributeChange),
+}
+
+impl Task {
+    /// The kind of job of this task; `None` for [`Task::Transfer`], which is a copy or a move by [`Request::kind`].
+    #[must_use]
+    pub fn kind(&self) -> Option<OpKind> {
+        match self {
+            Self::Transfer => None,
+            Self::Checksum { .. } => Some(OpKind::Checksum),
+            Self::VerifyChecksum => Some(OpKind::VerifyChecksum),
+            Self::Split { .. } => Some(OpKind::Split),
+            Self::Combine => Some(OpKind::Combine),
+            Self::Attributes(_) => Some(OpKind::Attributes),
+        }
+    }
+}
+
+/// A job to start. Paths are what the webview sent, already checked for syntax by the caller
 /// (`check_folder` for the folders, `is_plain_name` for every name); the engine resolves them on its worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
+    /// Copy or move for a [`Task::Transfer`]; the kind of the task otherwise (`submit` refuses a mismatch).
     pub kind: OpKind,
     /// The folder the items are in.
     pub from: PathBuf,
-    /// The items, as plain names inside `from`. At least 1 and at most [`MAX_NAMES`], without duplicates.
+    /// The items, as plain names inside `from`. At least 1 and at most [`MAX_NAMES`], without duplicates; exactly 1
+    /// for a verify, a split and a combine.
     pub names: Vec<String>,
-    /// The folder to put the items into; created when missing.
+    /// The folder to put the items into; created when missing. For a task that works in place (checksum, verify,
+    /// attributes) it is `from`.
     pub to: PathBuf,
     /// Re-read and hash each copied file before committing it.
     pub verify: bool,
+    pub task: Task,
+}
+
+impl Request {
+    /// A request for `task`, with the kind the task has, no verification and `to` as the target folder. A
+    /// [`Task::Transfer`] is made a copy; set `kind` to [`OpKind::Move`] for a move.
+    #[must_use]
+    pub fn task(from: PathBuf, names: Vec<String>, to: PathBuf, task: Task) -> Self {
+        Self {
+            kind: task.kind().unwrap_or(OpKind::Copy),
+            from,
+            names,
+            to,
+            verify: false,
+            task,
+        }
+    }
 }
 
 /// Why `submit` did not accept a request.
@@ -158,6 +278,9 @@ pub enum Refused {
     InvalidNames,
     /// A name is longer than [`MAX_NAME_UNITS`], or the names together take more than [`MAX_NAMES_BYTES`].
     NamesTooLarge,
+    /// The kind and the task do not belong together, a verify, split or combine has other than one name, a part is
+    /// shorter than [`MIN_PART_SIZE`], or an attribute change is empty, out of range or not for this system.
+    InvalidTask,
 }
 
 /// A job that is not known: it never existed, or it has ended.
@@ -185,6 +308,7 @@ impl From<Refused> for IpcError {
                 IpcErrorCode::InvalidInput,
                 "an item name, or the names together, are too long",
             ),
+            Refused::InvalidTask => Self::new(IpcErrorCode::InvalidInput, "this job cannot start with these items"),
         }
     }
 }
@@ -216,6 +340,20 @@ impl From<AnswerError> for IpcError {
 /// "exists" as `from` itself.
 pub fn rename_in(folder: &Path, from: &str, to: &str) -> io::Result<()> {
     rename::rename_in(folder, from, to)
+}
+
+/// What the Properties dialog shows about the item `name` of `folder`: kind, size, times, permissions, owner and group,
+/// the Windows attributes and the target of a link. Blocking disk access: call it off the command thread.
+///
+/// `folder` is a resolved local path. A link is shown by what it leads to (as the panes do), unless that cannot be
+/// reached, and its own target is given as written.
+///
+/// # Errors
+///
+/// [`io::ErrorKind::InvalidInput`] when `name` is not a plain name, [`io::ErrorKind::NotFound`] when the item is gone,
+/// others from the system. The text of the error holds no path.
+pub fn properties(folder: &Path, name: &str) -> io::Result<ItemProperties> {
+    props::properties(folder, name)
 }
 
 /// Splits the path of a new folder into its parts, checking each: `a/b/c` gives `["a", "b", "c"]`.

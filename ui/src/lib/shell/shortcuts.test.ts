@@ -27,6 +27,14 @@ describe('shortcutFor', () => {
     expect(press('F2', { altKey: true })).toBe('driveMenuRight');
   });
 
+  it('Alt+Enter shows the properties; Enter alone and the other modifiers do not', () => {
+    expect(press('Enter', { altKey: true })).toBe('properties');
+    expect(press('Enter')).toBeUndefined();
+    expect(press('Enter', { ctrlKey: true })).toBeUndefined();
+    expect(press('Enter', { altKey: true, shiftKey: true })).toBeUndefined();
+    expect(press('Enter', { altKey: true, ctrlKey: true })).toBeUndefined();
+  });
+
   it('F5 copies, F6 moves, Shift+F6 renames and Ctrl+J toggles the transfers', () => {
     expect(press('F5')).toBe('copy');
     expect(press('F6')).toBe('move');

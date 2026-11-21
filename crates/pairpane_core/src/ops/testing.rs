@@ -16,7 +16,7 @@ use crate::model::{
 use super::hooks::Hooks;
 use super::open;
 use super::volume::VolumeKey;
-use super::{Engine, Request};
+use super::{Engine, Request, Task};
 
 /// How long a test waits for an event before it gives up (a hang then fails the test instead of freezing it).
 const PATIENCE: Duration = Duration::from_secs(30);
@@ -129,6 +129,25 @@ impl Rig {
         })
     }
 
+    /// A rig whose listener pauses every job as it enters `phase`, before the work of that phase can start.
+    pub(super) fn paused_in(phase: JobPhase) -> Self {
+        Self::with(Hooks::default(), move |engine, event| {
+            if let OpsEvent::Phase { id, phase: now } = event
+                && *now == phase
+            {
+                engine.control(*id, ControlAction::Pause).expect("known job");
+            }
+        })
+    }
+
+    /// Waits until a job is paused, cancels it, and returns how it ended.
+    pub(super) fn cancel_when_paused(&mut self, job: JobId) -> Ended {
+        self.wait(|event| matches!(event, OpsEvent::Paused { paused: true, .. }));
+        self.engine.control(job, ControlAction::Cancel).expect("known job");
+
+        self.wait_ended(job)
+    }
+
     /// Runs a copy that verifies each file, from `root/src` into `root/dst`, to its end.
     pub(super) fn run_verified(&mut self, root: &Path, names: &[&str]) -> Ended {
         let mut request = copy(&root.join("src"), names, &root.join("dst"));
@@ -230,7 +249,18 @@ pub(super) fn request(kind: OpKind, from: &Path, names: &[&str], to: &Path) -> R
         names: names.iter().map(|name| (*name).to_owned()).collect(),
         to: to.to_owned(),
         verify: false,
+        task: Task::Transfer,
     }
+}
+
+/// A request for `task` on the `names` of `from`, which writes into `to`.
+pub(super) fn task(from: &Path, names: &[&str], to: &Path, task: Task) -> Request {
+    Request::task(
+        from.to_owned(),
+        names.iter().map(|name| (*name).to_owned()).collect(),
+        to.to_owned(),
+        task,
+    )
 }
 
 pub(super) fn copy(from: &Path, names: &[&str], to: &Path) -> Request {

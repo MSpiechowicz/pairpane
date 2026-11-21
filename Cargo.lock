@@ -2489,6 +2489,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest 0.10.7",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3001,9 +3011,11 @@ version = "0.9.0"
 dependencies = [
  "base64 0.23.1",
  "blake3",
+ "crc32fast",
  "criterion",
  "fs4",
  "jiff 1.0.1",
+ "md-5",
  "minisign-verify",
  "notify",
  "pretty_assertions",
@@ -3012,11 +3024,13 @@ dependencies = [
  "same-file",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sysinfo",
  "tempfile",
  "tracing",
  "trash",
  "ts-rs",
+ "uzers",
 ]
 
 [[package]]
@@ -5181,6 +5195,15 @@ dependencies = [
  "js-sys",
  "serde_core",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "uzers"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b8275fb1afee25b4111d2dc8b5c505dbbc4afd0b990cb96deb2d88bff8be18d"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

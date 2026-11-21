@@ -1,7 +1,9 @@
 import type { Answer } from './bindings/Answer';
 import type { AppInfo } from './bindings/AppInfo';
 import type { ControlAction } from './bindings/ControlAction';
+import type { ItemProperties } from './bindings/ItemProperties';
 import type { JobId } from './bindings/JobId';
+import type { JobTask } from './bindings/JobTask';
 import type { LinkKind } from './bindings/LinkKind';
 import type { ListEvent } from './bindings/ListEvent';
 import type { MenuCommand } from './bindings/MenuCommand';
@@ -38,6 +40,7 @@ export const commands = {
   volumes_list: cmd<{ onEvent: EventSink<VolumeEvent> }, null>(),
   ops_subscribe: cmd<{ onEvent: EventSink<OpsEvent> }, null>(),
   ops_start: cmd<{ kind: OpKind; from: string; names: string[]; to: string; verify: boolean }, JobId>(),
+  ops_task: cmd<{ from: string; names: string[]; task: JobTask }, JobId>(),
   ops_control: cmd<{ job: JobId; action: ControlAction }, null>(),
   ops_answer: cmd<{ job: JobId; question: number; answer: Answer; all: boolean }, null>(),
   ops_rename: cmd<{ path: string; from: string; to: string }, null>(),
@@ -46,6 +49,7 @@ export const commands = {
   ops_delete: cmd<{ path: string; names: string[] }, null>(),
   ops_mkdir: cmd<{ path: string; name: string }, string>(),
   ops_mkfile: cmd<{ path: string; name: string }, boolean>(),
+  ops_properties: cmd<{ path: string; name: string }, ItemProperties>(),
   ops_link: cmd<{ kind: LinkKind; path: string; name: string; to: string; linkName: string }, null>(),
   state_load: cmd<undefined, SavedState | null>(),
   state_save: cmd<{ state: SavedState }, null>(),

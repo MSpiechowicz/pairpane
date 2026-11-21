@@ -165,32 +165,8 @@ impl Run<'_> {
     /// Fails the job when a path is not acceptable, the source is not a folder, the target is not (or cannot
     /// be made into) one, or a folder would be copied into itself.
     pub(super) fn prepare(&mut self) -> Result<(PathBuf, Vec<Child>), Stop> {
-        let job = self.job;
-        let request = &job.request;
-
-        for folder in [&request.from, &request.to] {
-            platform::check_folder(folder).map_err(|reason| refusal(io::ErrorKind::InvalidInput, reason))?;
-        }
-        if !request.names.iter().all(|name| platform::is_plain_name(name)) {
-            return Err(refusal(
-                io::ErrorKind::InvalidInput,
-                "an item has a name that cannot be used here",
-            )
-            .into());
-        }
-
-        let from = platform::local_path(&request.from)?;
-        if !fs::metadata(&from)?.is_dir() {
-            return Err(refusal(io::ErrorKind::InvalidInput, "the source is not a folder").into());
-        }
-
-        let mut items = Vec::with_capacity(request.names.len());
-        for name in &request.names {
-            match Child::lookup(&from, name) {
-                Ok(child) => items.push(child),
-                Err(error) => self.fail(name, &error),
-            }
-        }
+        let request = &self.job.request;
+        let (_, items) = self.open_items(&[&request.from, &request.to])?;
 
         let (existing, missing) = volume::existing_part(&request.to)?
             .ok_or_else(|| refusal(io::ErrorKind::NotFound, "the target folder cannot be reached"))?;
@@ -232,8 +208,84 @@ impl Run<'_> {
         Ok((to, items))
     }
 
+    /// Checks the paths a job starts with (`folders` must pass `check_folder`, and the first one is the source),
+    /// resolves the source folder and looks up the items in it. An item that is gone is reported and left out.
+    /// Returns the resolved source folder and the items.
+    pub(super) fn open_items(&mut self, folders: &[&Path]) -> Result<(PathBuf, Vec<Child>), Stop> {
+        let from = self.open_folders(folders)?;
+        let items = self.look_up_children(&from);
+
+        Ok((from, items))
+    }
+
+    /// Checks the paths a job starts with (`folders` must pass `check_folder`) and the names of its items, and resolves
+    /// the source folder (the job's `from`), which must be a folder.
+    pub(super) fn open_folders(&mut self, folders: &[&Path]) -> Result<PathBuf, Stop> {
+        let request = &self.job.request;
+
+        for folder in folders {
+            platform::check_folder(folder).map_err(|reason| refusal(io::ErrorKind::InvalidInput, reason))?;
+        }
+        if !request.names.iter().all(|name| platform::is_plain_name(name)) {
+            return Err(refusal(
+                io::ErrorKind::InvalidInput,
+                "an item has a name that cannot be used here",
+            )
+            .into());
+        }
+
+        let from = platform::local_path(&request.from)?;
+        if !fs::metadata(&from)?.is_dir() {
+            return Err(refusal(io::ErrorKind::InvalidInput, "the source is not a folder").into());
+        }
+
+        Ok(from)
+    }
+
+    /// Looks up the items of the job in `from` by path; one that is gone is reported and left out.
+    fn look_up_children(&mut self, from: &Path) -> Vec<Child> {
+        let job = self.job;
+        let mut items = Vec::with_capacity(job.request.names.len());
+
+        for name in &job.request.names {
+            match Child::lookup(from, name) {
+                Ok(child) => items.push(child),
+                Err(error) => self.fail(name, &error),
+            }
+        }
+
+        items
+    }
+
+    /// Lists the folder `node` for a walk: what could not be read is reported under `rel` and what was left out is
+    /// counted as skipped; the entries are returned.
+    pub(super) fn children_of(&mut self, node: &Child, rel: &str) -> Result<Vec<Child>, Stop> {
+        let listing = read_children(&node.path)?;
+
+        self.skipped += listing.skipped;
+        for error in &listing.failed {
+            self.fail(rel, error);
+        }
+
+        Ok(listing.children)
+    }
+
+    /// Settles the walk of the item at `rel`, which came to `done`: a failure is reported against it and the walk goes
+    /// on; a cancel ends the walk.
+    pub(super) fn settle<T>(&mut self, rel: &str, done: Result<T, Stop>) -> Result<(), Stop> {
+        match done {
+            Ok(_) => Ok(()),
+            Err(Stop::Failed(error)) => {
+                self.fail(rel, &error);
+
+                Ok(())
+            }
+            Err(Stop::Cancelled) => Err(Stop::Cancelled),
+        }
+    }
+
     /// Makes the folders of `missing`, one below the other, under `existing`.
-    fn create_folders(&mut self, existing: &Path, missing: &Path) -> io::Result<()> {
+    pub(super) fn create_folders(&mut self, existing: &Path, missing: &Path) -> io::Result<()> {
         let mut path = existing.to_owned();
 
         for part in missing.components() {

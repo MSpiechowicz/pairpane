@@ -309,7 +309,8 @@ impl Engine {
     ///
     /// Refuses with [`Refused::InvalidNames`] for no names, more than [`super::MAX_NAMES`], a duplicate name or a
     /// name that is not a plain file name, with [`Refused::NamesTooLarge`] for a name or a list of names that is
-    /// too long, and with [`Refused::Busy`] when [`MAX_JOBS`] jobs exist.
+    /// too long, with [`Refused::InvalidTask`] when the task does not fit the request (see [`Request::task`]), and with
+    /// [`Refused::Busy`] when [`MAX_JOBS`] jobs exist.
     pub fn submit(&self, request: Request) -> Result<JobId, Refused> {
         validate(&request)?;
 

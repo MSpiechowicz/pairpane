@@ -14,7 +14,13 @@ export type FileAction =
   | 'trash'
   | 'deletePermanently'
   | 'symlink'
-  | 'hardlink';
+  | 'hardlink'
+  | 'properties'
+  | 'attributes'
+  | 'checksum'
+  | 'verifyChecksum'
+  | 'split'
+  | 'combine';
 
 /** What the OS calls the place deleted items go to. */
 export const trashName = () => (isWindowsPlatform() ? 'Recycle Bin' : 'Trash');
@@ -45,6 +51,15 @@ export function specOf(request: OpRequest): Spec {
       const verb = request.kind === 'copy' ? 'Copy' : 'Move';
       return { title: `${verb} ${what(request.names)} to`, confirm: verb, label: 'Target folder', initial: request.to, verify: true };
     }
+    case 'combine':
+      return {
+        title: `Combine ${what([request.name])} to`,
+        confirm: 'Combine',
+        label: 'Target folder',
+        hint: 'Joins .001, .002, … in order. A .crc file next to them names the new file and checks it.',
+        initial: request.to,
+        verify: false,
+      };
     case 'rename':
       return {
         title: 'Rename',
@@ -116,6 +131,9 @@ export async function perform(ipc: Transport, request: OpRequest, value: string,
     case 'copy':
     case 'move':
       await ipc.invoke('ops_start', { kind: request.kind, from: request.from, names: request.names, to: value, verify });
+      return { name: value };
+    case 'combine':
+      await ipc.invoke('ops_task', { from: request.from, names: [request.name], task: { kind: 'combine', to: value } });
       return { name: value };
     case 'rename':
       await ipc.invoke('ops_rename', { path: request.path, from: request.name, to: value });

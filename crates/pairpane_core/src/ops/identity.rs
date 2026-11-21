@@ -34,6 +34,12 @@ pub(super) struct FileId((u64, u64));
 pub(super) struct FileId(same_file::Handle);
 
 impl FileId {
+    /// The identity of an entry whose device and inode were read through a handle.
+    #[cfg(unix)]
+    pub(super) fn of_ids(ids: (u64, u64)) -> Self {
+        Self(ids)
+    }
+
     /// The identity of what the walk saw at `path` as `meta` (read without following links).
     #[cfg(unix)]
     pub(super) fn of_meta(_path: &Path, meta: &Metadata) -> Option<Self> {

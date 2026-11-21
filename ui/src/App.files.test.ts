@@ -165,6 +165,12 @@ describe('the Files menu', () => {
       'Delete F8',
       'Create symbolic link…',
       'Create hard link…',
+      'Properties Alt+Enter',
+      'Change attributes…',
+      'Create checksum file…',
+      'Verify checksum file',
+      'Split file…',
+      'Combine files…',
     ]);
   });
 

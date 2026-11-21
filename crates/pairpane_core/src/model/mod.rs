@@ -10,6 +10,7 @@ mod items;
 mod listing;
 mod ops;
 mod state;
+mod tasks;
 mod update;
 mod volume;
 
@@ -21,5 +22,6 @@ pub use ops::{
     Answer, ConflictInfo, ControlAction, FileFacts, ItemError, JobId, JobPhase, JobView, OpKind, OpsEvent, Outcome,
 };
 pub use state::{SavedPane, SavedState, SavedTab, SortColumn};
+pub use tasks::{AttributeChange, HashAlgorithm, ItemProperties, JobTask, ModeChange, WindowsAttributes};
 pub use update::{MAX_UPDATE_NOTES_BYTES, MenuCommand, UpdateInfo, UpdatePhase, UpdateProgress};
 pub use volume::{Volume, VolumeEvent, VolumeKind};

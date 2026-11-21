@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use pairpane_core::listing::platform;
 use pairpane_core::model::{Answer, ControlAction, IpcError, IpcErrorCode, JobId, OpKind, OpsEvent};
-use pairpane_core::ops::{Engine, MAX_NAMES, MAX_NAMES_BYTES, Request, name_fits, rename_in};
+use pairpane_core::ops::{Engine, MAX_NAMES, MAX_NAMES_BYTES, Request, Task, name_fits, rename_in};
 use tauri::State;
 use tauri::async_runtime;
 use tauri::ipc::Channel;
@@ -185,6 +185,7 @@ fn request(kind: OpKind, from: String, names: Vec<String>, to: String, verify: b
         names,
         to,
         verify,
+        task: Task::Transfer,
     })
 }
 
@@ -288,5 +289,9 @@ fn lock(listener: &Listener) -> MutexGuard<'_, Option<Channel<OpsEvent>>> {
     listener.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+pub mod tasks;
+
+#[cfg(test)]
+mod tasks_tests;
 #[cfg(test)]
 mod tests;

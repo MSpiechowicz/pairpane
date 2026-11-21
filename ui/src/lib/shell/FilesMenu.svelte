@@ -9,6 +9,12 @@
     { action: 'trash', label: 'Delete', keys: 'F8' },
     { action: 'symlink', label: 'Create symbolic link…' },
     { action: 'hardlink', label: 'Create hard link…' },
+    { action: 'properties', label: 'Properties', keys: 'Alt+Enter' },
+    { action: 'attributes', label: 'Change attributes…' },
+    { action: 'checksum', label: 'Create checksum file…' },
+    { action: 'verifyChecksum', label: 'Verify checksum file' },
+    { action: 'split', label: 'Split file…' },
+    { action: 'combine', label: 'Combine files…' },
   ];
 
   let { onChoose }: { onChoose: (action: FileAction) => void } = $props();

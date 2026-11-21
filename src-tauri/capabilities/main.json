@@ -24,6 +24,8 @@
     "allow-ops-delete",
     "allow-ops-mkdir",
     "allow-ops-mkfile",
-    "allow-ops-link"
+    "allow-ops-link",
+    "allow-ops-task",
+    "allow-ops-properties"
   ]
 }

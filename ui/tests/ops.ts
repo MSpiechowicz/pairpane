@@ -3,6 +3,7 @@
 import { vi } from 'vitest';
 
 import type { ConflictInfo } from '$lib/ipc/bindings/ConflictInfo';
+import type { ItemProperties } from '$lib/ipc/bindings/ItemProperties';
 import type { JobView } from '$lib/ipc/bindings/JobView';
 import type { OpsEvent } from '$lib/ipc/bindings/OpsEvent';
 import type { CommandName } from '$lib/ipc/commands';
@@ -64,5 +65,23 @@ export function opsBackend(answers: Partial<Record<CommandName, (args: never) =>
     send: (...events: OpsEvent[]) => events.forEach((event) => sink(event)),
     /** The arguments of every call of one command. */
     calls: (name: CommandName) => invoke.mock.calls.filter(([called]) => called === name).map(([, args]) => args),
+  };
+}
+
+/** What `ops_properties` answers for a plain file: `a.pdf`, 1.5 KB, Unix permissions 0644. */
+export function properties(extra: Partial<ItemProperties> = {}): ItemProperties {
+  return {
+    name: 'a.pdf',
+    kind: 'file',
+    size: 1536,
+    created: new Date(2026, 9, 1, 8, 30, 0).getTime(),
+    modified: new Date(2026, 10, 20, 7, 58, 12).getTime(),
+    accessed: null,
+    mode: 0o644,
+    owner: 'ann',
+    group: 'staff',
+    windows: null,
+    linkTarget: null,
+    ...extra,
   };
 }

@@ -29,6 +29,8 @@ const COMMANDS: &[&str] = &[
     "ops_mkdir",
     "ops_mkfile",
     "ops_link",
+    "ops_task",
+    "ops_properties",
 ];
 
 fn main() {

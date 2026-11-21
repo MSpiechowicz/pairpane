@@ -408,5 +408,7 @@ fn lock(undo: &Mutex<Undo>) -> MutexGuard<'_, Undo> {
     undo.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+pub mod props;
+
 #[cfg(test)]
 mod tests;

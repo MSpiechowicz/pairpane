@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::model::{Answer, IpcError, ItemError, JobPhase, OpKind, Outcome};
 
+use super::Task;
 use super::control::Cancelled;
 use super::engine::Inner;
 use super::identity::FileId;
@@ -147,7 +148,12 @@ pub(super) fn execute(inner: &Inner, job: &Job) -> Finish {
 
     assert!(!inner.hooks.panic_on_start, "the test asked this job to panic");
 
-    let outcome = match run.run() {
+    let result = match &job.request.task {
+        Task::Transfer => run.run(),
+        task => run.run_task(task),
+    };
+
+    let outcome = match result {
         Ok(()) => {
             run.created.keep = true;
             run.tick(true);

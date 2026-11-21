@@ -66,12 +66,14 @@ pub fn run() -> ExitCode {
             commands::ops::ops_control,
             commands::ops::ops_answer,
             commands::ops::ops_rename,
+            commands::ops::tasks::ops_task,
             commands::items::ops_trash,
             commands::items::ops_untrash,
             commands::items::ops_delete,
             commands::items::ops_mkdir,
             commands::items::ops_mkfile,
             commands::items::ops_link,
+            commands::items::props::ops_properties,
         ])
         .build(tauri::generate_context!())
         .map(|app| {

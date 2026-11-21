@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { IpcFailure } from '$lib/ipc/transport';
   import Modal from '$lib/shell/Modal.svelte';
 
   import { trashName, what } from './dialogs';
+  import DialogFooter from './DialogFooter.svelte';
+  import { Submission } from './submission.svelte';
 
   let {
     permanent,
@@ -20,63 +21,28 @@
 
   const title = $derived(permanent ? `Delete ${what(names)} permanently?` : `Move ${what(names)} to the ${trashName()}?`);
 
-  let failure = $state<string | undefined>();
-  let busy = $state(false);
+  const submission = new Submission(() => onClose());
 
-  async function confirm() {
-    if (busy) {
-      return;
-    }
-
-    busy = true;
-    failure = undefined;
-    try {
-      await onConfirm();
-    } catch (error) {
-      failure = IpcFailure.from(error).message;
-    } finally {
-      busy = false;
-    }
-  }
-
-  /** Escape and Cancel; what is being done cannot be called off from here. */
-  function close() {
-    if (!busy) {
-      onClose();
-    }
-  }
+  const confirm = () => submission.run(onConfirm);
 </script>
 
-<Modal {title} onClose={close}>
+<Modal {title} onClose={submission.close}>
   {#if permanent}
     <p class="note">This cannot be undone.</p>
   {/if}
-  {#if failure}
-    <p class="failure" role="alert">{failure}</p>
-  {/if}
-  <div class="mt-3 flex justify-end gap-2">
-    <button class="btn" type="button" disabled={busy} data-autofocus={permanent ? '' : undefined} onclick={close}>Cancel</button>
-    <button
-      class="btn {permanent ? 'btn-danger' : 'btn-primary'}"
-      type="button"
-      disabled={busy}
-      data-autofocus={permanent ? undefined : ''}
-      onclick={confirm}>{permanent ? 'Delete' : `Move to ${trashName()}`}</button
-    >
-  </div>
+  <DialogFooter
+    failure={submission.failure}
+    busy={submission.busy}
+    confirm={permanent ? 'Delete' : `Move to ${trashName()}`}
+    danger={permanent}
+    focus={permanent ? 'cancel' : 'confirm'}
+    onConfirm={confirm}
+    onCancel={submission.close}
+  />
 </Modal>
 
 <style>
-  .note,
-  .failure {
+  .note {
     margin: 0;
-  }
-
-  .note + .failure {
-    margin-top: 8px;
-  }
-
-  .failure {
-    color: var(--danger);
   }
 </style>

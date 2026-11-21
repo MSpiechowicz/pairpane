@@ -1,0 +1,23 @@
+/* What the fields of the dialogs share; a dialog that has one imports this file. */
+
+/* A one-line text field of a dialog: a target folder, a name, a number, a time. */
+.field {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  font: 12.5px var(--font-mono);
+}
+
+.field:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* A line of small print under the fields of a dialog. */
+.hint {
+  margin: 8px 0 0;
+  color: var(--dim);
+}

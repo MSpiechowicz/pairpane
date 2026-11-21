@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ops-task"
+description = "Enables the ops_task command without any pre-configured scope."
+commands.allow = ["ops_task"]
+
+[[permission]]
+identifier = "deny-ops-task"
+description = "Denies the ops_task command without any pre-configured scope."
+commands.deny = ["ops_task"]

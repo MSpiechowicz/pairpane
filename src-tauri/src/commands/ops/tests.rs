@@ -11,7 +11,7 @@ use super::*;
 use crate::commands::testing::{elsewhere, names, root};
 
 /// A channel that records what it receives, decoded.
-fn collecting_channel() -> (Channel<OpsEvent>, Arc<Mutex<Vec<OpsEvent>>>) {
+pub(super) fn collecting_channel() -> (Channel<OpsEvent>, Arc<Mutex<Vec<OpsEvent>>>) {
     let received = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&received);
     let channel = Channel::new(move |body| {
@@ -28,7 +28,7 @@ fn collecting_channel() -> (Channel<OpsEvent>, Arc<Mutex<Vec<OpsEvent>>>) {
     (channel, received)
 }
 
-fn received(events: &Arc<Mutex<Vec<OpsEvent>>>) -> Vec<OpsEvent> {
+pub(super) fn received(events: &Arc<Mutex<Vec<OpsEvent>>>) -> Vec<OpsEvent> {
     events.lock().expect("not poisoned").clone()
 }
 

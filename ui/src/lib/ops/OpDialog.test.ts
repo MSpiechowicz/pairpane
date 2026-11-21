@@ -291,3 +291,36 @@ describe('OpDialog links', () => {
     expect(onDone).not.toHaveBeenCalled();
   });
 });
+
+describe('OpDialog combine', () => {
+  const combine: OpRequest = { kind: 'combine', from: '/work', name: 'movie.mkv.001', to: '/restore' };
+
+  it('asks for the folder the parts are joined into, and starts the combine there', async () => {
+    const { field, calls, onDone } = open(combine);
+    expect(screen.getByRole('dialog', { name: 'Combine “movie.mkv.001” to' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Target folder' })).toHaveFocus();
+    expect(field).toHaveValue('/restore');
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+
+    await fireEvent.input(field, { target: { value: '/elsewhere' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Combine' }));
+
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+    expect(calls('ops_task')).toEqual([
+      { from: '/work', names: ['movie.mkv.001'], task: { kind: 'combine', to: '/elsewhere' } },
+    ]);
+  });
+
+  it('a refusal is shown, and the dialog stays', async () => {
+    const { field, onDone } = open(combine, {
+      ops_task: async () => {
+        throw new IpcFailure({ code: 'invalidInput', message: 'choose exactly one item' });
+      },
+    });
+
+    await fireEvent.keyDown(field, { key: 'Enter' });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('choose exactly one item');
+    expect(onDone).not.toHaveBeenCalled();
+  });
+});

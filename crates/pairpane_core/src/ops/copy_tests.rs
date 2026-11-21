@@ -10,9 +10,9 @@ use tempfile::TempDir;
 use crate::model::Answer;
 use crate::model::Outcome;
 
-use super::copy::run_token;
 #[cfg(unix)]
 use super::open;
+use super::partial::run_token;
 use super::testing::{Rig, has_no_partial_files, pattern, put, read, temp, tree, write};
 
 #[test]

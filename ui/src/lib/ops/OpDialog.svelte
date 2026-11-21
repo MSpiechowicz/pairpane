@@ -1,11 +1,14 @@
 <script lang="ts">
   import { untrack } from 'svelte';
 
-  import { IpcFailure, type Transport } from '$lib/ipc/transport';
+  import type { Transport } from '$lib/ipc/transport';
   import Modal from '$lib/shell/Modal.svelte';
 
   import { type Notice, perform, specOf } from './dialogs';
+  import DialogFooter from './DialogFooter.svelte';
+  import { Submission } from './submission.svelte';
   import type { OpRequest } from './targets';
+  import './fields.css';
 
   let {
     request,
@@ -28,8 +31,7 @@
   // The dialog is made for one request: what the field starts with is read once.
   let value = $state(untrack(() => spec.initial));
   let verify = $state(false);
-  let failure = $state<string | undefined>();
-  let busy = $state(false);
+  const submission = new Submission(() => onClose());
 
   /** The field has the focus; a name has its stem selected so that typing keeps the extension. */
   function select(input: HTMLInputElement) {
@@ -42,7 +44,7 @@
   }
 
   async function submit() {
-    if (busy || value.trim() === '') {
+    if (submission.busy || value.trim() === '') {
       return;
     }
 
@@ -52,27 +54,14 @@
       return;
     }
 
-    busy = true;
-    failure = undefined;
-    try {
+    await submission.run(async () => {
       const done = await perform(ipc, request, value, verify);
       if (done.notice) {
         onNotice?.(done.notice);
       }
 
       onDone(done.name);
-    } catch (error) {
-      failure = IpcFailure.from(error).message;
-    } finally {
-      busy = false;
-    }
-  }
-
-  /** Escape and Cancel; a job that is being started cannot be called off from here (its owner needs `onDone`). */
-  function close() {
-    if (!busy) {
-      onClose();
-    }
+    });
   }
 
   function onkeydown(event: KeyboardEvent) {
@@ -83,9 +72,10 @@
   }
 </script>
 
-<Modal title={spec.title} onClose={close}>
+<Modal title={spec.title} onClose={submission.close}>
   <div class="row">
     <input
+      class="field"
       type="text"
       spellcheck="false"
       autocomplete="off"
@@ -102,13 +92,7 @@
   {#if spec.hint}
     <p class="hint">{spec.hint}</p>
   {/if}
-  {#if failure}
-    <p class="failure" role="alert">{failure}</p>
-  {/if}
-  <div class="mt-3 flex justify-end gap-2">
-    <button class="btn" type="button" disabled={busy} onclick={close}>Cancel</button>
-    <button class="btn btn-primary" type="button" disabled={busy} onclick={submit}>{spec.confirm}</button>
-  </div>
+  <DialogFooter failure={submission.failure} busy={submission.busy} confirm={spec.confirm} onConfirm={submit} onCancel={submission.close} />
 </Modal>
 
 <style>
@@ -118,33 +102,8 @@
     gap: 12px;
   }
 
-  .row > input[type='text'] {
+  .row > .field {
     flex: 1;
     min-width: 0;
-    height: 30px;
-    padding: 0 10px;
-    border: 1px solid var(--line);
-    border-radius: 7px;
-    background: var(--bg);
-    color: var(--text);
-    font: 12.5px var(--font-mono);
-  }
-
-  .row > input[type='text']:focus {
-    border-color: var(--accent);
-    outline: none;
-  }
-
-  .hint,
-  .failure {
-    margin: 8px 0 0;
-  }
-
-  .hint {
-    color: var(--dim);
-  }
-
-  .failure {
-    color: var(--danger);
   }
 </style>
