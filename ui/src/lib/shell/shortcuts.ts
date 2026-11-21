@@ -1,5 +1,5 @@
 /**
- * What a window-level shortcut asks for. The drive menus, the hotlist, the copy dialogs and the transfers panel
+ * What a window-level shortcut asks for. The drive menus, the hotlist, the file dialogs and the transfers panel
  * are run by the shell that owns them.
  */
 export type Action =
@@ -15,6 +15,11 @@ export type Action =
   | 'copy'
   | 'move'
   | 'rename'
+  | 'renameInline'
+  | 'newFolder'
+  | 'newFile'
+  | 'trash'
+  | 'deletePermanently'
   | 'transfers';
 
 /** Ctrl + key. (Ctrl on every OS: on macOS Cmd+W already closes the window.) */
@@ -61,13 +66,25 @@ function withAlt(event: KeyboardEvent): Action | undefined {
   }
 }
 
-/** A function key on its own: F5 copies, F6 moves, Shift+F6 renames. */
+/**
+ * A function key on its own, or Delete: F5 copies, F6 moves, Shift+F6 renames, F2 renames in place, F7 makes a
+ * folder, Shift+F4 a file, F8 and Delete move to the Trash, Shift+F8 and Shift+Delete delete for good.
+ */
 function functionKey(event: KeyboardEvent): Action | undefined {
   switch (event.key) {
+    case 'F2':
+      return event.shiftKey ? undefined : 'renameInline';
+    case 'F4':
+      return event.shiftKey ? 'newFile' : undefined;
     case 'F5':
       return event.shiftKey ? undefined : 'copy';
     case 'F6':
       return event.shiftKey ? 'rename' : 'move';
+    case 'F7':
+      return event.shiftKey ? undefined : 'newFolder';
+    case 'F8':
+    case 'Delete':
+      return event.shiftKey ? 'deletePermanently' : 'trash';
     default:
       return undefined;
   }
@@ -80,7 +97,7 @@ export function reloadsPage(event: KeyboardEvent): boolean {
 
 /**
  * The action a key press stands for. Ctrl+Alt (AltGr, which types characters) and Cmd are never shortcuts; Tab
- * alone is not one either (it switches panes). The function keys are the only shortcuts without a modifier.
+ * alone is not one either (it switches panes). The function keys and Delete are the only shortcuts without a modifier.
  */
 export function shortcutFor(event: KeyboardEvent): Action | undefined {
   if (event.isComposing || event.metaKey || (event.ctrlKey && event.altKey)) {

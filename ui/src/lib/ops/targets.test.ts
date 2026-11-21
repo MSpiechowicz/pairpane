@@ -114,6 +114,40 @@ describe('requestFor', () => {
 
     expect(requestFor('rename', source, source)).toEqual({ kind: 'rename', path: '/work', name: 'docs', dir: true });
   });
+
+  it('makes a folder or a file in the pane`s own folder, even with nothing under the cursor', async () => {
+    const source = await shown('/work'); // the cursor is on `..`
+    const other = await shown('/backup');
+
+    expect(requestFor('mkdir', source, other)).toEqual({ kind: 'mkdir', path: '/work' });
+    expect(requestFor('mkfile', source, other)).toEqual({ kind: 'mkfile', path: '/work' });
+    expect(requestFor('mkdir', new PaneView(fakeBackend().ipc, 'left'), other)).toBeUndefined();
+  });
+
+  it('links the entry under the cursor, whatever is selected, from the other pane`s folder', async () => {
+    const source = await shown('/work');
+    const other = await shown('/backup');
+    source.pick(3, 'toggle');
+    source.pick(2, 'cursor');
+
+    expect(requestFor('symlink', source, other)).toEqual({
+      kind: 'symlink',
+      path: '/work',
+      name: 'a.txt',
+      dir: false,
+      to: '/backup',
+    });
+    expect(requestFor('hardlink', source, other)).toMatchObject({ kind: 'hardlink', name: 'a.txt' });
+  });
+
+  it('links nothing from the `..` row, or into a pane that has not listed a folder', async () => {
+    const source = await shown('/work');
+    const empty = new PaneView(fakeBackend().ipc, 'right');
+
+    expect(requestFor('symlink', source, source)).toBeUndefined();
+    source.setCursor(2);
+    expect(requestFor('symlink', source, empty)).toBeUndefined();
+  });
 });
 
 describe('stemLength', () => {

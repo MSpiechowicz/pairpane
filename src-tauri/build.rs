@@ -23,6 +23,12 @@ const COMMANDS: &[&str] = &[
     "ops_control",
     "ops_answer",
     "ops_rename",
+    "ops_trash",
+    "ops_untrash",
+    "ops_delete",
+    "ops_mkdir",
+    "ops_mkfile",
+    "ops_link",
 ];
 
 fn main() {

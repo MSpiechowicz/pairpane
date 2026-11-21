@@ -1,0 +1,26 @@
+<script lang="ts">
+  import type { FileAction } from '$lib/ops/dialogs';
+
+  /** The menu's items; a key shown next to an item does the same without the menu. */
+  const ITEMS: readonly { action: FileAction; label: string; keys?: string }[] = [
+    { action: 'newFolder', label: 'New folder', keys: 'F7' },
+    { action: 'newFile', label: 'New file', keys: 'Shift+F4' },
+    { action: 'renameInline', label: 'Rename', keys: 'F2' },
+    { action: 'trash', label: 'Delete', keys: 'F8' },
+    { action: 'symlink', label: 'Create symbolic link…' },
+    { action: 'hardlink', label: 'Create hard link…' },
+  ];
+
+  let { onChoose }: { onChoose: (action: FileAction) => void } = $props();
+</script>
+
+<div class="popup" role="menu" aria-label="Files">
+  {#each ITEMS as { action, label, keys } (action)}
+    <button class="popup-item" type="button" role="menuitem" aria-keyshortcuts={keys} onclick={() => onChoose(action)}>
+      <span>{label}</span>
+      {#if keys}
+        <kbd aria-hidden="true">{keys}</kbd>
+      {/if}
+    </button>
+  {/each}
+</div>

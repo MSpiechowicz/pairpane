@@ -3,6 +3,9 @@ import type { PaneView } from './view.svelte';
 /** Whether this is macOS, where Option+key types a character (elsewhere Alt+key is left to menu accelerators). */
 export const isMacPlatform = () => /Mac/.test(navigator.userAgent);
 
+/** Whether this is Windows, where the Trash is called the Recycle Bin. */
+export const isWindowsPlatform = () => /Windows/.test(navigator.userAgent);
+
 /**
  * A key that types a character. AltGr (which Windows and Linux report as Ctrl+Alt) types one too, and so does
  * Option on macOS; Ctrl/Cmd shortcuts and a lone Alt elsewhere do not.

@@ -18,6 +18,12 @@
     "allow-ops-start",
     "allow-ops-control",
     "allow-ops-answer",
-    "allow-ops-rename"
+    "allow-ops-rename",
+    "allow-ops-trash",
+    "allow-ops-untrash",
+    "allow-ops-delete",
+    "allow-ops-mkdir",
+    "allow-ops-mkfile",
+    "allow-ops-link"
   ]
 }

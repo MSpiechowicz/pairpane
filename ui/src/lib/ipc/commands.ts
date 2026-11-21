@@ -2,6 +2,7 @@ import type { Answer } from './bindings/Answer';
 import type { AppInfo } from './bindings/AppInfo';
 import type { ControlAction } from './bindings/ControlAction';
 import type { JobId } from './bindings/JobId';
+import type { LinkKind } from './bindings/LinkKind';
 import type { ListEvent } from './bindings/ListEvent';
 import type { MenuCommand } from './bindings/MenuCommand';
 import type { OpKind } from './bindings/OpKind';
@@ -9,6 +10,7 @@ import type { OpsEvent } from './bindings/OpsEvent';
 import type { PaneId } from './bindings/PaneId';
 import type { SavedState } from './bindings/SavedState';
 import type { SizeEvent } from './bindings/SizeEvent';
+import type { TrashOutcome } from './bindings/TrashOutcome';
 import type { UpdateInfo } from './bindings/UpdateInfo';
 import type { UpdateProgress } from './bindings/UpdateProgress';
 import type { VolumeEvent } from './bindings/VolumeEvent';
@@ -39,6 +41,12 @@ export const commands = {
   ops_control: cmd<{ job: JobId; action: ControlAction }, null>(),
   ops_answer: cmd<{ job: JobId; question: number; answer: Answer; all: boolean }, null>(),
   ops_rename: cmd<{ path: string; from: string; to: string }, null>(),
+  ops_trash: cmd<{ path: string; names: string[] }, TrashOutcome>(),
+  ops_untrash: cmd<{ token: number }, number>(),
+  ops_delete: cmd<{ path: string; names: string[] }, null>(),
+  ops_mkdir: cmd<{ path: string; name: string }, string>(),
+  ops_mkfile: cmd<{ path: string; name: string }, boolean>(),
+  ops_link: cmd<{ kind: LinkKind; path: string; name: string; to: string; linkName: string }, null>(),
   state_load: cmd<undefined, SavedState | null>(),
   state_save: cmd<{ state: SavedState }, null>(),
 };

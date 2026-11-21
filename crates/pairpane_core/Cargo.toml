@@ -23,6 +23,14 @@ ts-rs.workspace = true
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
 
+# The freedesktop Trash is done in pairpane_core::ops::trash::freedesktop on these systems.
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
+jiff.workspace = true
+
+# Elsewhere the system does the Trash, through the crate.
+[target.'cfg(not(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))'.dependencies]
+trash.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 same-file.workspace = true
 sysinfo.workspace = true

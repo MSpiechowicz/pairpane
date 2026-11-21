@@ -33,6 +33,7 @@
     <label class="mask">
       {label}:
       <input
+        class="pane-field"
         type="text"
         spellcheck="false"
         autocomplete="off"
@@ -96,13 +97,5 @@
   .mask input {
     flex: 1;
     min-width: 0;
-    height: 20px;
-    padding: 0 6px;
-    border: 1px solid var(--accent);
-    border-radius: 4px;
-    outline: none;
-    background: var(--panel-2);
-    color: var(--text);
-    font: 12px var(--font-mono);
   }
 </style>

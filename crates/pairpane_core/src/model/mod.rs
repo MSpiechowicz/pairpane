@@ -6,6 +6,7 @@
 
 mod app;
 mod ipc_error;
+mod items;
 mod listing;
 mod ops;
 mod state;
@@ -14,6 +15,7 @@ mod volume;
 
 pub use app::AppInfo;
 pub use ipc_error::{IpcError, IpcErrorCode};
+pub use items::{LinkKind, TrashOutcome};
 pub use listing::{Crumb, Entry, EntryKind, ListEvent, PaneId, SizeEvent};
 pub use ops::{
     Answer, ConflictInfo, ControlAction, FileFacts, ItemError, JobId, JobPhase, JobView, OpKind, OpsEvent, Outcome,

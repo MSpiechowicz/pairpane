@@ -4,14 +4,15 @@
   import { ipc } from '$lib/ipc/client';
   import type { AppInfo } from '$lib/ipc/bindings/AppInfo';
   import ConflictDialog from '$lib/ops/ConflictDialog.svelte';
+  import DeleteDialog from '$lib/ops/DeleteDialog.svelte';
+  import { FileActions } from '$lib/ops/fileActions.svelte';
   import OpDialog from '$lib/ops/OpDialog.svelte';
-  import { type OpRequest, requestFor } from '$lib/ops/targets';
   import { Transfers } from '$lib/ops/transfers.svelte';
   import TransfersChip from '$lib/ops/TransfersChip.svelte';
   import TransfersPanel from '$lib/ops/TransfersPanel.svelte';
+  import { focusActiveList } from '$lib/panes/focus';
   import { Hotlist } from '$lib/panes/hotlist.svelte';
   import { PaneTabs } from '$lib/panes/tabs.svelte';
-  import type { PaneView } from '$lib/panes/view.svelte';
   import { Volumes } from '$lib/panes/volumes.svelte';
   import Dock from '$lib/shell/Dock.svelte';
   import type { Menu } from '$lib/shell/menu';
@@ -20,6 +21,7 @@
   import { isTyping, reloadsPage, shortcutFor } from '$lib/shell/shortcuts';
   import Splash from '$lib/shell/Splash.svelte';
   import { Theme } from '$lib/shell/theme.svelte';
+  import Toast from '$lib/shell/Toast.svelte';
   import TopBar from '$lib/shell/TopBar.svelte';
   import UpdateCard from '$lib/updates/UpdateCard.svelte';
   import { Updates } from '$lib/updates/updates.svelte';
@@ -52,38 +54,20 @@
 
   const transfers = new Transfers(ipc);
   let panelOpen = $state(false);
-  /** The copy, move or rename dialog that is open, and the pane it works in. */
-  let dialog = $state.raw<{ request: OpRequest; source: PaneView } | undefined>();
+  const files = new FileActions(ipc, panes, () => active);
   const question = $derived(transfers.question);
   /** A dialog has the keyboard: the shortcuts and Tab are its own then. */
-  const modal = $derived(dialog !== undefined || question !== undefined);
-
-  /** Opens the dialog for the active pane's selection (or cursor), with the other pane's folder as the target. */
-  function openDialog(kind: 'copy' | 'move' | 'rename') {
-    const other = active === 'left' ? 'right' : 'left';
-    const source = panes[active].view;
-    const request = requestFor(kind, source, panes[other].view);
-    if (request !== undefined) {
-      dialog = { request, source };
-    }
-  }
-
-  /** A job started (it took the selection over) or an item was renamed (the cursor goes to its new name). */
-  function dialogDone(name: string) {
-    if (dialog?.request.kind === 'rename') {
-      dialog.source.pointAt(name);
-    } else {
-      dialog?.source.deselect(dialog.request.names);
-    }
-
-    dialog = undefined;
-  }
+  const modal = $derived(files.modal || question !== undefined);
 
   function onDockKey(key: string) {
     if (key === 'F5') {
-      openDialog('copy');
+      files.run('copy');
     } else if (key === 'F6') {
-      openDialog('move');
+      files.run('move');
+    } else if (key === 'F7') {
+      files.run('newFolder');
+    } else if (key === 'F8') {
+      files.run('trash');
     }
   }
 
@@ -134,6 +118,12 @@
       return;
     }
 
+    // Delete is a key of the menus' lists too (Shift+Delete removes a drive from the list, say): not a file's.
+    const removing = action === 'trash' || action === 'deletePermanently';
+    if (removing && event.target instanceof Element && event.target.closest('[data-menu]')) {
+      return;
+    }
+
     const tabs = panes[active];
     switch (action) {
       case 'newTab':
@@ -166,7 +156,12 @@
       case 'copy':
       case 'move':
       case 'rename':
-        openDialog(action);
+      case 'renameInline':
+      case 'newFolder':
+      case 'newFile':
+      case 'trash':
+      case 'deletePermanently':
+        files.run(action);
         break;
       case 'transfers':
         panelOpen = !panelOpen;
@@ -185,13 +180,6 @@
     if (!claimed) {
       switchPane(event);
       runShortcut(event);
-    }
-  }
-
-  /** The splash was above the app: the focus goes where the app keeps it, the active pane's list. */
-  function focusActiveList() {
-    if (document.activeElement === null || document.activeElement === document.body) {
-      document.querySelector<HTMLElement>('[data-pane][aria-current="true"] [role="listbox"]')?.focus();
     }
   }
 
@@ -237,6 +225,7 @@
     {showHidden}
     onCheckForUpdates={() => void updates.check(true)}
     onToggleHidden={toggleHidden}
+    onFiles={(action) => files.run(action)}
   />
 
   <main class="panes">
@@ -248,6 +237,7 @@
         {hotlist}
         menu={menu?.side === side ? menu.kind : undefined}
         active={active === side}
+        rename={files.rename}
         onActivate={() => (active = side)}
         onMenu={(kind) => (menu = kind === undefined ? undefined : { side, kind })}
       />
@@ -259,16 +249,43 @@
   </Dock>
 </div>
 
-<!-- Above the dock, on the right: the update card and the transfers stack, so neither covers the other. -->
+<!-- Above the dock, on the right: the update card, the notice and the transfers stack, so none covers another. -->
 <div class="floats">
   <UpdateCard {updates} />
+  {#if files.toast}
+    {@const toast = files.toast}
+    {#key toast.id}
+      <Toast
+        text={toast.text}
+        error={toast.error}
+        undoable={toast.undo !== null}
+        onUndo={() => void files.undo()}
+        onClose={() => files.dismissToast()}
+      />
+    {/key}
+  {/if}
   {#if panelOpen}
     <TransfersPanel {transfers} onClose={() => (panelOpen = false)} />
   {/if}
 </div>
 
-{#if dialog}
-  <OpDialog request={dialog.request} {ipc} onClose={() => (dialog = undefined)} onDone={dialogDone} />
+{#if files.dialog}
+  <OpDialog
+    request={files.dialog.request}
+    {ipc}
+    onClose={() => files.closeDialog()}
+    onDone={(name) => files.dialogDone(name)}
+    onNotice={(notice) => files.say(notice.text, notice.error)}
+  />
+{/if}
+
+{#if files.removal}
+  <DeleteDialog
+    permanent={files.removal.permanent}
+    names={files.removal.names}
+    onConfirm={() => files.confirmRemoval()}
+    onClose={() => files.closeRemoval()}
+  />
 {/if}
 
 {#if question}

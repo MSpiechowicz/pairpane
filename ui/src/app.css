@@ -77,6 +77,51 @@
     box-shadow: 0 16px 50px rgb(0 0 0 / 0.35);
   }
 
+  /* A one-line text field inside a pane: the mask prompt in the footer, the name of a row being renamed. */
+  .pane-field {
+    height: 20px;
+    padding: 0 6px;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    outline: none;
+    background: var(--panel-2);
+    color: var(--text);
+    font: 12px var(--font-mono);
+  }
+
+  /* Where a popup opens: under its button. */
+  .has-popup {
+    position: relative;
+  }
+
+  .has-popup > .popup {
+    position: absolute;
+    top: 34px;
+    left: 0;
+  }
+
+  /* An item of a popup menu: its label, and the key that does the same on the right. */
+  .popup-item {
+    width: 100%;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0 9px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: none;
+    color: var(--text);
+    text-align: left;
+    white-space: nowrap;
+    cursor: default;
+  }
+
+  .popup-item:hover {
+    background: var(--panel-2);
+  }
+
   /* Buttons of cards and dialogs; `btn-primary` is the one action they lead to. */
   .btn {
     border: 1px solid var(--line);
@@ -99,6 +144,13 @@
   .btn-primary {
     border-color: var(--accent);
     background: var(--accent);
+    color: #fff;
+  }
+
+  /* The action that cannot be taken back. */
+  .btn-danger {
+    border-color: var(--danger);
+    background: var(--danger);
     color: #fff;
   }
 

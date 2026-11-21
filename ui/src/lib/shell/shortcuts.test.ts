@@ -35,6 +35,41 @@ describe('shortcutFor', () => {
     expect(press('J', { ctrlKey: true })).toBe('transfers'); // caps lock
   });
 
+  it('F2 renames in place, F7 makes a folder and Shift+F4 a file', () => {
+    expect(press('F2')).toBe('renameInline');
+    expect(press('F7')).toBe('newFolder');
+    expect(press('F4', { shiftKey: true })).toBe('newFile');
+  });
+
+  it('F8 and Delete move to the Trash; with Shift they delete for good', () => {
+    expect(press('F8')).toBe('trash');
+    expect(press('Delete')).toBe('trash');
+    expect(press('F8', { shiftKey: true })).toBe('deletePermanently');
+    expect(press('Delete', { shiftKey: true })).toBe('deletePermanently');
+  });
+
+  it('plain F4, Shift+F2, Shift+F7 and the Ctrl, Alt and Cmd variants of the new keys are not shortcuts', () => {
+    expect(press('F4')).toBeUndefined();
+    expect(press('F2', { shiftKey: true })).toBeUndefined();
+    expect(press('F7', { shiftKey: true })).toBeUndefined();
+
+    for (const name of ['F2', 'F4', 'F7', 'F8', 'Delete']) {
+      for (const modifier of ['ctrlKey', 'metaKey'] as const) {
+        expect(press(name, { [modifier]: true })).toBeUndefined();
+        expect(press(name, { [modifier]: true, shiftKey: true })).toBeUndefined();
+      }
+    }
+
+    for (const name of ['F4', 'F7', 'F8', 'Delete']) {
+      expect(press(name, { altKey: true })).toBeUndefined();
+      expect(press(name, { altKey: true, shiftKey: true })).toBeUndefined();
+    }
+  });
+
+  it('Alt+F2 is still the right drive menu, not a rename', () => {
+    expect(press('F2', { altKey: true })).toBe('driveMenuRight');
+  });
+
   it('other function keys and modified F5 and F6 are not shortcuts', () => {
     expect(press('F3')).toBeUndefined();
     expect(press('F5', { shiftKey: true })).toBeUndefined();

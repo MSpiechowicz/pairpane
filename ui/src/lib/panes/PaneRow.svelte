@@ -2,6 +2,8 @@
   import type { Entry } from '$lib/ipc/bindings/Entry';
 
   import { formatDate, iconClass, splitName } from './format';
+  import type { InlineRename } from './inlineRename.svelte';
+  import RenameField from './RenameField.svelte';
 
   let {
     id,
@@ -11,6 +13,7 @@
     cursor,
     selected,
     size,
+    edit,
   }: {
     id: string;
     /** The row number, for the list that handles the mouse for all its rows. */
@@ -22,6 +25,8 @@
     selected: boolean;
     /** The Size column; `undefined` for a folder not measured, which shows the DIR tag. */
     size: string | undefined;
+    /** Set on the row being renamed in place: its name is a field then. */
+    edit?: InlineRename;
   } = $props();
 
   const parts = $derived(entry ? splitName(entry) : undefined);
@@ -42,8 +47,12 @@
     <span class="ic up">↰</span><span class="nm">..</span>
   {:else if entry && parts}
     <span class="ic {iconClass(entry)}"></span>
-    <span class="nm" title={entry.linkTarget ? `${entry.name} → ${entry.linkTarget}` : undefined}>{parts.base}</span>
-    <span class="ex">{parts.ext}</span>
+    {#if edit}
+      <RenameField rename={edit} />
+    {:else}
+      <span class="nm" title={entry.linkTarget ? `${entry.name} → ${entry.linkTarget}` : undefined}>{parts.base}</span>
+      <span class="ex">{parts.ext}</span>
+    {/if}
     <span class="sz">{#if size !== undefined}{size}{:else}<span class="dirtag">DIR</span>{/if}</span>
     <span class="dt">{formatDate(entry.modified)}</span>
   {/if}

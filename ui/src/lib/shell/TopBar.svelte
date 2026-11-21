@@ -1,4 +1,10 @@
 <script lang="ts">
+  import type { Snippet } from 'svelte';
+
+  import type { FileAction } from '$lib/ops/dialogs';
+
+  import FilesMenu from './FilesMenu.svelte';
+  import { shortcutFor } from './shortcuts';
   import type { Theme } from './theme.svelte';
 
   let {
@@ -9,6 +15,7 @@
     showHidden,
     onCheckForUpdates,
     onToggleHidden,
+    onFiles,
   }: {
     version: string | undefined;
     failure: string | undefined;
@@ -19,32 +26,65 @@
     showHidden: boolean;
     onCheckForUpdates: () => void;
     onToggleHidden: () => void;
+    /** An item of the Files menu was chosen; it does what its key does. */
+    onFiles: (action: FileAction) => void;
   } = $props();
 
-  const MENUS = ['Files', 'Mark', 'Commands', 'Net', 'View'] as const;
+  /** The menus that hold nothing yet. */
+  const MENUS = ['Mark', 'Commands', 'Net', 'View'] as const;
   const THEME_LABEL = { system: 'System', light: 'Light', dark: 'Dark' } as const;
 
-  let settingsOpen = $state(false);
+  type Popup = 'files' | 'settings';
+
+  /** The popup that is open; opening one closes the other. */
+  let open = $state<Popup | undefined>();
+
+  const toggle = (popup: Popup) => (open = open === popup ? undefined : popup);
 
   function checkForUpdates() {
-    settingsOpen = false;
+    open = undefined;
     onCheckForUpdates();
   }
 
+  function chooseFile(action: FileAction) {
+    open = undefined;
+    onFiles(action);
+  }
+
   function closeOnOutside(event: MouseEvent) {
-    if (settingsOpen && !(event.target as Element).closest('.settings')) {
-      settingsOpen = false;
+    if (open && !(event.target as Element).closest('.has-popup')) {
+      open = undefined;
     }
   }
 
-  function closeOnEscape(event: KeyboardEvent) {
-    if (settingsOpen && event.key === 'Escape') {
-      settingsOpen = false;
+  /** Escape closes the popup, and so does a shortcut: its action (a dialog, a pane change) takes over. */
+  function closeOnKey(event: KeyboardEvent) {
+    if (open && (event.key === 'Escape' || shortcutFor(event) !== undefined)) {
+      open = undefined;
     }
   }
 </script>
 
-<svelte:window onclick={closeOnOutside} onkeydown={closeOnEscape} />
+<svelte:window onclick={closeOnOutside} onkeydown={closeOnKey} />
+
+{#snippet popup(id: Popup, label: string, menu: Snippet)}
+  <div class="has-popup">
+    <button type="button" aria-haspopup="menu" aria-expanded={open === id} onclick={() => toggle(id)}>{label}</button>
+    {#if open === id}
+      {@render menu()}
+    {/if}
+  </div>
+{/snippet}
+
+{#snippet files()}
+  <FilesMenu onChoose={chooseFile} />
+{/snippet}
+
+{#snippet settings()}
+  <div class="popup" role="menu">
+    <button class="popup-item" type="button" role="menuitem" onclick={checkForUpdates}>Check for Updates…</button>
+  </div>
+{/snippet}
 
 <header class="top">
   <div class="brand">
@@ -58,24 +98,13 @@
   </div>
 
   <nav class="menu" aria-label="Main menu">
+    {@render popup('files', 'Files', files)}
     {#each MENUS as name (name)}
       <button class="placeholder" type="button">{name}</button>
     {/each}
     <!-- macOS: "Check for Updates…" is in the native app menu, the only thing Settings holds so far. -->
     {#if !nativeMenu}
-      <div class="settings">
-        <button
-          type="button"
-          aria-haspopup="menu"
-          aria-expanded={settingsOpen}
-          onclick={() => (settingsOpen = !settingsOpen)}>Settings</button
-        >
-        {#if settingsOpen}
-          <div class="popup" role="menu">
-            <button type="button" role="menuitem" onclick={checkForUpdates}>Check for Updates…</button>
-          </div>
-        {/if}
-      </div>
+      {@render popup('settings', 'Settings', settings)}
     {/if}
   </nav>
 
@@ -138,9 +167,9 @@
     gap: 2px;
   }
 
-  .menu button,
-  .tools button,
-  .popup button {
+  .menu > button,
+  .menu > .has-popup > button,
+  .tools button {
     height: 30px;
     padding: 0 9px;
     border: 1px solid transparent;
@@ -150,7 +179,8 @@
     cursor: default;
   }
 
-  .menu button:hover,
+  .menu > button:hover,
+  .menu > .has-popup > button:hover,
   .tools button:hover {
     border-color: var(--line);
     color: var(--text);
@@ -170,27 +200,6 @@
 
   .tools svg path {
     fill: currentColor;
-  }
-
-  .settings {
-    position: relative;
-  }
-
-  /* The look of the popup is in app.css. */
-  .popup {
-    position: absolute;
-    top: 34px;
-    left: 0;
-  }
-
-  .popup button {
-    width: 100%;
-    text-align: left;
-    color: var(--text);
-  }
-
-  .popup button:hover {
-    background: var(--panel-2);
   }
 
   .search {
@@ -219,7 +228,7 @@
     text-overflow: ellipsis;
   }
 
-  /* The menus that hold nothing yet give way first; Settings (the update check) stays at every width. */
+  /* The menus that hold nothing yet give way first; Files and Settings (the update check) stay at every width. */
   @media (max-width: 1100px) {
     .placeholder {
       display: none;

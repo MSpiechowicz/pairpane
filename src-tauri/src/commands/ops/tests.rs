@@ -8,19 +8,7 @@ use tauri::async_runtime::block_on;
 use tauri::ipc::InvokeResponseBody;
 
 use super::*;
-
-fn root() -> String {
-    if cfg!(windows) { "C:\\data" } else { "/data" }.to_owned()
-}
-
-/// A second absolute folder.
-fn elsewhere() -> String {
-    if cfg!(windows) { "C:\\x" } else { "/x" }.to_owned()
-}
-
-fn names(list: &[&str]) -> Vec<String> {
-    list.iter().map(|name| (*name).to_owned()).collect()
-}
+use crate::commands::testing::{elsewhere, names, root};
 
 /// A channel that records what it receives, decoded.
 fn collecting_channel() -> (Channel<OpsEvent>, Arc<Mutex<Vec<OpsEvent>>>) {
@@ -287,6 +275,24 @@ fn a_rename_needs_a_folder_and_two_plain_names() {
 
         assert_eq!(error.code(), IpcErrorCode::InvalidInput, "{path} {from} {to}");
     }
+}
+
+#[test]
+fn a_new_name_longer_than_a_file_name_can_be_is_refused_before_a_thread_is_taken() {
+    let ops = Ops::default();
+    let longest = "n".repeat(MAX_NAME_UNITS);
+    let too_long = "n".repeat(MAX_NAME_UNITS + 1);
+
+    // Held, so that a rename that got past the checks would be refused as busy.
+    let _held: Vec<_> = (0..RENAME_THREADS)
+        .map(|_| ops.begin_rename().expect("a place"))
+        .collect();
+
+    let error = block_on(ops.rename(root(), "a".to_owned(), too_long)).expect_err("too long");
+    assert_eq!(error.code(), IpcErrorCode::InvalidInput);
+
+    let error = block_on(ops.rename(root(), "a".to_owned(), longest)).expect_err("busy");
+    assert_eq!(error.code(), IpcErrorCode::Busy);
 }
 
 #[test]

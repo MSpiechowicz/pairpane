@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ops-delete"
+description = "Enables the ops_delete command without any pre-configured scope."
+commands.allow = ["ops_delete"]
+
+[[permission]]
+identifier = "deny-ops-delete"
+description = "Denies the ops_delete command without any pre-configured scope."
+commands.deny = ["ops_delete"]

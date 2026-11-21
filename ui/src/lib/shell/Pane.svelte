@@ -4,6 +4,7 @@
   import ColumnHeader from '$lib/panes/ColumnHeader.svelte';
   import type { Hotlist } from '$lib/panes/hotlist.svelte';
   import { handleKey } from '$lib/panes/keys';
+  import type { InlineRename } from '$lib/panes/inlineRename.svelte';
   import PaneFooter from '$lib/panes/PaneFooter.svelte';
   import PaneRow from '$lib/panes/PaneRow.svelte';
   import type { PaneTabs } from '$lib/panes/tabs.svelte';
@@ -24,6 +25,7 @@
     active,
     onActivate,
     onMenu,
+    rename,
   }: {
     /** Accessible name of the pane ("Left pane"). */
     label: string;
@@ -35,6 +37,8 @@
     active: boolean;
     onActivate: () => void;
     onMenu: (menu: Menu | undefined) => void;
+    /** The field for renaming a row in place; one for both panes. */
+    rename?: InlineRename;
   } = $props();
 
   const view = $derived(tabs.view);
@@ -42,6 +46,15 @@
   const uid = $props.id();
   let list = $state<HTMLElement>();
   let pageSize = $state(1);
+  /** The row of this pane that is being renamed in place. */
+  const editing = $derived(rename?.current?.view === view ? rename.current : undefined);
+
+  // A rename is for the folder and tab it was started in.
+  $effect(() => {
+    if (editing !== undefined && (editing.path !== listing.path || editing.tab !== tabs.active)) {
+      rename?.cancel();
+    }
+  });
 
   // The active pane's list holds the keyboard focus (Tab, a click or the start of the app make a pane active),
   // and keeps it when another tab is shown (the tab button that was clicked may be gone by then). A pane that
@@ -73,9 +86,12 @@
     return option ? Number(option.dataset.row) : undefined;
   }
 
+  /** A click in the rename field is for the field: it neither moves the cursor nor takes the focus away. */
+  const inField = (event: MouseEvent) => event.target instanceof Element && event.target.closest('input') !== null;
+
   function onclick(event: MouseEvent) {
     const row = rowOf(event);
-    if (row === undefined) {
+    if (row === undefined || inField(event)) {
       return;
     }
 
@@ -92,7 +108,7 @@
 
   function ondblclick(event: MouseEvent) {
     // Ctrl/Cmd/Shift clicks select (the clicks of a double click already did); they do not open.
-    if (event.ctrlKey || event.metaKey || event.shiftKey) {
+    if (event.ctrlKey || event.metaKey || event.shiftKey || inField(event)) {
       return;
     }
 
@@ -169,6 +185,7 @@
                 cursor={index === view.cursor}
                 selected={entry !== undefined && view.isSelected(entry.name)}
                 size={entry && view.sizes.text(entry)}
+                edit={editing !== undefined && entry?.name === editing.name ? rename : undefined}
               />
             {/snippet}
           </VirtualRows>

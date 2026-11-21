@@ -4,57 +4,40 @@
   import { IpcFailure, type Transport } from '$lib/ipc/transport';
   import Modal from '$lib/shell/Modal.svelte';
 
-  import { type OpRequest, stemLength } from './targets';
+  import { type Notice, perform, specOf } from './dialogs';
+  import type { OpRequest } from './targets';
 
   let {
     request,
     ipc,
     onClose,
     onDone,
+    onNotice,
   }: {
     request: OpRequest;
     ipc: Transport;
     onClose: () => void;
-    /** The job started, or the item was renamed (to `name`). */
+    /** The job started, the item was renamed or made, or the link was made (its name is `name`). */
     onDone: (name: string) => void;
+    /** Called before `onDone` when there is something to tell: a new file that was not opened. */
+    onNotice?: (notice: Notice) => void;
   } = $props();
 
-  const rename = $derived(request.kind === 'rename');
-  const verb = $derived({ copy: 'Copy', move: 'Move', rename: 'Rename' }[request.kind]);
-  const title = $derived(request.kind === 'rename' ? verb : `${verb} ${what(request.names)} to`);
+  const spec = $derived(specOf(request));
 
   // The dialog is made for one request: what the field starts with is read once.
-  let value = $state(untrack(() => (request.kind === 'rename' ? request.name : request.to)));
+  let value = $state(untrack(() => spec.initial));
   let verify = $state(false);
   let failure = $state<string | undefined>();
   let busy = $state(false);
 
-  /** `“a.pdf”` for one item, `3 items` for more. */
-  function what(names: string[]): string {
-    return names.length === 1 ? `“${names[0]}”` : `${names.length} items`;
-  }
-
   /** The field has the focus; a name has its stem selected so that typing keeps the extension. */
   function select(input: HTMLInputElement) {
     input.focus();
-    if (request.kind === 'rename') {
-      input.setSelectionRange(0, stemLength(request.name, request.dir));
-    } else {
+    if (spec.stem === undefined) {
       input.select();
-    }
-  }
-
-  async function run() {
-    if (request.kind === 'rename') {
-      await ipc.invoke('ops_rename', { path: request.path, from: request.name, to: value });
     } else {
-      await ipc.invoke('ops_start', {
-        kind: request.kind,
-        from: request.from,
-        names: request.names,
-        to: value,
-        verify,
-      });
+      input.setSelectionRange(0, spec.stem);
     }
   }
 
@@ -72,8 +55,12 @@
     busy = true;
     failure = undefined;
     try {
-      await run();
-      onDone(value);
+      const done = await perform(ipc, request, value, verify);
+      if (done.notice) {
+        onNotice?.(done.notice);
+      }
+
+      onDone(done.name);
     } catch (error) {
       failure = IpcFailure.from(error).message;
     } finally {
@@ -96,28 +83,31 @@
   }
 </script>
 
-<Modal {title} onClose={close}>
+<Modal title={spec.title} onClose={close}>
   <div class="row">
     <input
       type="text"
       spellcheck="false"
       autocomplete="off"
-      aria-label={rename ? 'New name' : 'Target folder'}
+      aria-label={spec.label}
       data-autofocus
       bind:value
       {onkeydown}
       {@attach select}
     />
-    {#if !rename}
-      <label class="check"><input type="checkbox" bind:checked={verify} {onkeydown} />Verify after {verb.toLowerCase()}</label>
+    {#if spec.verify}
+      <label class="check"><input type="checkbox" bind:checked={verify} {onkeydown} />Verify after {spec.confirm.toLowerCase()}</label>
     {/if}
   </div>
+  {#if spec.hint}
+    <p class="hint">{spec.hint}</p>
+  {/if}
   {#if failure}
     <p class="failure" role="alert">{failure}</p>
   {/if}
   <div class="mt-3 flex justify-end gap-2">
     <button class="btn" type="button" disabled={busy} onclick={close}>Cancel</button>
-    <button class="btn btn-primary" type="button" disabled={busy} onclick={submit}>{verb}</button>
+    <button class="btn btn-primary" type="button" disabled={busy} onclick={submit}>{spec.confirm}</button>
   </div>
 </Modal>
 
@@ -145,8 +135,16 @@
     outline: none;
   }
 
+  .hint,
   .failure {
     margin: 8px 0 0;
+  }
+
+  .hint {
+    color: var(--dim);
+  }
+
+  .failure {
     color: var(--danger);
   }
 </style>

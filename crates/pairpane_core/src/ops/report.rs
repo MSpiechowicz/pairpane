@@ -5,7 +5,7 @@ use std::io::{self, ErrorKind};
 use crate::model::{IpcError, IpcErrorCode};
 
 /// Windows `ERROR_PRIVILEGE_NOT_HELD`: creating a symbolic link without the privilege (or Developer Mode).
-const WINDOWS_NO_LINK_PRIVILEGE: i32 = 1314;
+pub(super) const WINDOWS_NO_LINK_PRIVILEGE: i32 = 1314;
 
 /// The error to show for `error`. The text never holds a path, so it is safe to display as it is.
 ///

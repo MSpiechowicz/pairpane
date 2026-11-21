@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ops-untrash"
+description = "Enables the ops_untrash command without any pre-configured scope."
+commands.allow = ["ops_untrash"]
+
+[[permission]]
+identifier = "deny-ops-untrash"
+description = "Denies the ops_untrash command without any pre-configured scope."
+commands.deny = ["ops_untrash"]

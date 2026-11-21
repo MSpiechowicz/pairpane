@@ -100,6 +100,9 @@ impl Ops {
     async fn rename(&self, path: String, from: String, to: String) -> CommandResult<()> {
         let source = resolve(Some(path.clone()), Some(&from))?;
         resolve(Some(path), Some(&to))?;
+        if !name_fits(&to) {
+            return Err(names_too_large());
+        }
         let folder = source.parent().map(ToOwned::to_owned).ok_or_else(unnamed)?;
         let permit = self.begin_rename()?;
 
@@ -169,14 +172,26 @@ pub async fn ops_rename(ops: State<'_, Ops>, path: String, from: String, to: Str
     ops.rename(path, from, to).await
 }
 
-/// Checks a request from the webview and builds the engine's: both folders pass `check_folder` and every name is a
-/// plain name inside `from` and short enough (the names together take at most [`MAX_NAMES_BYTES`], counted before
-/// duplicates are dropped); duplicate names are dropped (first one kept) and what is left is between 1 and
-/// [`MAX_NAMES`].
+/// Checks a request from the webview and builds the engine's: both folders pass `check_folder`, and the names pass
+/// [`checked_names`].
 fn request(kind: OpKind, from: String, names: Vec<String>, to: String, verify: bool) -> CommandResult<Request> {
     let from = resolve(Some(from), None)?;
     let to = resolve(Some(to), None)?;
+    let names = checked_names(&from, names)?;
 
+    Ok(Request {
+        kind,
+        from,
+        names,
+        to,
+        verify,
+    })
+}
+
+/// Checks the names of the items to change inside `folder`: every one is a plain name inside it and short enough (the
+/// names together take at most [`MAX_NAMES_BYTES`], counted before duplicates are dropped); duplicates are dropped
+/// (first one kept) and what is left is between 1 and [`MAX_NAMES`].
+pub(super) fn checked_names(folder: &Path, names: Vec<String>) -> CommandResult<Vec<String>> {
     let mut seen = HashSet::new();
     let mut unique = Vec::new();
     let mut bytes = 0_usize;
@@ -186,7 +201,7 @@ fn request(kind: OpKind, from: String, names: Vec<String>, to: String, verify: b
         if !name_fits(&name) || bytes > MAX_NAMES_BYTES {
             return Err(names_too_large());
         }
-        check_name(&from, &name)?;
+        check_name(folder, &name)?;
 
         if seen.contains(&name) {
             continue;
@@ -202,17 +217,11 @@ fn request(kind: OpKind, from: String, names: Vec<String>, to: String, verify: b
         return Err(item_count());
     }
 
-    Ok(Request {
-        kind,
-        from,
-        names: unique,
-        to,
-        verify,
-    })
+    Ok(unique)
 }
 
 /// A name is a single plain name whose path inside `folder` passes the folder rules.
-fn check_name(folder: &Path, name: &str) -> CommandResult<()> {
+pub(super) fn check_name(folder: &Path, name: &str) -> CommandResult<()> {
     if !platform::is_plain_name(name) {
         return Err(CommandError::new(
             IpcErrorCode::InvalidInput,
@@ -230,14 +239,14 @@ fn item_count() -> CommandError {
     )
 }
 
-fn names_too_large() -> CommandError {
+pub(super) fn names_too_large() -> CommandError {
     CommandError::new(
         IpcErrorCode::InvalidInput,
         "an item name, or the names together, are too long",
     )
 }
 
-fn unnamed() -> CommandError {
+pub(super) fn unnamed() -> CommandError {
     CommandError::new(IpcErrorCode::InvalidInput, "an item name must be a single plain name")
 }
 
@@ -260,8 +269,8 @@ fn rename_error(error: &io::Error) -> CommandError {
     CommandError::new(code, message)
 }
 
-/// The engine's refusal as a command error.
-fn failed(error: impl Into<IpcError>) -> CommandError {
+/// A refusal as a command error.
+pub(super) fn failed(error: impl Into<IpcError>) -> CommandError {
     let error = error.into();
 
     CommandError::new(error.code, error.message)
