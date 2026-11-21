@@ -74,6 +74,21 @@ trash = "5.4.0"
 # The local time of a `.trashinfo` record (`DeletionDate`) on Linux and the BSDs; the version the lockfile has through
 # `trash` (MIT or Unlicense). Only the system time zone is read: `std`, `tz-system` and `tzdb-zoneinfo`.
 jiff = { version = "1.0.1", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
+# The file viewer (pairpane_core::view), all safe APIs. `encoding_rs` decodes the text encodings of the web and `chardetng`
+# guesses one from a sample (no multi-threading); `pulldown-cmark` parses Markdown into a tree the webview draws itself (no
+# HTML is ever produced, so its HTML renderer is off); `tar` lists the entries of a tar and `flate2` (the pure Rust
+# zlib-rs backend) inflates a `.tar.gz` for that listing, never to disk; `memchr` finds the newlines and the search text
+# in a chunk quickly. A zip's central directory is read by pairpane_core::view::zip_list itself, not by a zip crate,
+# which sizes its tables from counts a crafted file declares.
+encoding_rs = "0.8.44"
+chardetng = { version = "1.0.0", default-features = false }
+pulldown-cmark = { version = "0.13.6", default-features = false }
+tar = { version = "0.4.46", default-features = false }
+flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }
+memchr = "2.8.3"
+# The tokens of the viewer's media scheme (pairpane-media, src-tauri/src/commands/view): 128 random bits from the system's
+# generator, so a page cannot guess a token. A safe API; already in the lockfile through tauri's own dependencies.
+getrandom = "0.4.3"
 # Dev dependencies
 pretty_assertions = "1.4"
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }

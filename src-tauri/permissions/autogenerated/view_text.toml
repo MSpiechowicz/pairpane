@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-view-text"
+description = "Enables the view_text command without any pre-configured scope."
+commands.allow = ["view_text"]
+
+[[permission]]
+identifier = "deny-view-text"
+description = "Denies the view_text command without any pre-configured scope."
+commands.deny = ["view_text"]

@@ -8,20 +8,27 @@ mod app;
 mod ipc_error;
 mod items;
 mod listing;
+mod markdown;
 mod ops;
 mod state;
 mod tasks;
 mod update;
+mod view;
 mod volume;
 
 pub use app::AppInfo;
 pub use ipc_error::{IpcError, IpcErrorCode};
 pub use items::{LinkKind, TrashOutcome};
 pub use listing::{Crumb, Entry, EntryKind, ListEvent, PaneId, SizeEvent};
+pub use markdown::{MdBlock, MdDocument, MdInline, MdListItem};
 pub use ops::{
     Answer, ConflictInfo, ControlAction, FileFacts, ItemError, JobId, JobPhase, JobView, OpKind, OpsEvent, Outcome,
 };
 pub use state::{SavedPane, SavedState, SavedTab, SortColumn};
 pub use tasks::{AttributeChange, HashAlgorithm, ItemProperties, JobTask, ModeChange, WindowsAttributes};
 pub use update::{MAX_UPDATE_NOTES_BYTES, MenuCommand, UpdateInfo, UpdatePhase, UpdateProgress};
+pub use view::{
+    ArchiveEntry, ArchiveFormat, ArchiveListing, SearchHit, SearchNeedle, SearchQuery, TextLine, TextQuery, TextWindow,
+    ViewKind, ViewOpened,
+};
 pub use volume::{Volume, VolumeEvent, VolumeKind};

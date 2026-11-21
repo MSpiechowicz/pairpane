@@ -10,10 +10,13 @@
 
   let {
     title,
+    variant = 'dialog',
     onClose,
     children,
   }: {
     title: string;
+    /** `full` fills the window (the viewer); its title is for assistive technology only. */
+    variant?: 'dialog' | 'full';
     /** Escape. Without it the dialog can only be left by one of its own buttons. */
     onClose?: () => void;
     children: Snippet;
@@ -73,7 +76,7 @@
 
 <svelte:window {onkeydown} />
 
-<div class="backdrop fade-in">
+<div class="backdrop fade-in" class:full={variant === 'full'}>
   <div class="popup modal" role="dialog" aria-modal="true" aria-labelledby={titleId} tabindex="-1" bind:this={dialog} {@attach wire}>
     <h2 id={titleId}>{title}</h2>
     {@render children()}
@@ -95,6 +98,32 @@
   .modal {
     width: min(520px, calc(100vw - 32px));
     padding: 16px;
+  }
+
+  .full {
+    align-items: stretch;
+    padding: 0;
+    background: var(--bg);
+  }
+
+  .full .modal {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .full h2 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
   }
 
   .modal:focus {

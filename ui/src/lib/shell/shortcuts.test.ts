@@ -43,6 +43,19 @@ describe('shortcutFor', () => {
     expect(press('J', { ctrlKey: true })).toBe('transfers'); // caps lock
   });
 
+  it('F3 views the file and Ctrl+Q swaps the other pane for a quick view', () => {
+    expect(press('F3')).toBe('view');
+    expect(press('F3', { shiftKey: true })).toBeUndefined();
+    expect(press('F3', { ctrlKey: true })).toBeUndefined();
+    expect(press('F3', { altKey: true })).toBeUndefined();
+    expect(press('F3', { metaKey: true })).toBeUndefined();
+    expect(press('q', { ctrlKey: true })).toBe('quickView');
+    expect(press('Q', { ctrlKey: true })).toBe('quickView'); // caps lock
+    expect(press('q', { ctrlKey: true, shiftKey: true })).toBeUndefined();
+    expect(press('q', { metaKey: true })).toBeUndefined(); // Cmd+Q quits the app on macOS
+    expect(press('q')).toBeUndefined();
+  });
+
   it('F2 renames in place, F7 makes a folder and Shift+F4 a file', () => {
     expect(press('F2')).toBe('renameInline');
     expect(press('F7')).toBe('newFolder');
@@ -79,7 +92,7 @@ describe('shortcutFor', () => {
   });
 
   it('other function keys and modified F5 and F6 are not shortcuts', () => {
-    expect(press('F3')).toBeUndefined();
+    expect(press('F9')).toBeUndefined();
     expect(press('F5', { shiftKey: true })).toBeUndefined();
     expect(press('F5', { ctrlKey: true })).toBeUndefined();
     expect(press('F6', { altKey: true })).toBeUndefined();

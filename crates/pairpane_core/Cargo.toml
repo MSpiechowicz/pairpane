@@ -11,15 +11,21 @@ publish = false
 [dependencies]
 base64.workspace = true
 blake3.workspace = true
+chardetng.workspace = true
 crc32fast.workspace = true
+encoding_rs.workspace = true
+flate2.workspace = true
 fs4.workspace = true
 md-5.workspace = true
+memchr.workspace = true
 minisign-verify.workspace = true
 notify.workspace = true
+pulldown-cmark.workspace = true
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+tar.workspace = true
 tracing.workspace = true
 ts-rs.workspace = true
 

@@ -31,6 +31,15 @@ const COMMANDS: &[&str] = &[
     "ops_link",
     "ops_task",
     "ops_properties",
+    "view_open",
+    "view_close",
+    "view_bytes",
+    "view_text",
+    "view_search",
+    "view_search_cancel",
+    "view_markdown",
+    "view_archive",
+    "view_media",
 ];
 
 fn main() {

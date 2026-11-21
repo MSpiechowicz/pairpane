@@ -80,4 +80,20 @@ describe('Modal', () => {
     expect(upper).toHaveBeenCalledOnce();
     expect(lower).not.toHaveBeenCalled();
   });
+
+  it('the full variant is the same dialog: labelled, closed by Escape, giving the focus back', async () => {
+    const before = document.body.appendChild(document.createElement('button'));
+    before.focus();
+    const onClose = vi.fn();
+
+    const { unmount } = render(Modal, { title: 'a.pdf', variant: 'full', onClose, children: buttons });
+    expect(screen.getByRole('dialog', { name: 'a.pdf' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'One' })).toHaveFocus();
+
+    await fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+
+    unmount();
+    expect(before).toHaveFocus();
+  });
 });

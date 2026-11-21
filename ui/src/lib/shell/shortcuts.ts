@@ -21,9 +21,11 @@ export type Action =
   | 'trash'
   | 'deletePermanently'
   | 'properties'
-  | 'transfers';
+  | 'transfers'
+  | 'view'
+  | 'quickView';
 
-/** Ctrl + key. (Ctrl on every OS: on macOS Cmd+W already closes the window.) */
+/** Ctrl + key. (Ctrl on every OS: on macOS Cmd+W already closes the window and Cmd+Q quits the app.) */
 function withCtrl(event: KeyboardEvent): Action | undefined {
   if (event.key === 'Tab') {
     return event.shiftKey ? 'previousTab' : 'nextTab';
@@ -42,6 +44,8 @@ function withCtrl(event: KeyboardEvent): Action | undefined {
       return 'hotlist';
     case 'j':
       return 'transfers';
+    case 'q':
+      return 'quickView';
     default:
       return undefined;
   }
@@ -70,13 +74,15 @@ function withAlt(event: KeyboardEvent): Action | undefined {
 }
 
 /**
- * A function key on its own, or Delete: F5 copies, F6 moves, Shift+F6 renames, F2 renames in place, F7 makes a
+ * A function key on its own, or Delete: F3 views the file, F5 copies, F6 moves, Shift+F6 renames, F2 renames in place, F7 makes a
  * folder, Shift+F4 a file, F8 and Delete move to the Trash, Shift+F8 and Shift+Delete delete for good.
  */
 function functionKey(event: KeyboardEvent): Action | undefined {
   switch (event.key) {
     case 'F2':
       return event.shiftKey ? undefined : 'renameInline';
+    case 'F3':
+      return event.shiftKey ? undefined : 'view';
     case 'F4':
       return event.shiftKey ? 'newFile' : undefined;
     case 'F5':

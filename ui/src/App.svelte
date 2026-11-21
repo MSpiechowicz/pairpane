@@ -26,6 +26,9 @@
   import TopBar from '$lib/shell/TopBar.svelte';
   import UpdateCard from '$lib/updates/UpdateCard.svelte';
   import { Updates } from '$lib/updates/updates.svelte';
+  import QuickView from '$lib/viewer/QuickView.svelte';
+  import { Viewer } from '$lib/viewer/viewer.svelte';
+  import ViewerOverlay from '$lib/viewer/ViewerOverlay.svelte';
 
   type Side = 'left' | 'right';
 
@@ -56,12 +59,15 @@
   const transfers = new Transfers(ipc);
   let panelOpen = $state(false);
   const files = new FileActions(ipc, panes, () => active);
+  const viewer = new Viewer(ipc, panes, () => active);
   const question = $derived(transfers.question);
-  /** A dialog has the keyboard: the shortcuts and Tab are its own then. */
-  const modal = $derived(files.modal || question !== undefined);
+  /** A dialog (or the viewer's overlay) has the keyboard: the shortcuts and Tab are its own then. */
+  const modal = $derived(files.modal || question !== undefined || viewer.modal);
 
   function onDockKey(key: string) {
-    if (key === 'F5') {
+    if (key === 'F3') {
+      viewer.open();
+    } else if (key === 'F5') {
       files.run('copy');
     } else if (key === 'F6') {
       files.run('move');
@@ -80,13 +86,14 @@
   /**
    * Tab switches the active pane while focus is in a pane's list or nowhere (the page itself). In the top bar, the
    * menus (a pane's dropdowns too), the dock and a pane's text fields (the mask prompt) it moves focus as usual,
-   * so every control stays reachable from the keyboard.
+   * so every control stays reachable from the keyboard. While the quick view is open there is one pane to work in.
    */
   function switchPane(event: KeyboardEvent) {
     const target = event.target;
     const inPane = target === document.body || (target instanceof Element && target.closest('[data-pane]'));
     const inMenu = target instanceof Element && target.closest('[data-menu]') !== null;
     if (
+      viewer.quick ||
       event.key !== 'Tab' ||
       event.shiftKey ||
       event.ctrlKey ||
@@ -168,6 +175,12 @@
       case 'transfers':
         panelOpen = !panelOpen;
         break;
+      case 'view':
+        viewer.open();
+        break;
+      case 'quickView':
+        viewer.toggleQuick();
+        break;
     }
 
     event.preventDefault();
@@ -232,17 +245,21 @@
 
   <main class="panes">
     {#each ['left', 'right'] as const as side (side)}
-      <Pane
-        label={side === 'left' ? 'Left pane' : 'Right pane'}
-        tabs={panes[side]}
-        {volumes}
-        {hotlist}
-        menu={menu?.side === side ? menu.kind : undefined}
-        active={active === side}
-        rename={files.rename}
-        onActivate={() => (active = side)}
-        onMenu={(kind) => (menu = kind === undefined ? undefined : { side, kind })}
-      />
+      {#if viewer.quick && side !== active}
+        <QuickView {viewer} />
+      {:else}
+        <Pane
+          label={side === 'left' ? 'Left pane' : 'Right pane'}
+          tabs={panes[side]}
+          {volumes}
+          {hotlist}
+          menu={menu?.side === side ? menu.kind : undefined}
+          active={active === side}
+          rename={files.rename}
+          onActivate={() => (active = side)}
+          onMenu={(kind) => (menu = kind === undefined ? undefined : { side, kind })}
+        />
+      {/if}
     {/each}
   </main>
 
@@ -298,6 +315,10 @@
   {#key `${question.info.job}:${question.info.question}`}
     <ConflictDialog {transfers} {question} />
   {/key}
+{/if}
+
+{#if viewer.overlay}
+  <ViewerOverlay session={viewer.overlay} onClose={() => viewer.close()} />
 {/if}
 
 <Splash onEnd={focusActiveList} />

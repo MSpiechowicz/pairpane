@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-view-markdown"
+description = "Enables the view_markdown command without any pre-configured scope."
+commands.allow = ["view_markdown"]
+
+[[permission]]
+identifier = "deny-view-markdown"
+description = "Denies the view_markdown command without any pre-configured scope."
+commands.deny = ["view_markdown"]

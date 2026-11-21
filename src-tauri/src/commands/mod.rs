@@ -9,6 +9,7 @@ pub mod panes;
 pub mod sizes;
 pub mod state;
 pub mod updates;
+pub mod view;
 pub mod volumes;
 
 #[cfg(test)]

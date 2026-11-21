@@ -125,6 +125,12 @@ mod volume;
 #[cfg(any(windows, test))]
 mod win_attrs;
 
+/// Opens the regular file `listed` below `base` for reading, with its metadata, the way a checksum check opens the files
+/// it lists (no link followed, no pipe waited on); the file viewer opens its file through this.
+pub(crate) fn open_listed(base: &std::path::Path, listed: &str) -> std::io::Result<(std::fs::File, std::fs::Metadata)> {
+    listed::open_listed(base, listed)
+}
+
 #[cfg(test)]
 mod announce_tests;
 #[cfg(test)]

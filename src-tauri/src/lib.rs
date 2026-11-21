@@ -42,6 +42,7 @@ pub fn run() -> ExitCode {
             app.manage(commands::volumes::Volumes::default());
             app.manage(commands::ops::Ops::default());
             app.manage(commands::items::Items::default());
+            app.manage(commands::view::Viewer::default());
             // Next to the window-state plugin's file. Without a config folder nothing is saved.
             let state_file = app.path().app_config_dir().ok().map(|dir| dir.join("state.json"));
             app.manage(commands::state::StateStore::new(state_file));
@@ -52,6 +53,10 @@ pub fn run() -> ExitCode {
             tracing::info!(%version, "Pairpane started");
 
             Ok(())
+        })
+        // The media of the viewer (audio and video) is served from the files it holds open, by token (commands/view/serve.rs).
+        .register_asynchronous_uri_scheme_protocol(commands::view::serve::SCHEME, |context, request, responder| {
+            commands::view::serve::handle(context.app_handle(), &request, responder);
         })
         .invoke_handler(tauri::generate_handler![
             commands::app::app_info,
@@ -77,6 +82,15 @@ pub fn run() -> ExitCode {
             commands::items::ops_mkfile,
             commands::items::ops_link,
             commands::items::props::ops_properties,
+            commands::view::view_open,
+            commands::view::view_close,
+            commands::view::read::view_bytes,
+            commands::view::read::view_text,
+            commands::view::read::view_markdown,
+            commands::view::read::view_archive,
+            commands::view::search::view_search,
+            commands::view::search::view_search_cancel,
+            commands::view::media::view_media,
         ])
         .build(tauri::generate_context!())
         .map(|app| {

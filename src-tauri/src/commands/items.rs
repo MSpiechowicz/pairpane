@@ -309,13 +309,16 @@ pub async fn ops_link(
 }
 
 /// Takes one place of `cap`, or refuses as busy.
-fn begin(cap: &ThreadCap, max: usize) -> CommandResult<Permit> {
+pub(super) fn begin(cap: &ThreadCap, max: usize) -> CommandResult<Permit> {
     cap.acquire(max)
         .ok_or_else(|| CommandError::new(IpcErrorCode::Busy, "a folder is not responding; try again shortly"))
 }
 
 /// Runs `work` on a blocking thread that holds `permit` until it ends, however it ends.
-async fn blocking<T: Send + 'static>(permit: Permit, work: impl FnOnce() -> T + Send + 'static) -> CommandResult<T> {
+pub(super) async fn blocking<T: Send + 'static>(
+    permit: Permit,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> CommandResult<T> {
     let done = async_runtime::spawn_blocking(move || {
         let _permit = permit;
 
@@ -328,7 +331,7 @@ async fn blocking<T: Send + 'static>(permit: Permit, work: impl FnOnce() -> T + 
 
 /// Runs `work` in the folder `folder` on a blocking thread (see [`blocking`]), given the path to use for it: first of
 /// all the folder is resolved by `platform::local_path`, and a path that is not local fails the work.
-async fn in_folder<T: Send + 'static>(
+pub(super) async fn in_folder<T: Send + 'static>(
     permit: Permit,
     folder: PathBuf,
     work: impl FnOnce(&Path) -> io::Result<T> + Send + 'static,

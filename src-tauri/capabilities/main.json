@@ -26,6 +26,15 @@
     "allow-ops-mkfile",
     "allow-ops-link",
     "allow-ops-task",
-    "allow-ops-properties"
+    "allow-ops-properties",
+    "allow-view-open",
+    "allow-view-close",
+    "allow-view-bytes",
+    "allow-view-text",
+    "allow-view-search",
+    "allow-view-search-cancel",
+    "allow-view-markdown",
+    "allow-view-archive",
+    "allow-view-media"
   ]
 }

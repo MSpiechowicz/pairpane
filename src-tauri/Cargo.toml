@@ -30,6 +30,7 @@ tauri-plugin-opener.workspace = true
 tauri-plugin-single-instance.workspace = true
 tauri-plugin-window-state.workspace = true
 serde.workspace = true
+getrandom.workspace = true
 time.workspace = true
 # `log` feature: tracing events from the core crate reach tauri-plugin-log (no subscriber is installed).
 tracing = { workspace = true, features = ["log"] }
