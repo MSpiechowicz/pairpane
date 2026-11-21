@@ -15,11 +15,11 @@ pub(super) fn idle() -> AtomicBool {
     AtomicBool::new(false)
 }
 
-pub(super) fn temp() -> TempDir {
+pub(crate) fn temp() -> TempDir {
     tempfile::tempdir().expect("a temporary folder")
 }
 
-pub(super) fn put(folder: &Path, name: &str, bytes: &[u8]) {
+pub(crate) fn put(folder: &Path, name: &str, bytes: &[u8]) {
     fs::write(folder.join(name), bytes).expect("write");
 }
 
@@ -57,4 +57,14 @@ pub(super) fn window(file: &ViewFile, offset: u64, backward: bool, lines: u32) -
 /// The texts of the lines of a window.
 pub(super) fn texts(window: &TextWindow) -> Vec<&str> {
     window.lines.iter().map(|line| line.text.as_str()).collect()
+}
+
+/// Makes the pipe `name` in `folder`, which an ordinary open waits on for ever until someone writes to it.
+#[cfg(unix)]
+pub(crate) fn fifo(folder: &Path, name: &str) {
+    let status = std::process::Command::new("mkfifo")
+        .arg(folder.join(name))
+        .status()
+        .expect("mkfifo runs");
+    assert!(status.success());
 }

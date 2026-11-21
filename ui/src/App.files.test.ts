@@ -134,10 +134,9 @@ describe('new file', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('A file with that name already exists.');
   });
 
-  it('plain F4 and Shift+F7 are nothing', async () => {
+  it('Shift+F7 is nothing', async () => {
     await shown();
 
-    await key(listbox('Left'), 'F4');
     await key(listbox('Left'), 'F7', { shiftKey: true });
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -161,6 +160,7 @@ describe('the Files menu', () => {
     expect(screen.getAllByRole('menuitem').map((item) => item.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
       'New folder F7',
       'New file Shift+F4',
+      'Edit in built-in editor',
       'Rename F2',
       'Delete F8',
       'Create symbolic link…',

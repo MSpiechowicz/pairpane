@@ -57,4 +57,7 @@ pub struct UpdateProgress {
 pub enum MenuCommand {
     /// "Check for Updates…" was chosen.
     CheckForUpdates,
+    /// The window is being closed (or the app quit) while the editor has unsaved changes: the UI asks, and answers
+    /// with `app_close_confirmed` to go on.
+    CloseRequested,
 }

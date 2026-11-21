@@ -3,4 +3,4 @@
 /**
  * A native menu command, sent to the UI over the channel it registered with `menu_subscribe`.
  */
-export type MenuCommand = "checkForUpdates";
+export type MenuCommand = "checkForUpdates" | "closeRequested";

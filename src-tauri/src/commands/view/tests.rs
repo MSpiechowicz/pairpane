@@ -13,17 +13,8 @@ use tauri::async_runtime::block_on;
 
 use super::*;
 use crate::commands::limit::Permit;
+pub(super) use crate::commands::testing::folder_with;
 use crate::commands::testing::root;
-
-pub(super) fn folder_with(files: &[(&str, &[u8])]) -> (tempfile::TempDir, String) {
-    let folder = tempfile::tempdir().expect("folder");
-    for (name, bytes) in files {
-        fs::write(folder.path().join(name), bytes).expect("file");
-    }
-    let path = folder.path().to_string_lossy().into_owned();
-
-    (folder, path)
-}
 
 pub(super) fn open(viewer: &Viewer, path: &str, name: &str) -> ViewOpened {
     block_on(viewer.open(path.to_owned(), name.to_owned())).expect("opened")

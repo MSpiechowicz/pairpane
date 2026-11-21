@@ -120,12 +120,15 @@ describe('App', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
-  it('on macOS the top bar has no Settings menu (the native menu has the update check) and shows ⌘K', () => {
+  it('on macOS the Settings menu has no update check (the native menu has it) and the top bar shows ⌘K', async () => {
     vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)');
     backend(() => Promise.resolve({ name: 'Pairpane', version: '0.1.0' }));
     render(App);
 
-    expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+
+    expect(screen.getByRole('menuitem', { name: 'Edit Settings…' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Check for Updates…' })).not.toBeInTheDocument();
     expect(screen.getByText('⌘K')).toBeInTheDocument();
   });
 

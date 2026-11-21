@@ -11,8 +11,8 @@ repository = "https://github.com/MSpiechowicz/pairpane"
 rust-version = "1.98"
 
 [workspace.lints.rust]
-# Denied, not forbidden: the few modules that call into the system (`pairpane_core::ops::win_attrs` and the HEIC decoders
-# of `pairpane_core::view::heic`) allow it, each with a reason and a `SAFETY` comment on every block.
+# Denied, not forbidden: the few modules that call into the system (`pairpane_core::ops::win_attrs`, the `ReplaceFileW`
+# call of `pairpane_core::edit::win_replace` and the HEIC decoders of `pairpane_core::view::heic`) allow it, each with a reason and a `SAFETY` comment on every block.
 unsafe_code = "deny"
 
 [workspace.lints.clippy]
@@ -31,6 +31,9 @@ tauri-plugin-single-instance = "2.5.2"
 tauri-plugin-window-state = "2.5.0"
 tauri-plugin-opener = "2.7.0"
 tauri-plugin-log = "2.10.0"
+# Native confirmation before an external editor program is started (src-tauri/src/commands/edit); shown from Rust only, no
+# dialog permission is granted to the webview.
+tauri-plugin-dialog = "2.8.4"
 # Updater public-key validation (pairpane_core::update). Kept on the versions tauri-plugin-updater uses,
 # so the app accepts exactly the keys the updater can verify signatures with.
 base64 = "0.23"

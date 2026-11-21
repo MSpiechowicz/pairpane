@@ -42,14 +42,25 @@ export class Updates {
 
   readonly #ipc: Transport;
   readonly #currentVersion: () => string | undefined;
+  readonly #mayRelaunch: () => Promise<boolean>;
   /** Bumped by every check: only the latest check may change the state. */
   #checks = 0;
   /** Installed in this session but not running until a restart: never offered again. */
   #installed: string | undefined;
 
-  constructor(ipc: Transport, currentVersion: () => string | undefined = () => undefined) {
+  /**
+   * `mayRelaunch` is asked before anything that ends the app (an install, where the installer takes over and exits
+   * the app, and a restart: neither can be stopped once begun), so only this can keep them from losing unsaved
+   * changes. It resolves at once when there are none.
+   */
+  constructor(
+    ipc: Transport,
+    currentVersion: () => string | undefined = () => undefined,
+    mayRelaunch: () => Promise<boolean> = () => Promise.resolve(true),
+  ) {
     this.#ipc = ipc;
     this.#currentVersion = currentVersion;
+    this.#mayRelaunch = mayRelaunch;
   }
 
   get busy(): boolean {
@@ -99,6 +110,12 @@ export class Updates {
       return;
     }
 
+    // On Windows the installer exits the app: the editor's unsaved changes are asked about first (elsewhere
+    // that costs nothing unless there are some). No is the end of it; the update stays on offer.
+    if (!(await this.#mayRelaunch())) {
+      return;
+    }
+
     this.state = { kind: 'installing', info, progress: undefined };
 
     try {
@@ -121,6 +138,10 @@ export class Updates {
 
   /** Restarts into the installed version. */
   async relaunch(): Promise<void> {
+    if (!(await this.#mayRelaunch())) {
+      return;
+    }
+
     await this.#ipc.invoke('app_relaunch', undefined);
   }
 

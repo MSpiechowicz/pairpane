@@ -12,7 +12,7 @@ const MIN_PAIRS: usize = 8;
 
 /// The encoding with this label (`UTF-8`, `windows-1250`, `latin1`). The labels of the replacement encodings
 /// (ISO-2022-KR, HZ-GB-2312 and the like, which decode to nothing useful) are refused with the unknown ones.
-pub(super) fn by_name(label: &str) -> io::Result<&'static Encoding> {
+pub(crate) fn by_name(label: &str) -> io::Result<&'static Encoding> {
     Encoding::for_label_no_replacement(label.trim().as_bytes())
         .ok_or_else(|| refusal(io::ErrorKind::InvalidInput, "the encoding is not known"))
 }
@@ -24,7 +24,7 @@ pub fn is_known_encoding(label: &str) -> bool {
 
 /// The length of the byte order mark of `encoding` at the start of `head`: only a mark that belongs to that
 /// encoding counts, so a file read as another encoding shows the mark's bytes as they are.
-pub(super) fn bom_len(head: &[u8], encoding: &'static Encoding) -> usize {
+pub(crate) fn bom_len(head: &[u8], encoding: &'static Encoding) -> usize {
     let (found, length) = match Encoding::for_bom(head) {
         Some(found) => found,
         None => return 0,
@@ -75,7 +75,7 @@ pub(super) fn utf16(sample: &[u8]) -> Option<&'static Encoding> {
 /// The encoding of a file from its first bytes: a byte order mark, UTF-16 without one, valid UTF-8 (a character cut
 /// at the end of the sample is not an error) and otherwise the guess of chardetng. `complete` says the sample is the
 /// whole file.
-pub(super) fn detect(sample: &[u8], complete: bool) -> &'static Encoding {
+pub(crate) fn detect(sample: &[u8], complete: bool) -> &'static Encoding {
     if let Some(found) = utf16(sample) {
         return found;
     }
@@ -97,6 +97,6 @@ pub(super) fn detect(sample: &[u8], complete: bool) -> &'static Encoding {
 }
 
 /// Whether `encoding` stores a character in two-byte units.
-pub(super) fn is_utf16(encoding: &'static Encoding) -> bool {
+pub(crate) fn is_utf16(encoding: &'static Encoding) -> bool {
     encoding == UTF_16LE || encoding == UTF_16BE
 }

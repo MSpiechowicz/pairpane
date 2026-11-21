@@ -1,9 +1,8 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
 
-  import type { FileAction } from '$lib/ops/dialogs';
-
   import FilesMenu from './FilesMenu.svelte';
+  import type { FilesChoice } from './menu';
   import { shortcutFor } from './shortcuts';
   import type { Theme } from './theme.svelte';
 
@@ -14,20 +13,23 @@
     nativeMenu,
     showHidden,
     onCheckForUpdates,
+    onEditSettings,
     onToggleHidden,
     onFiles,
   }: {
     version: string | undefined;
     failure: string | undefined;
     theme: Theme;
-    /** macOS: the native app menu holds "Check for Updates…", so the top bar does not repeat it. */
+    /** macOS: the native app menu holds "Check for Updates…", so the Settings menu does not repeat it. */
     nativeMenu: boolean;
     /** Whether the panes list hidden files. */
     showHidden: boolean;
     onCheckForUpdates: () => void;
+    /** "Edit Settings…": the settings file opens in the system's editor for it. */
+    onEditSettings: () => void;
     onToggleHidden: () => void;
     /** An item of the Files menu was chosen; it does what its key does. */
-    onFiles: (action: FileAction) => void;
+    onFiles: (action: FilesChoice) => void;
   } = $props();
 
   /** The menus that hold nothing yet. */
@@ -46,7 +48,12 @@
     onCheckForUpdates();
   }
 
-  function chooseFile(action: FileAction) {
+  function editSettings() {
+    open = undefined;
+    onEditSettings();
+  }
+
+  function chooseFile(action: FilesChoice) {
     open = undefined;
     onFiles(action);
   }
@@ -82,7 +89,10 @@
 
 {#snippet settings()}
   <div class="popup" role="menu">
-    <button class="popup-item" type="button" role="menuitem" onclick={checkForUpdates}>Check for Updates…</button>
+    <button class="popup-item" type="button" role="menuitem" onclick={editSettings}>Edit Settings…</button>
+    {#if !nativeMenu}
+      <button class="popup-item" type="button" role="menuitem" onclick={checkForUpdates}>Check for Updates…</button>
+    {/if}
   </div>
 {/snippet}
 
@@ -102,10 +112,7 @@
     {#each MENUS as name (name)}
       <button class="placeholder" type="button">{name}</button>
     {/each}
-    <!-- macOS: "Check for Updates…" is in the native app menu, the only thing Settings holds so far. -->
-    {#if !nativeMenu}
-      {@render popup('settings', 'Settings', settings)}
-    {/if}
+    {@render popup('settings', 'Settings', settings)}
   </nav>
 
   <button class="search" type="button">
@@ -228,7 +235,7 @@
     text-overflow: ellipsis;
   }
 
-  /* The menus that hold nothing yet give way first; Files and Settings (the update check) stay at every width. */
+  /* The menus that hold nothing yet give way first; Files and Settings stay at every width. */
   @media (max-width: 1100px) {
     .placeholder {
       display: none;

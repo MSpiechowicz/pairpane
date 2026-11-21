@@ -75,8 +75,15 @@ export class Viewer {
   /** F3: the overlay for the file under the cursor. A folder, `..` and an empty pane have nothing to view. */
   open() {
     const target = this.under;
-    if (this.overlay === undefined && typeof target === 'object') {
-      this.overlay = new ViewSession(this.#ipc, target.path, target.name);
+    if (typeof target === 'object') {
+      this.openAt(target);
+    }
+  }
+
+  /** The overlay for `target`, with a word on why it is shown when it was not asked for (the editor sent it). */
+  openAt(target: Target, notice?: string) {
+    if (this.overlay === undefined) {
+      this.overlay = new ViewSession(this.#ipc, target.path, target.name, notice);
     }
   }
 

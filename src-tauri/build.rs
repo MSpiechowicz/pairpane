@@ -41,6 +41,13 @@ const COMMANDS: &[&str] = &[
     "view_archive",
     "view_image_decode",
     "view_media",
+    "edit_open",
+    "edit_save",
+    "edit_external",
+    "settings_open",
+    "editor_set_dirty",
+    "editor_close_ack",
+    "app_close_confirmed",
 ];
 
 fn main() {

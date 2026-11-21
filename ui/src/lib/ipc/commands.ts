@@ -2,13 +2,17 @@ import type { Answer } from './bindings/Answer';
 import type { AppInfo } from './bindings/AppInfo';
 import type { ArchiveListing } from './bindings/ArchiveListing';
 import type { ControlAction } from './bindings/ControlAction';
+import type { EditOpened } from './bindings/EditOpened';
+import type { EditSaved } from './bindings/EditSaved';
+import type { EditSaveOptions } from './bindings/EditSaveOptions';
+import type { ExternalEdit } from './bindings/ExternalEdit';
 import type { ItemProperties } from './bindings/ItemProperties';
 import type { JobId } from './bindings/JobId';
 import type { JobTask } from './bindings/JobTask';
 import type { LinkKind } from './bindings/LinkKind';
 import type { ListEvent } from './bindings/ListEvent';
-import type { MenuCommand } from './bindings/MenuCommand';
 import type { MdDocument } from './bindings/MdDocument';
+import type { MenuCommand } from './bindings/MenuCommand';
 import type { OpKind } from './bindings/OpKind';
 import type { OpsEvent } from './bindings/OpsEvent';
 import type { PaneId } from './bindings/PaneId';
@@ -68,6 +72,13 @@ export const commands = {
   view_markdown: cmd<{ session: number; encoding: string }, MdDocument>(),
   view_archive: cmd<{ session: number }, ArchiveListing>(),
   view_media: cmd<{ session: number }, string>(),
+  edit_open: cmd<{ path: string; name: string; encoding: string | null }, EditOpened>(),
+  edit_save: cmd<{ path: string; name: string; text: string; options: EditSaveOptions }, EditSaved>(),
+  edit_external: cmd<{ path: string; name: string }, ExternalEdit>(),
+  settings_open: cmd<undefined, null>(),
+  editor_set_dirty: cmd<{ dirty: boolean }, null>(),
+  editor_close_ack: cmd<undefined, null>(),
+  app_close_confirmed: cmd<undefined, null>(),
   state_load: cmd<undefined, SavedState | null>(),
   state_save: cmd<{ state: SavedState }, null>(),
 };

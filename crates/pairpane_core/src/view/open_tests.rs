@@ -103,12 +103,10 @@ fn refuses_a_link_to_a_file_and_to_a_folder_and_a_dangling_one() {
 #[cfg(unix)]
 #[test]
 fn refuses_a_pipe_without_waiting_for_a_writer() {
+    use super::testing::fifo;
+
     let folder = temp();
-    let status = std::process::Command::new("mkfifo")
-        .arg(folder.path().join("pipe"))
-        .status()
-        .expect("mkfifo runs");
-    assert!(status.success());
+    fifo(folder.path(), "pipe");
 
     // A pipe without a writer would block an ordinary open for ever; this returns.
     assert_eq!(

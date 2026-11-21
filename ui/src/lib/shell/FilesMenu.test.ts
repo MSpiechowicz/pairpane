@@ -18,6 +18,17 @@ describe('FilesMenu', () => {
     expect(screen.getByRole('menuitem', { name: 'Change attributes…' })).not.toHaveAttribute('aria-keyshortcuts');
   });
 
+  it('has the built-in editor, which has no key of its own (F4 may run an external one)', async () => {
+    const onChoose = vi.fn();
+    render(FilesMenu, { onChoose });
+    const item = screen.getByRole('menuitem', { name: 'Edit in built-in editor' });
+
+    await fireEvent.click(item);
+
+    expect(item).not.toHaveAttribute('aria-keyshortcuts');
+    expect(onChoose).toHaveBeenCalledWith('editBuiltin');
+  });
+
   it('reports the action of the item that was clicked', async () => {
     const onChoose = vi.fn();
     render(FilesMenu, { onChoose });

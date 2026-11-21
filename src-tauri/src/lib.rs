@@ -4,6 +4,7 @@
 // The shell never needs `unsafe` (the workspace only denies it, for one module of the core crate).
 #![forbid(unsafe_code)]
 
+mod close;
 mod commands;
 mod error;
 mod logging;
@@ -31,10 +32,15 @@ pub fn run() -> ExitCode {
                 .build(),
         )
         .plugin(logging::plugin())
+        // Rust-side only: it shows the question before an external editor program is started (commands/edit). No dialog
+        // permission is granted, so the page cannot call it, and `confirm` and `alert` of the page do nothing.
+        .plugin(tauri_plugin_dialog::init())
         // Updates are driven from Rust only (commands/updates.rs); no JS updater permission is granted.
         .plugin(tauri_plugin_updater::Builder::new().build());
 
     let result = menu::attach(builder)
+        // A close with unsaved text in the editor waits for the page's answer (close.rs).
+        .on_window_event(close::on_window_event)
         .setup(|app| {
             app.manage(updates::Updates::from_config(app.config()));
             app.manage(menu::MenuEvents::default());
@@ -43,9 +49,21 @@ pub fn run() -> ExitCode {
             app.manage(commands::ops::Ops::default());
             app.manage(commands::items::Items::default());
             app.manage(commands::view::Viewer::default());
+            app.manage(close::CloseGuard::default());
             // Next to the window-state plugin's file. Without a config folder nothing is saved.
-            let state_file = app.path().app_config_dir().ok().map(|dir| dir.join("state.json"));
+            let state_file = app
+                .path()
+                .app_config_dir()
+                .ok()
+                .map(|dir| dir.join(commands::state::STATE_FILE));
             app.manage(commands::state::StateStore::new(state_file));
+            // The user's settings file, in the same folder. Without a config folder there is no external editor.
+            let settings_file = app
+                .path()
+                .app_config_dir()
+                .ok()
+                .map(|dir| dir.join(pairpane_core::settings::SETTINGS_FILE));
+            app.manage(commands::edit::Editor::new(settings_file));
 
             window::create_main_window(app)?;
 
@@ -92,10 +110,20 @@ pub fn run() -> ExitCode {
             commands::view::search::view_search,
             commands::view::search::view_search_cancel,
             commands::view::media::view_media,
+            commands::edit::edit_open,
+            commands::edit::edit_save,
+            commands::edit::edit_external,
+            commands::edit::settings_open,
+            close::editor_set_dirty,
+            close::editor_close_ack,
+            close::app_close_confirmed,
         ])
         .build(tauri::generate_context!())
         .map(|app| {
             app.run(|app, event| {
+                // An exit with unsaved text in the editor waits for the page's answer, unless it is a restart.
+                close::on_run_event(app, &event);
+
                 // Cancel the jobs, silently, and give each a moment to remove its partial file (the plan's decision 8).
                 if let RunEvent::Exit = event {
                     if let Some(ops) = app.try_state::<commands::ops::Ops>() {

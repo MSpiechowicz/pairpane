@@ -34,6 +34,9 @@
 <Modal title={session.name} variant="full" {onClose}>
   <div class="viewer">
     <ViewerToolbar {session} {search} {onClose} />
+    {#if session.notice}
+      <p class="notice" role="status">{session.notice}</p>
+    {/if}
     <ViewBody {session} {search} focus />
   </div>
 </Modal>
@@ -44,5 +47,14 @@
     flex: 1;
     flex-direction: column;
     min-height: 0;
+  }
+
+  .notice {
+    margin: 0;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--dim);
+    font-size: 12px;
   }
 </style>
