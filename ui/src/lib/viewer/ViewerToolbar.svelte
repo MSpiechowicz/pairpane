@@ -1,5 +1,6 @@
 <script lang="ts">
   import { formatSize } from '$lib/panes/format';
+  import '$lib/shell/overlayBar.css';
 
   import { encodingChoices } from './encodings';
   import type { ViewSearch } from './search.svelte';
@@ -49,8 +50,8 @@
   }
 </script>
 
-<div class="toolbar" role="toolbar" aria-label="Viewer">
-  <span class="name" aria-hidden="true">{session.name}</span>
+<div class="overlay-bar" role="toolbar" aria-label="Viewer">
+  <span class="overlay-bar-name" aria-hidden="true">{session.name}</span>
   {#if session.status === 'ready'}
     <span class="size">{formatSize(session.size)}</span>
 
@@ -122,24 +123,6 @@
 </div>
 
 <style>
-  .toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 10px;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--line);
-    background: var(--panel);
-  }
-
-  .name {
-    max-width: 40ch;
-    overflow: hidden;
-    font-weight: 600;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   .size,
   .message {
     color: var(--dim);

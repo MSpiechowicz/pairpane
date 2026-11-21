@@ -38,6 +38,16 @@ describe('DialogFooter', () => {
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Close']);
   });
 
+  it('can have a third button between the two', async () => {
+    const onAlternate = vi.fn();
+    render(DialogFooter, { busy: false, confirm: 'Save', alternate: "Don't save", onAlternate, onCancel: vi.fn() });
+
+    await fireEvent.click(screen.getByRole('button', { name: "Don't save" }));
+
+    expect(onAlternate).toHaveBeenCalledOnce();
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Cancel', "Don't save", 'Save']);
+  });
+
   it('marks the danger button, and the one that takes the focus', () => {
     render(FooterHost, { danger: true, focus: 'cancel' });
 

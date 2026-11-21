@@ -64,7 +64,7 @@ mod sniff_tests;
 #[cfg(test)]
 mod tar_tests;
 #[cfg(test)]
-mod testing;
+pub(crate) mod testing;
 #[cfg(test)]
 mod text_tests;
 #[cfg(test)]
@@ -74,6 +74,7 @@ use std::io;
 
 pub use archive::archive;
 pub use encoding::is_known_encoding;
+pub(crate) use encoding::{bom_len, by_name, detect, is_utf16};
 pub use file::ViewFile;
 pub use heic::{
     CHILD_ARG as HEIC_CHILD_ARG, child_main as heic_child_main, decode as decode_heic,
@@ -81,6 +82,7 @@ pub use heic::{
 };
 pub use markdown::markdown;
 pub use open::{Opened, open};
+pub(crate) use open::{Refusals, open_regular};
 pub use search::search;
 pub use text::text_window;
 

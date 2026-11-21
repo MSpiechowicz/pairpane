@@ -1,10 +1,11 @@
 <script lang="ts">
-  import type { FileAction } from '$lib/ops/dialogs';
+  import type { FilesChoice } from './menu';
 
   /** The menu's items; a key shown next to an item does the same without the menu. */
-  const ITEMS: readonly { action: FileAction; label: string; keys?: string }[] = [
+  const ITEMS: readonly { action: FilesChoice; label: string; keys?: string }[] = [
     { action: 'newFolder', label: 'New folder', keys: 'F7' },
     { action: 'newFile', label: 'New file', keys: 'Shift+F4' },
+    { action: 'editBuiltin', label: 'Edit in built-in editor' },
     { action: 'renameInline', label: 'Rename', keys: 'F2' },
     { action: 'trash', label: 'Delete', keys: 'F8' },
     { action: 'symlink', label: 'Create symbolic link…' },
@@ -17,7 +18,7 @@
     { action: 'combine', label: 'Combine files…' },
   ];
 
-  let { onChoose }: { onChoose: (action: FileAction) => void } = $props();
+  let { onChoose }: { onChoose: (action: FilesChoice) => void } = $props();
 </script>
 
 <div class="popup" role="menu" aria-label="Files">

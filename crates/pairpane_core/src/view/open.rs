@@ -25,10 +25,24 @@ pub struct Opened {
     pub encoding: String,
 }
 
-/// Opens the regular file `name` of `folder` for viewing. A link, a folder and anything that is not a regular file
-/// are refused with a text of their own; the file itself is opened without following a link and never waited on (a
-/// pipe that slips in is refused). The result keeps the open file, so a later rename or delete changes nothing.
-pub fn open(folder: &Path, name: &str) -> io::Result<Opened> {
+/// What is said when a name is not a regular file: one text for a link, a folder and anything else, in the words of
+/// the tool that asked.
+pub(crate) struct Refusals {
+    pub link: &'static str,
+    pub folder: &'static str,
+    pub other: &'static str,
+}
+
+const VIEWER: Refusals = Refusals {
+    link: "the viewer opens regular files, not links",
+    folder: "the viewer opens files, not folders",
+    other: "the viewer opens regular files only",
+};
+
+/// Opens the regular file `name` of `folder` for reading without following a link, with its metadata. A link, a folder
+/// and anything that is not a regular file are refused with the text of `words`; a pipe that slips in is never waited
+/// on.
+pub(crate) fn open_regular(folder: &Path, name: &str, words: &Refusals) -> io::Result<(fs::File, fs::Metadata)> {
     if !platform::is_plain_name(name) {
         return Err(refusal(io::ErrorKind::InvalidInput, "the name cannot be opened"));
     }
@@ -36,27 +50,25 @@ pub fn open(folder: &Path, name: &str) -> io::Result<Opened> {
     let seen = fs::symlink_metadata(folder.join(name))?;
 
     if seen.file_type().is_symlink() {
-        return Err(refusal(
-            io::ErrorKind::InvalidInput,
-            "the viewer opens regular files, not links",
-        ));
+        return Err(refusal(io::ErrorKind::InvalidInput, words.link));
     }
 
     if seen.is_dir() {
-        return Err(refusal(
-            io::ErrorKind::InvalidInput,
-            "the viewer opens files, not folders",
-        ));
+        return Err(refusal(io::ErrorKind::InvalidInput, words.folder));
     }
 
     if !seen.is_file() {
-        return Err(refusal(
-            io::ErrorKind::InvalidInput,
-            "the viewer opens regular files only",
-        ));
+        return Err(refusal(io::ErrorKind::InvalidInput, words.other));
     }
 
-    let (file, meta) = open_listed(folder, name)?;
+    open_listed(folder, name)
+}
+
+/// Opens the regular file `name` of `folder` for viewing. A link, a folder and anything that is not a regular file
+/// are refused with a text of their own; the file itself is opened without following a link and never waited on (a
+/// pipe that slips in is refused). The result keeps the open file, so a later rename or delete changes nothing.
+pub fn open(folder: &Path, name: &str) -> io::Result<Opened> {
+    let (file, meta) = open_regular(folder, name, &VIEWER)?;
     let file = ViewFile::new(file);
     let size = file.size()?;
     let head = file.read_at(0, SNIFF_BYTES.min(size.try_into().unwrap_or(usize::MAX)))?;

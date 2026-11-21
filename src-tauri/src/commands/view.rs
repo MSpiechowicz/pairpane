@@ -242,7 +242,7 @@ fn no_session() -> CommandError {
 /// hold no path, keep their text), never the system's wording and never a path. Only an error made by
 /// `pairpane_core::view::refusal` counts as such: any other error with a text (a system call, a library, a helper
 /// process that did not start) gets the generic text of its kind. The details go to the log.
-fn view_error(error: &io::Error) -> CommandError {
+pub(super) fn view_error(error: &io::Error) -> CommandError {
     let own_text = files::is_refusal(error);
 
     match error.kind() {

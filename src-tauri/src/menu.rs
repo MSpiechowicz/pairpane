@@ -12,6 +12,8 @@ use tauri::ipc::Channel;
 use tauri::menu::{Menu, MenuEvent, MenuItem};
 use tauri::{AppHandle, Builder, Manager, Runtime, State};
 
+use crate::close::CloseGuard;
+
 /// Menu item id of "Check for Updates…".
 const CHECK_FOR_UPDATES: &str = "check-for-updates";
 
@@ -22,24 +24,36 @@ pub struct MenuEvents {
 }
 
 impl MenuEvents {
-    fn send(&self, command: MenuCommand) {
+    /// Sends `command` to the UI; `false` when the UI has not subscribed or its channel is closed, so the caller can
+    /// tell that nothing will answer.
+    pub fn try_send(&self, command: MenuCommand) -> bool {
         let channel = self.channel.lock().unwrap_or_else(PoisonError::into_inner);
 
         match channel.as_ref() {
             // A closed channel only means the page went away; it registers again when it loads.
-            Some(channel) => {
-                channel.send(command).ok();
+            Some(channel) => channel.send(command).is_ok(),
+            None => {
+                tracing::warn!(?command, "menu command before the UI subscribed; ignored");
+
+                false
             }
-            None => tracing::warn!(?command, "menu command before the UI subscribed; ignored"),
         }
     }
 }
 
+/// Makes `channel` the one menu commands are sent to, and forgets the editor buffer: the page that registers it is
+/// a fresh one.
+fn register(events: &MenuEvents, close: &CloseGuard, channel: Channel<MenuCommand>) {
+    *events.channel.lock().unwrap_or_else(PoisonError::into_inner) = Some(channel);
+    close.reset();
+}
+
 /// Registers the channel menu commands are sent to. The UI calls it once when it loads; a later call replaces
-/// the earlier channel (e.g. after a reload).
+/// the earlier channel (e.g. after a reload). A page that loads has no editor buffer, so it also ends any
+/// question about unsaved text that was waiting for it.
 #[tauri::command]
-pub fn menu_subscribe(events: State<'_, MenuEvents>, on_command: Channel<MenuCommand>) {
-    *events.channel.lock().unwrap_or_else(PoisonError::into_inner) = Some(on_command);
+pub fn menu_subscribe(events: State<'_, MenuEvents>, close: State<'_, CloseGuard>, on_command: Channel<MenuCommand>) {
+    register(&events, &close, on_command);
 }
 
 /// Adds the native menu on macOS; elsewhere the builder is returned unchanged, so the window has no menu bar.
@@ -67,6 +81,53 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 /// Forwards a menu click to the UI.
 fn on_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     if event.id() == CHECK_FOR_UPDATES {
-        app.state::<MenuEvents>().send(MenuCommand::CheckForUpdates);
+        app.state::<MenuEvents>().try_send(MenuCommand::CheckForUpdates);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    #[test]
+    fn a_command_is_sent_only_when_a_page_has_subscribed_and_is_there() {
+        let events = MenuEvents::default();
+        let close = CloseGuard::default();
+        assert!(!events.try_send(MenuCommand::CloseRequested), "nobody subscribed");
+
+        let seen = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&seen);
+        register(
+            &events,
+            &close,
+            Channel::new(move |_| {
+                count.fetch_add(1, Ordering::SeqCst);
+
+                Ok(())
+            }),
+        );
+        assert!(events.try_send(MenuCommand::CloseRequested));
+        assert_eq!(seen.load(Ordering::SeqCst), 1);
+
+        register(
+            &events,
+            &close,
+            Channel::new(|_| Err(tauri::Error::Io(std::io::Error::other("gone")))),
+        );
+        assert!(!events.try_send(MenuCommand::CloseRequested), "the page went away");
+    }
+
+    #[test]
+    fn a_page_that_subscribes_has_no_unsaved_buffer() {
+        let events = MenuEvents::default();
+        let close = CloseGuard::default();
+        close.set_dirty(true);
+
+        register(&events, &close, Channel::new(|_| Ok(())));
+
+        assert!(!close.is_dirty());
     }
 }

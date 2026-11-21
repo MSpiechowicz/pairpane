@@ -16,7 +16,7 @@ const MAX_TEMP_TRIES: u32 = 100;
 
 /// What tells this run of the app from every other in the names of its temporary files, so a leftover of an earlier
 /// run (a crash leaves its `.part` files behind, and job numbers start at 1 again) never has the same name.
-pub(super) fn run_token() -> &'static str {
+pub(crate) fn run_token() -> &'static str {
     static TOKEN: OnceLock<String> = OnceLock::new();
 
     TOKEN.get_or_init(|| {
@@ -29,14 +29,14 @@ pub(super) fn run_token() -> &'static str {
 
 /// The temporary file of a copy in progress: removed again unless it was committed, whether the copy was
 /// cancelled, failed or panicked.
-pub(super) struct Partial {
-    pub(super) path: PathBuf,
-    pub(super) committed: bool,
+pub(crate) struct Partial {
+    pub(crate) path: PathBuf,
+    pub(crate) committed: bool,
 }
 
 impl Partial {
     /// Guards `path`, which this job has just created and no one else owns.
-    pub(super) fn new(path: PathBuf) -> Self {
+    pub(crate) fn new(path: PathBuf) -> Self {
         Self { path, committed: false }
     }
 }

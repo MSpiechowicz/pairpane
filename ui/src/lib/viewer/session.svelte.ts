@@ -22,6 +22,8 @@ export class ViewSession {
   readonly name: string;
   readonly path: string;
   readonly ipc: Transport;
+  /** What the user should know about why this file is shown (it was too large to edit). */
+  readonly notice: string | undefined;
 
   status = $state<'opening' | 'ready' | 'failed'>('opening');
   /** Why the file could not be opened; the backend's own words (it never names a path). */
@@ -36,10 +38,11 @@ export class ViewSession {
 
   #closed = false;
 
-  constructor(ipc: Transport, path: string, name: string) {
+  constructor(ipc: Transport, path: string, name: string, notice?: string) {
     this.ipc = ipc;
     this.path = path;
     this.name = name;
+    this.notice = notice;
     void this.#open();
   }
 

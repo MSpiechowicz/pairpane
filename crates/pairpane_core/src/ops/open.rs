@@ -16,7 +16,7 @@ use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 
 /// Windows `FILE_FLAG_OPEN_REPARSE_POINT`: open a link itself, not what it leads to.
 #[cfg(windows)]
-pub(super) const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+pub(crate) const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 
 /// Windows `FILE_FLAG_BACKUP_SEMANTICS`: needed to open a folder.
 #[cfg(windows)]
@@ -87,7 +87,7 @@ fn open_source(path: &Path) -> io::Result<(File, Metadata)> {
 
 /// Creates the new file `path` for reading and writing; fails when anything is there (a link too, which is
 /// never followed). On Unix only the owner may use it until its real permissions are set.
-pub(super) fn create_new(path: &Path) -> io::Result<File> {
+pub(crate) fn create_new(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).write(true).create_new(true);
 

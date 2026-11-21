@@ -69,8 +69,11 @@ describe('shortcutFor', () => {
     expect(press('Delete', { shiftKey: true })).toBe('deletePermanently');
   });
 
-  it('plain F4, Shift+F2, Shift+F7 and the Ctrl, Alt and Cmd variants of the new keys are not shortcuts', () => {
-    expect(press('F4')).toBeUndefined();
+  it('plain F4 edits the file', () => {
+    expect(press('F4')).toBe('edit');
+  });
+
+  it('Shift+F2, Shift+F7 and the Ctrl, Alt and Cmd variants of the new keys are not shortcuts', () => {
     expect(press('F2', { shiftKey: true })).toBeUndefined();
     expect(press('F7', { shiftKey: true })).toBeUndefined();
 

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Main window. Grants only the app's own IPC commands. No core:* permission is granted: the UI calls nothing but invoke() of app commands, and Channel delivery (__TAURI_CHANNEL__ fetch) is not ACL-gated. No plugin permission is granted: opener/window-state/log/updater are driven from Rust only, so their JS APIs stay unreachable from the webview.",
+  "description": "Main window. Grants only the app's own IPC commands. No core:* permission is granted: the UI calls nothing but invoke() of app commands, and Channel delivery (__TAURI_CHANNEL__ fetch) is not ACL-gated. No plugin permission is granted: opener/window-state/log/updater/dialog are driven from Rust only (the dialog asks before an external editor program is started, so the page must not be able to answer it), so their JS APIs stay unreachable from the webview.",
   "windows": ["main"],
   "permissions": [
     "allow-app-info",
@@ -36,6 +36,13 @@
     "allow-view-markdown",
     "allow-view-archive",
     "allow-view-image-decode",
-    "allow-view-media"
+    "allow-view-media",
+    "allow-edit-open",
+    "allow-edit-save",
+    "allow-edit-external",
+    "allow-settings-open",
+    "allow-editor-set-dirty",
+    "allow-editor-close-ack",
+    "allow-app-close-confirmed"
   ]
 }

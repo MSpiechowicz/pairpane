@@ -20,6 +20,9 @@ use tauri::async_runtime;
 use super::limit::{Permit, ThreadCap};
 use crate::error::{CommandError, CommandResult};
 
+/// The name of the file in the config folder.
+pub const STATE_FILE: &str = "state.json";
+
 /// Where the state is kept and the one thread that may touch it.
 pub struct StateStore {
     /// `None` when the system has no config folder; nothing is then loaded or saved.

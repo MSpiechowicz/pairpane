@@ -99,6 +99,35 @@ describe('Updates', () => {
     });
   });
 
+  it('does not relaunch when the guard says no, and does when it says yes', async () => {
+    const relaunch = vi.fn(() => null);
+    const keep = new Updates(transport({ app_relaunch: relaunch }), undefined, () => Promise.resolve(false));
+    const go = new Updates(transport({ app_relaunch: relaunch }), undefined, () => Promise.resolve(true));
+
+    await keep.relaunch();
+    expect(relaunch).not.toHaveBeenCalled();
+
+    await go.relaunch();
+    expect(relaunch).toHaveBeenCalledOnce();
+  });
+
+  it('asks the guard before installing, as the installer may exit the app: no leaves the update on offer', async () => {
+    const install = vi.fn(() => null);
+    const handlers = { update_check: () => info, update_install: install };
+    const keep = new Updates(transport(handlers), undefined, () => Promise.resolve(false));
+    const go = new Updates(transport(handlers), undefined, () => Promise.resolve(true));
+    await keep.check(false);
+    await go.check(false);
+
+    await keep.install();
+    expect(install).not.toHaveBeenCalled();
+    expect(keep.state).toEqual({ kind: 'available', info });
+
+    await go.install();
+    expect(install).toHaveBeenCalledOnce();
+    expect(go.state).toEqual({ kind: 'ready', info });
+  });
+
   it('relaunches through the backend', async () => {
     const relaunch = vi.fn(() => null);
     const updates = new Updates(transport({ app_relaunch: relaunch }));

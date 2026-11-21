@@ -1,8 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
 
-  import { ipc } from '$lib/ipc/client';
+  import { Editor } from '$lib/editor/editor.svelte';
+  import EditorOverlay from '$lib/editor/EditorOverlay.svelte';
   import type { AppInfo } from '$lib/ipc/bindings/AppInfo';
+  import { ipc } from '$lib/ipc/client';
+  import { IpcFailure } from '$lib/ipc/transport';
   import ConflictDialog from '$lib/ops/ConflictDialog.svelte';
   import DeleteDialog from '$lib/ops/DeleteDialog.svelte';
   import { FileActions } from '$lib/ops/fileActions.svelte';
@@ -16,7 +19,7 @@
   import { PaneTabs } from '$lib/panes/tabs.svelte';
   import { Volumes } from '$lib/panes/volumes.svelte';
   import Dock from '$lib/shell/Dock.svelte';
-  import type { Menu } from '$lib/shell/menu';
+  import type { FilesChoice, Menu } from '$lib/shell/menu';
   import Pane from '$lib/shell/Pane.svelte';
   import { Session } from '$lib/shell/session.svelte';
   import { isTyping, reloadsPage, shortcutFor } from '$lib/shell/shortcuts';
@@ -60,13 +63,20 @@
   let panelOpen = $state(false);
   const files = new FileActions(ipc, panes, () => active);
   const viewer = new Viewer(ipc, panes, () => active);
+  const editor = new Editor(ipc, {
+    under: () => viewer.under,
+    say: (text, error) => files.say(text, error),
+    view: (target, notice) => viewer.openAt(target, notice),
+  });
   const question = $derived(transfers.question);
-  /** A dialog (or the viewer's overlay) has the keyboard: the shortcuts and Tab are its own then. */
-  const modal = $derived(files.modal || question !== undefined || viewer.modal);
+  /** A dialog (or the viewer's or editor's overlay) has the keyboard: the shortcuts and Tab are its own then. */
+  const modal = $derived(files.modal || question !== undefined || viewer.modal || editor.modal);
 
   function onDockKey(key: string) {
     if (key === 'F3') {
       viewer.open();
+    } else if (key === 'F4') {
+      editor.edit();
     } else if (key === 'F5') {
       files.run('copy');
     } else if (key === 'F6') {
@@ -79,7 +89,12 @@
   }
 
   const theme = new Theme();
-  const updates = new Updates(ipc, () => info?.version);
+  // A restart cannot be stopped once it has begun: an editor with changes asks before it.
+  const updates = new Updates(
+    ipc,
+    () => info?.version,
+    () => editor.confirmDiscard(),
+  );
   // macOS has a native app menu (with "Check for Updates…"); Windows and Linux have only the top bar.
   const nativeMenu = /Mac/.test(navigator.userAgent);
 
@@ -178,6 +193,9 @@
       case 'view':
         viewer.open();
         break;
+      case 'edit':
+        editor.edit();
+        break;
       case 'quickView':
         viewer.toggleQuick();
         break;
@@ -198,6 +216,18 @@
     }
   }
 
+  function chooseFile(choice: FilesChoice) {
+    if (choice === 'editBuiltin') {
+      editor.edit(true);
+    } else {
+      files.run(choice);
+    }
+  }
+
+  function editSettings() {
+    ipc.invoke('settings_open', undefined).catch((error) => files.say(IpcFailure.from(error).message, true));
+  }
+
   onMount(async () => {
     // The panes open the folders of the last session (the home folder when there is none); the rest does not wait.
     void session.restore();
@@ -212,11 +242,13 @@
     }
 
     try {
-      // The native menu's "Check for Updates…" (macOS) arrives here.
+      // The native menu's "Check for Updates…" (macOS) and a window close that would lose changes arrive here.
       await ipc.invoke('menu_subscribe', {
         onCommand: (command) => {
           if (command === 'checkForUpdates') {
             void updates.check(true);
+          } else if (command === 'closeRequested') {
+            void editor.onCloseRequested();
           }
         },
       });
@@ -239,8 +271,9 @@
     {nativeMenu}
     {showHidden}
     onCheckForUpdates={() => void updates.check(true)}
+    onEditSettings={editSettings}
     onToggleHidden={toggleHidden}
-    onFiles={(action) => files.run(action)}
+    onFiles={chooseFile}
   />
 
   <main class="panes">
@@ -319,6 +352,10 @@
 
 {#if viewer.overlay}
   <ViewerOverlay session={viewer.overlay} onClose={() => viewer.close()} />
+{/if}
+
+{#if editor.session}
+  <EditorOverlay {editor} session={editor.session} />
 {/if}
 
 <Splash onEnd={focusActiveList} />

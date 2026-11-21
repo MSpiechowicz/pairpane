@@ -29,6 +29,17 @@ describe('Modal', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('an Escape that something inside it already used does not close it', async () => {
+    const onClose = vi.fn();
+    open(onClose);
+    const field = screen.getByRole('textbox');
+    field.addEventListener('keydown', (event) => event.preventDefault());
+
+    await fireEvent.keyDown(field, { key: 'Escape' });
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it('without a way to close, Escape does nothing', async () => {
     open();
 

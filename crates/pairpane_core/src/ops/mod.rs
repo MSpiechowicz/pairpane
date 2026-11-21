@@ -176,6 +176,10 @@ mod trash_tests;
 
 pub use engine::Engine;
 pub use items::{ItemFailure, MAX_FOLDER_DEPTH};
+#[cfg(windows)]
+pub(crate) use open::OPEN_REPARSE_POINT;
+pub(crate) use open::create_new;
+pub(crate) use partial::{Partial, run_token};
 pub use trash::{CAN_UNTRASH, Trashed, UntrashFailure};
 pub use validate::name_fits;
 

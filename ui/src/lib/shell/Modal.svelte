@@ -2,7 +2,15 @@
   /** The dialogs that are open, the last one on top: only that one answers the keyboard. */
   const stack: symbol[] = [];
 
-  const FOCUSABLE = 'button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';
+  /** What Tab visits: the controls, and the editor's text (a textarea or a contenteditable surface). */
+  const FOCUSABLE = [
+    'button:not(:disabled)',
+    'input:not(:disabled)',
+    'select:not(:disabled)',
+    'textarea:not(:disabled)',
+    '[contenteditable="true"]',
+    '[tabindex]:not([tabindex="-1"])',
+  ].join(', ');
 </script>
 
 <script lang="ts">
@@ -65,9 +73,13 @@
       return;
     }
 
+    // Escape that something inside already used is not ours: the editor's search panel closes itself with it, and
+    // with a selection in the text CodeMirror's Escape only collapses the selection (a second Escape then closes).
     if (event.key === 'Escape' && onClose) {
-      event.preventDefault();
-      onClose();
+      if (!event.defaultPrevented) {
+        event.preventDefault();
+        onClose();
+      }
     } else if (event.key === 'Tab') {
       trap(event, dialog);
     }

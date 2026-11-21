@@ -4,9 +4,11 @@
     busy,
     confirm,
     cancel = 'Cancel',
+    alternate,
     danger = false,
     focus,
     onConfirm,
+    onAlternate,
     onCancel,
   }: {
     /** Why the last try was refused; shown above the buttons. */
@@ -17,11 +19,14 @@
     confirm?: string;
     /** The label of the other button (`Close` for a dialog with nothing to confirm). */
     cancel?: string;
+    /** The label of a third button, between the two (`Don't save`). */
+    alternate?: string;
     /** The action cannot be taken back. */
     danger?: boolean;
     /** The button that takes the focus when the dialog opens; none when a field does. */
     focus?: 'confirm' | 'cancel';
     onConfirm?: () => void;
+    onAlternate?: () => void;
     onCancel: () => void;
   } = $props();
 </script>
@@ -31,6 +36,9 @@
 {/if}
 <div class="mt-3 flex justify-end gap-2">
   <button class="btn" type="button" disabled={busy} data-autofocus={focus === 'cancel' ? '' : undefined} onclick={onCancel}>{cancel}</button>
+  {#if alternate}
+    <button class="btn" type="button" disabled={busy} onclick={onAlternate}>{alternate}</button>
+  {/if}
   {#if confirm}
     <button
       class="btn {danger ? 'btn-danger' : 'btn-primary'}"
