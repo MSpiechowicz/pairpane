@@ -1,3 +1,10 @@
+# [0.12.0](https://github.com/MSpiechowicz/pairpane/compare/v0.11.0...v0.12.0) (2026-11-21)
+
+
+### Features
+
+* F3 lister and quick view ([78ce01a](https://github.com/MSpiechowicz/pairpane/commit/78ce01a9921cea2002811e389238c4f71d221e07)), closes [#14](https://github.com/MSpiechowicz/pairpane/issues/14)
+
 # [0.11.0](https://github.com/MSpiechowicz/pairpane/compare/v0.10.0...v0.11.0) (2026-11-21)
 
 
