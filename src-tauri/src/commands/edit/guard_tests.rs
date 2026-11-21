@@ -278,12 +278,12 @@ fn only_a_file_opened_as_text_in_this_run_is_saved() {
 fn a_file_that_is_not_text_is_not_one_to_save() {
     let (folder, path) = folder_with(&[("a.txt", b"one")]);
     let editor = Editor::new(None);
-    fs::write(folder.path().join("nul.bin"), b"abc\0\0def\0ghi").expect("write");
+    fs::write(folder.path().join("zeros.bin"), b"abc\0\0def\0ghi").expect("write");
 
-    let opened = block_on(editor.open(path.clone(), "nul.bin".to_owned(), None)).expect("answer");
+    let opened = block_on(editor.open(path.clone(), "zeros.bin".to_owned(), None)).expect("answer");
     assert_eq!(opened, EditOpened::Binary);
 
-    let refused = block_on(editor.save(path, "nul.bin".to_owned(), "mine".to_owned(), options("")));
+    let refused = block_on(editor.save(path, "zeros.bin".to_owned(), "mine".to_owned(), options("")));
 
     assert_eq!(code(refused), IpcErrorCode::Forbidden);
 }
