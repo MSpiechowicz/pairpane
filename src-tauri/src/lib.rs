@@ -15,7 +15,7 @@ use std::process::ExitCode;
 
 use tauri::{Manager, RunEvent};
 
-/// Builds and runs the app until the last window closes; the transfers still running are cancelled, and given up to two seconds to clean up, as it exits.
+/// Builds and runs the app until the last window closes; the transfers still running are cancelled, and given up to two seconds to clean up, as it exits, and the viewer's sessions are ended (which stops the HEIC helper that runs).
 pub fn run() -> ExitCode {
     let builder = tauri::Builder::default()
         // Must be registered first so a second launch exits before anything else starts.
@@ -88,6 +88,7 @@ pub fn run() -> ExitCode {
             commands::view::read::view_text,
             commands::view::read::view_markdown,
             commands::view::read::view_archive,
+            commands::view::read::view_image_decode,
             commands::view::search::view_search,
             commands::view::search::view_search_cancel,
             commands::view::media::view_media,
@@ -96,10 +97,14 @@ pub fn run() -> ExitCode {
         .map(|app| {
             app.run(|app, event| {
                 // Cancel the jobs, silently, and give each a moment to remove its partial file (the plan's decision 8).
-                if let RunEvent::Exit = event
-                    && let Some(ops) = app.try_state::<commands::ops::Ops>()
-                {
-                    ops.shutdown();
+                if let RunEvent::Exit = event {
+                    if let Some(ops) = app.try_state::<commands::ops::Ops>() {
+                        ops.shutdown();
+                    }
+                    // A HEIC decode that runs stops its helper process when its session ends.
+                    if let Some(viewer) = app.try_state::<commands::view::Viewer>() {
+                        viewer.close_all();
+                    }
                 }
             });
         });

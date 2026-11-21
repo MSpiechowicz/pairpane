@@ -8,10 +8,12 @@
 //! What the page sent is checked on the command's thread, and a request that fails the check is refused before a
 //! thread is taken (the same rule as `items.rs`). The disk is touched only on blocking threads, each holding a place
 //! of a [`ThreadCap`] until it ends: a read on a hung mount never returns and must not use up the thread pool, so
-//! reads, searches and media requests have caps of their own and a request that finds its cap full is refused as
-//! busy. No text sent to the page holds a path.
+//! reads, searches, media requests and HEIC decodes (each of which runs a helper process and holds a large buffer, so
+//! one at a time) have caps of their own and a request that finds its cap full is refused as busy. No text sent to the
+//! page holds a path.
 //!
-//! - `read.rs`: raw bytes, text windows, Markdown and archive listings (the last two stop when the session ends).
+//! - `read.rs`: raw bytes, text windows, Markdown and archive listings (the last two stop when the session ends) and
+//!   HEIC pictures decoded to pixels by the system's own codecs (`view_image_decode`).
 //! - `search.rs`: the search of a session, cancelled by the next search, by `view_search_cancel` and by closing.
 //! - `media.rs`: the tokens `view_media` hands out; `serve.rs`: the `pairpane-media` scheme that answers them.
 
@@ -38,6 +40,8 @@ pub mod search;
 pub mod serve;
 
 #[cfg(test)]
+mod heic_tests;
+#[cfg(test)]
 mod serve_tests;
 #[cfg(test)]
 mod tests;
@@ -50,6 +54,9 @@ const MAX_SESSIONS: usize = 8;
 const READ_THREADS: usize = 3;
 const SEARCH_THREADS: usize = 2;
 const MEDIA_THREADS: usize = 2;
+/// HEIC decodes: each starts a process and holds the file and a picture of up to 256 MiB, so one at a time, and apart
+/// from the reads so that opening and reading are not held up by a decode. A second one is refused as busy.
+const DECODE_THREADS: usize = 1;
 
 /// The sessions, the tokens for their media and the caps on the threads that serve them. Clones share all of it (the
 /// media scheme hands a clone to its blocking thread).
@@ -57,6 +64,7 @@ const MEDIA_THREADS: usize = 2;
 pub struct Viewer {
     state: Arc<Mutex<Sessions>>,
     reads: ThreadCap,
+    decodes: ThreadCap,
     searches: ThreadCap,
     media: ThreadCap,
 }
@@ -128,6 +136,18 @@ impl Viewer {
     /// reads it. A session that is not there is left alone.
     fn close(&self, session: u32) {
         let released = self.lock().remove(session);
+        drop(released);
+    }
+
+    /// Ends every session, as the app exits: the flag of each is raised, so a HEIC decode that runs stops its helper
+    /// process (which would otherwise be left to run until its own deadline or until the pipe to it breaks).
+    pub fn close_all(&self) {
+        let released: Released = {
+            let mut state = self.lock();
+            let ids: Vec<u32> = state.sessions.iter().map(|session| session.id).collect();
+
+            ids.into_iter().flat_map(|id| state.remove(id)).collect()
+        };
         drop(released);
     }
 
@@ -218,10 +238,12 @@ fn no_session() -> CommandError {
     CommandError::new(IpcErrorCode::NotFound, "there is no such viewer session")
 }
 
-/// What the page is told when a read fails: fixed lowercase text per kind of failure (the file's own refusals, which
-/// hold no path, keep their text), never the system's wording and never a path. The details go to the log.
+/// What the page is told when a read fails: fixed lowercase text per kind of failure (the viewer's own refusals, which
+/// hold no path, keep their text), never the system's wording and never a path. Only an error made by
+/// `pairpane_core::view::refusal` counts as such: any other error with a text (a system call, a library, a helper
+/// process that did not start) gets the generic text of its kind. The details go to the log.
 fn view_error(error: &io::Error) -> CommandError {
-    let own_text = error.get_ref().is_some();
+    let own_text = files::is_refusal(error);
 
     match error.kind() {
         io::ErrorKind::NotFound => CommandError::new(IpcErrorCode::NotFound, "the file no longer exists"),
@@ -231,6 +253,7 @@ fn view_error(error: &io::Error) -> CommandError {
         }
         io::ErrorKind::InvalidInput if own_text => CommandError::new(IpcErrorCode::InvalidInput, error.to_string()),
         io::ErrorKind::InvalidData if own_text => CommandError::new(IpcErrorCode::Io, error.to_string()),
+        io::ErrorKind::Unsupported if own_text => CommandError::new(IpcErrorCode::Unsupported, error.to_string()),
         _ => {
             tracing::debug!(%error, "viewer read failed");
 

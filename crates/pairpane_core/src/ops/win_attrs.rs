@@ -1,9 +1,9 @@
 //! The Windows file attributes (read-only, hidden, system, archive) of an item, set through its handle.
 //!
-//! This is the one module of the workspace that may use `unsafe` (the lint is denied everywhere else): the standard
-//! library sets the read-only attribute alone, and the others need `SetFileInformationByHandle`. The call is made on a
-//! handle the caller opened without following links, never by path (`SetFileAttributesW` would follow what a path
-//! names). What to set is worked out by [`Wanted::apply`], which is safe and is tested on every system.
+//! This is one of the few modules of the workspace that may use `unsafe` (the lint is denied everywhere else): the
+//! standard library sets the read-only attribute alone, and the others need `SetFileInformationByHandle`. The call is
+//! made on a handle the caller opened without following links, never by path (`SetFileAttributesW` would follow what a
+//! path names). What to set is worked out by [`Wanted::apply`], which is safe and is tested on every system.
 #![allow(unsafe_code, reason = "the one call of SetFileInformationByHandle; see `write`")]
 #![deny(clippy::undocumented_unsafe_blocks)]
 

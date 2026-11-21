@@ -39,6 +39,7 @@ const COMMANDS: &[&str] = &[
     "view_search_cancel",
     "view_markdown",
     "view_archive",
+    "view_image_decode",
     "view_media",
 ];
 

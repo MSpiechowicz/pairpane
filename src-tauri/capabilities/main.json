@@ -35,6 +35,7 @@
     "allow-view-search-cancel",
     "allow-view-markdown",
     "allow-view-archive",
+    "allow-view-image-decode",
     "allow-view-media"
   ]
 }

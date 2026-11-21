@@ -1,6 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ViewKind } from '$lib/ipc/bindings/ViewKind';
+
 import { FakeFile, openedSession } from '../../../tests/view';
 import ImageView from './ImageView.svelte';
 
@@ -97,5 +99,143 @@ describe('ImageView', () => {
     render(ImageView, { session: world.session });
 
     expect(await screen.findByRole('alert')).toHaveTextContent('The file changed');
+  });
+
+  describe('a HEIC image the webview cannot show', () => {
+    const createImageData = vi.fn<(width: number, height: number) => { data: Uint8ClampedArray }>();
+    const putImageData = vi.fn<(image: { data: Uint8ClampedArray }, x: number, y: number) => void>();
+    const getContext = HTMLCanvasElement.prototype.getContext;
+
+    beforeEach(() => {
+      createImageData.mockReset().mockImplementation((width, height) => ({ data: new Uint8ClampedArray(width * height * 4) }));
+      putImageData.mockReset();
+      HTMLCanvasElement.prototype.getContext = (() => ({ createImageData, putImageData })) as never;
+    });
+
+    afterEach(() => {
+      HTMLCanvasElement.prototype.getContext = getContext;
+    });
+
+    /** A `view_image_decode` answer: the size, then `width * height` pixels of `fill`. */
+    function decodedAnswer(width: number, height: number, fill = 7): ArrayBuffer {
+      const bytes = new Uint8Array(8 + width * height * 4).fill(fill, 8);
+      const header = new DataView(bytes.buffer);
+      header.setUint32(0, width, true);
+      header.setUint32(4, height, true);
+
+      return bytes.buffer;
+    }
+
+    async function openHeic(decode: () => unknown, mime = 'image/heic') {
+      const kind = (): ViewKind => ({ kind: 'image', mime });
+      const world = await openedSession(new FakeFile(new Uint8Array(100)), kind, { view_image_decode: decode });
+      const view = render(ImageView, { session: world.session });
+
+      return { ...world, view };
+    }
+
+    it('is decoded by the backend and drawn on a canvas', async () => {
+      const { sent } = await openHeic(() => decodedAnswer(3, 2));
+
+      await fireEvent.error(await screen.findByRole('img'));
+      const canvas = await screen.findByRole('img', { name: 'file.txt' });
+
+      expect(canvas.tagName).toBe('CANVAS');
+      expect(canvas).toHaveAttribute('width', '3');
+      expect(canvas).toHaveAttribute('height', '2');
+      await vi.waitFor(() => expect(putImageData).toHaveBeenCalledTimes(1));
+      expect(createImageData).toHaveBeenCalledWith(3, 2);
+      const [image, x, y] = putImageData.mock.calls[0];
+      expect(Array.from(image.data)).toEqual(new Array<number>(3 * 2 * 4).fill(7));
+      expect([x, y]).toEqual([0, 0]);
+      expect(sent('view_image_decode')).toEqual([{ session: 1 }]);
+      expect(revoke).toHaveBeenCalledWith('blob:image-1');
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('is not decoded by the backend when the webview shows it', async () => {
+      const { sent } = await openHeic(() => decodedAnswer(1, 1));
+
+      expect(await screen.findByRole('img')).toHaveAttribute('src', 'blob:image-1');
+
+      expect(sent('view_image_decode')).toHaveLength(0);
+    });
+
+    it('is not asked of the backend for another image type', async () => {
+      const { sent } = await openHeic(() => decodedAnswer(1, 1), 'image/png');
+
+      await fireEvent.error(await screen.findByRole('img'));
+
+      expect(screen.getByRole('alert')).toHaveTextContent('This image cannot be shown here');
+      expect(sent('view_image_decode')).toHaveLength(0);
+    });
+
+    it('says there is no decoder, with the backend`s hint', async () => {
+      await openHeic(() => {
+        throw { code: 'unsupported', message: 'no heic decoder on this system: install libheif with an hevc plugin' };
+      });
+
+      await fireEvent.error(await screen.findByRole('img'));
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('No HEIC decoder on this system: install libheif with an hevc plugin');
+      expect(screen.queryByRole('img')).not.toBeInTheDocument();
+    });
+
+    it('says only that it cannot be shown when there is no decoder and no hint', async () => {
+      await openHeic(() => {
+        throw { code: 'unsupported', message: 'no heic decoder on this system' };
+      });
+
+      await fireEvent.error(await screen.findByRole('img'));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('This image cannot be shown here');
+    });
+
+    it('says the picture is too big when the webview refuses to draw it', async () => {
+      createImageData.mockImplementation(() => {
+        throw new RangeError('out of memory');
+      });
+      await openHeic(() => decodedAnswer(3, 2));
+
+      await fireEvent.error(await screen.findByRole('img'));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('This image is too big to show here');
+      expect(screen.queryByRole('img')).not.toBeInTheDocument();
+    });
+
+    it('shows the backend`s words when it cannot decode the image', async () => {
+      await openHeic(() => {
+        throw { code: 'io', message: 'the image cannot be decoded' };
+      });
+
+      await fireEvent.error(await screen.findByRole('img'));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('the image cannot be decoded');
+    });
+
+    it('says so when the decoded pixels do not fit their size', async () => {
+      await openHeic(() => decodedAnswer(3, 2).slice(0, 20));
+
+      await fireEvent.error(await screen.findByRole('img'));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('This image cannot be shown here');
+      expect(putImageData).not.toHaveBeenCalled();
+    });
+
+    it('is not drawn when the view goes while the backend decodes', async () => {
+      let answer: (buffer: ArrayBuffer) => void = () => undefined;
+      const pending = new Promise<ArrayBuffer>((resolve) => (answer = resolve));
+      const { view, sent } = await openHeic(() => pending);
+
+      await fireEvent.error(await screen.findByRole('img'));
+      await vi.waitFor(() => expect(sent('view_image_decode')).toHaveLength(1));
+      view.unmount();
+      answer(decodedAnswer(3, 2));
+      await pending;
+      await new Promise((resolve) => setTimeout(resolve, 0)); // let the decode's continuation run
+
+      expect(putImageData).not.toHaveBeenCalled();
+    });
   });
 });

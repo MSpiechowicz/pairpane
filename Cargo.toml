@@ -11,7 +11,8 @@ repository = "https://github.com/MSpiechowicz/pairpane"
 rust-version = "1.98"
 
 [workspace.lints.rust]
-# Denied, not forbidden: the one module that calls into Windows (`pairpane_core::ops::win_attrs`) allows it.
+# Denied, not forbidden: the few modules that call into the system (`pairpane_core::ops::win_attrs` and the HEIC decoders
+# of `pairpane_core::view::heic`) allow it, each with a reason and a `SAFETY` comment on every block.
 unsafe_code = "deny"
 
 [workspace.lints.clippy]
@@ -51,7 +52,7 @@ sysinfo = { version = "0.40", default-features = false, features = ["disk"] }
 # the no-replace rename (reflink, copy_file_range, fclonefileat, renameat2), all without `unsafe`. The `process` feature
 # is for `getuid`: the Trash folders must belong to the user (pairpane_core::ops::trash).
 blake3 = { version = "1.8.7", default-features = false, features = ["std"] }
-rustix = { version = "1.1.6", default-features = false, features = ["fs", "process", "std"] }
+rustix = { version = "1.1.6", default-features = false, features = ["fs", "process", "std", "thread"] }
 # Checksum files and file splitting (pairpane_core::ops): SHA-256 and MD5 (RustCrypto, both on digest 0.10, safe Rust)
 # next to the BLAKE3 above, a CRC-32 for the `.crc` file of a split (Total Commander's format), and, on Unix only, the
 # names of a file's owner and group (`uzers`, a safe wrapper of getpwuid_r and getgrgid_r).
@@ -63,10 +64,11 @@ uzers = { version = "0.12.2", default-features = false, features = ["cache"] }
 # without following links), so two spellings of one place (8.3 names, case, a volume GUID path) compare equal. A safe
 # API over `winapi-util`; both are in the lockfile already through `walkdir`.
 same-file = "1.0.6"
-# Windows only: setting the hidden, system and archive attributes through a handle (`SetFileInformationByHandle`, the one
-# `unsafe` block of the workspace, in pairpane_core::ops::win_attrs). Only the two features that call needs; already in
-# the lockfile through other dependencies.
-windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+# Windows only: setting the hidden, system and archive attributes through a handle (`SetFileInformationByHandle`, an
+# `unsafe` block in pairpane_core::ops::win_attrs) and the Job Object that holds the HEIC helper process
+# (pairpane_core::view::heic::job). Only the features those calls need; already in the lockfile through other
+# dependencies.
+windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading"] }
 # Move to the Trash or Recycle Bin and put back (pairpane_core::ops::trash): the shell's IFileOperation on Windows,
 # Finder on macOS (which has no list or restore here, so no undo). A safe API. Not built on Linux and the BSDs, which
 # do the freedesktop Trash themselves (the crate follows links, copies across disks and panics on odd mount names).
@@ -89,6 +91,22 @@ memchr = "2.8.3"
 # The tokens of the viewer's media scheme (pairpane-media, src-tauri/src/commands/view): 128 random bits from the system's
 # generator, so a page cannot guess a token. A safe API; already in the lockfile through tauri's own dependencies.
 getrandom = "0.4.3"
+# HEIC pictures are decoded by the codecs the system has, never by a codec shipped with the app (HEVC is patent-encumbered).
+# Linux and the BSDs: `libloading` opens the system's libheif at run time (pairpane_core::view::heic::libheif), so the
+# app neither links nor ships it. The version the lockfile has through tauri's tray dependency (one copy, not two); its
+# `Library::new` and `get` are `unsafe`.
+libloading = "0.7.4"
+# Windows only: the Windows Imaging Component (pairpane_core::view::heic::wic), whose HEIF codec is the user's HEIF and
+# HEVC Image Extensions. Only the features that call chain needs; the version the lockfile has through sysinfo and tauri.
+windows = { version = "0.62.2", default-features = false, features = ["std", "Win32_Foundation", "Win32_Graphics_Imaging", "Win32_System_Com"] }
+# The helper process that decodes a HEIC picture confines itself on Linux (pairpane_core::view::heic::sandbox): Landlock
+# with every filesystem and network right denied, a safe API over the kernel's three syscalls. Its other dependencies
+# (`libc`, `enumflags2`, `thiserror`) are in the lockfile already. `rustix` (above) sets the other limits.
+landlock = "0.4.8"
+# The same helper's seccomp filter, the descriptors it closes at its start and the probe of Landlock's version are raw
+# system calls (pairpane_core::view::heic::kernel, Linux only, `unsafe` with a `SAFETY` comment on every block). The
+# version the lockfile has already through `landlock` (one copy, not two).
+libc = "0.2.191"
 # Dev dependencies
 pretty_assertions = "1.4"
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }

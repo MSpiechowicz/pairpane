@@ -29,6 +29,19 @@ describe('retryBusy', () => {
     expect(read).toHaveBeenCalledTimes(3);
   });
 
+  it('waits as long as a backoff of its own says', async () => {
+    const read = vi.fn().mockRejectedValue(busy);
+    const answer = retryBusy(read, undefined, [1000, 3000]);
+    const failed = expect(answer).rejects.toMatchObject(busy);
+
+    await vi.advanceTimersByTimeAsync(3999);
+    expect(read).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await failed;
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
   it('gives up with the backend`s refusal once the waits are spent', async () => {
     const read = vi.fn().mockRejectedValue(busy);
     const answer = retryBusy(read);

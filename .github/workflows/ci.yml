@@ -62,6 +62,17 @@ jobs:
         with:
           shared-key: test-${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The HEIC tests decode for real only with the system's libheif and an HEVC decoder (a plugin package from
+      # libheif 1.17, built in before): install them and make a skipped decode fail.
+      - name: Install a HEIC decoder for the tests
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libheif1
+          if apt-cache show libheif-plugin-libde265 >/dev/null 2>&1; then
+            sudo apt-get install -y libheif-plugin-libde265
+          fi
+          echo "PAIRPANE_REQUIRE_HEIC_DECODER=1" >> "$GITHUB_ENV"
       - run: cargo test -p pairpane_core
       # The tests regenerate the TypeScript bindings; stale or untracked output means the commit is missing them.
       - name: Generated TypeScript bindings are committed
@@ -179,6 +190,17 @@ jobs:
       # Tauri codegen reads ui/dist, so the UI must be built before cargo compiles the shell.
       - run: bun run build:ui
       - run: cargo clippy -p pairpane_app --all-targets -- -D warnings
+      # The HEIC tests decode for real only with the system's libheif and an HEVC decoder (a plugin package from
+      # libheif 1.17, built in before): install them and make a skipped decode fail.
+      - name: Install a HEIC decoder for the tests
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libheif1
+          if apt-cache show libheif-plugin-libde265 >/dev/null 2>&1; then
+            sudo apt-get install -y libheif-plugin-libde265
+          fi
+          echo "PAIRPANE_REQUIRE_HEIC_DECODER=1" >> "$GITHUB_ENV"
       - run: cargo test -p pairpane_app
       # Always build through `tauri build` so the custom-protocol feature is on; a plain cargo build would load
       # the dev server URL.

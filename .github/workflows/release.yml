@@ -271,6 +271,21 @@ jobs:
         run: |
           # shellcheck disable=SC2086 # ARGS holds several flags on purpose
           bun tauri build $ARGS -- --locked
+      # HEIC is decoded by the system's libheif only (no HEVC decoder of our own). The AppImage's RUNPATH would make a
+      # bundled copy win over the system one, so none may be in it, nor a library its plugins could decode HEVC with.
+      - name: The AppImage bundles no HEIF or HEVC decoder
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          appimage="$(ls target/release/bundle/appimage/*.AppImage)"
+          scratch="$(mktemp -d)"
+          (cd "$scratch" && "$OLDPWD/$appimage" --appimage-extract >/dev/null)
+          found="$(find "$scratch/squashfs-root" \( -name 'libheif*' -o -name 'libde265*' -o -name 'libavcodec*' \
+            -o -name 'libgstlibav*' \) -print)"
+          rm -rf "$scratch"
+          if [[ -n "$found" ]]; then
+            echo "::error::the AppImage bundles a HEIF/HEVC library: $found"
+            exit 1
+          fi
       # Collects the installers under fixed names. macOS updates use the .app as a .tar.gz, made here.
       - name: Collect the installers
         env:

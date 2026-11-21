@@ -8,12 +8,16 @@ export const BUSY_BACKOFF_MS = [100, 250, 500];
  * which a PDF asking for ranges, or a quick view beside it, can cause for a moment). Any other failure, a refusal
  * after the last wait and an abort of the signal during a wait end the call at once.
  */
-export async function retryBusy<T>(read: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+export async function retryBusy<T>(
+  read: () => Promise<T>,
+  signal?: AbortSignal,
+  backoff: readonly number[] = BUSY_BACKOFF_MS,
+): Promise<T> {
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await read();
     } catch (error) {
-      const wait = BUSY_BACKOFF_MS[attempt];
+      const wait = backoff[attempt];
       if (wait === undefined || IpcFailure.from(error).code !== 'busy') {
         throw error;
       }

@@ -61,6 +61,7 @@ export const commands = {
   view_open: cmd<{ path: string; name: string }, ViewOpened>(),
   view_close: cmd<{ session: number }, null>(),
   view_bytes: cmd<{ session: number; offset: number; length: number }, ArrayBuffer>(),
+  view_image_decode: cmd<{ session: number }, ArrayBuffer>(),
   view_text: cmd<{ session: number; query: TextQuery }, TextWindow>(),
   view_search: cmd<{ session: number; query: SearchQuery; onProgress: EventSink<number> }, SearchHit | null>(),
   view_search_cancel: cmd<{ session: number }, null>(),

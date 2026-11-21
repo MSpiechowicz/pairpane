@@ -11,6 +11,10 @@
 //! - [`search`]: the next or previous match of a text or byte needle, scanned in chunks, cancellable.
 //! - [`markdown`]: a Markdown file as a tree of plain data; [`archive`]: the entries of a zip, tar or tar.gz. Both take
 //!   a cancel flag (raised when the session ends) and then fail with `Interrupted`.
+//! - [`decode_heic`]: a HEIC picture as RGBA pixels, decoded by the codecs the system has (libheif on Linux, the Windows
+//!   Imaging Component on Windows) and never by a codec of the app; it fails with `Unsupported` when there is none. The
+//!   decoding runs in a short-lived child process (the app itself, started with [`HEIC_CHILD_ARG`] and handed to
+//!   [`heic_child_main`]), so a crash of a system codec on a hostile file cannot take the app down.
 //! - [`range`]: the pure parsing of a `Range: bytes=` header for the media scheme.
 //!
 //! # Rules
@@ -18,11 +22,13 @@
 //! The file is read through its handle at offsets (no memory map, no seeking shared state), so the one open file can
 //! serve many readers at once and a rename or delete after the open changes nothing. Every size is capped by a
 //! constant below, whatever the file or the query holds. Nothing here panics on bad input and nothing extracts or
-//! executes anything. Error texts are fixed lowercase English and never hold a path.
+//! executes anything. Error texts are fixed lowercase English and never hold a path; the errors that carry a text of
+//! ours are marked ([`refusal`], [`is_refusal`]), so a caller can show those and nothing else.
 
 mod archive;
 mod encoding;
 mod file;
+mod heic;
 mod layout;
 mod markdown;
 mod md_build;
@@ -43,6 +49,8 @@ mod archive_tests;
 mod encoding_tests;
 #[cfg(test)]
 mod file_tests;
+#[cfg(test)]
+mod heic_tests;
 #[cfg(test)]
 mod markdown_tests;
 #[cfg(test)]
@@ -67,6 +75,10 @@ use std::io;
 pub use archive::archive;
 pub use encoding::is_known_encoding;
 pub use file::ViewFile;
+pub use heic::{
+    CHILD_ARG as HEIC_CHILD_ARG, child_main as heic_child_main, decode as decode_heic,
+    helper_command as heic_helper_command,
+};
 pub use markdown::markdown;
 pub use open::{Opened, open};
 pub use search::search;
@@ -90,6 +102,15 @@ pub const MAX_SNAP: usize = 64 * 1024;
 /// The most bytes of a Markdown file that are parsed; the rest is dropped and the document says it is truncated.
 pub const MAX_MARKDOWN: usize = 8 * 1024 * 1024;
 
+/// The most bytes of a HEIC file [`decode_heic`] reads (the same cap as the page's image view).
+pub const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The most pixels (width times height) of a picture [`decode_heic`] decodes: 256 MiB of RGBA at most.
+pub const MAX_IMAGE_PIXELS: u64 = 64 * 1024 * 1024;
+
+/// The longest side of a picture [`decode_heic`] decodes.
+pub const MAX_IMAGE_SIDE: u32 = 32_767;
+
 /// The most entries [`archive`] lists.
 pub const MAX_ARCHIVE_ENTRIES: usize = 20_000;
 
@@ -111,7 +132,27 @@ fn cancelled() -> io::Error {
     refusal(io::ErrorKind::Interrupted, "the read was cancelled")
 }
 
-/// An error with a text of its own, for a rule that no system call reports (the text never holds a path).
-fn refusal(kind: io::ErrorKind, text: &'static str) -> io::Error {
-    io::Error::new(kind, text)
+/// The payload of an error with a text of our own (see [`refusal`]); what tells it from an error of the system or of a
+/// library, whose text must never reach the page.
+#[derive(Debug)]
+struct Refusal(&'static str);
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str(self.0)
+    }
+}
+
+impl std::error::Error for Refusal {}
+
+/// An error with a text of its own, for a rule that no system call reports (the text never holds a path). Its
+/// `to_string` is `text`, and [`is_refusal`] knows it.
+pub fn refusal(kind: io::ErrorKind, text: &'static str) -> io::Error {
+    io::Error::new(kind, Refusal(text))
+}
+
+/// Whether `error` was made by [`refusal`], so its text is ours and holds no path; any other error (a system call, a
+/// library, an error that someone made with a text of their own) is not.
+pub fn is_refusal(error: &io::Error) -> bool {
+    error.get_ref().is_some_and(|inner| inner.is::<Refusal>())
 }

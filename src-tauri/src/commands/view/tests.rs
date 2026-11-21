@@ -146,6 +146,29 @@ fn closing_twice_is_safe_and_a_closed_session_is_not_found() {
 }
 
 #[test]
+fn closing_all_sessions_as_the_app_exits_raises_every_flag_and_ends_every_session() {
+    let (_folder, path) = folder_with(&[("a.txt", b"hello\n")]);
+    let viewer = Viewer::default();
+    let sessions: Vec<u32> = (0..3).map(|_| open(&viewer, &path, "a.txt").session).collect();
+    let flags: Vec<_> = sessions
+        .iter()
+        .map(|session| viewer.handle(*session).expect("open session").cancel)
+        .collect();
+    assert!(flags.iter().all(|flag| !flag.load(Ordering::Relaxed)));
+
+    viewer.close_all();
+
+    assert!(
+        flags.iter().all(|flag| flag.load(Ordering::Relaxed)),
+        "the reads that run (a decode with its helper process) are told to stop"
+    );
+    for session in sessions {
+        assert_eq!(code(block_on(viewer.bytes(session, 0, 5))), IpcErrorCode::NotFound);
+    }
+    viewer.close_all();
+}
+
+#[test]
 fn opening_past_eight_sessions_closes_the_oldest() {
     let (_folder, path) = folder_with(&[("a.txt", b"hello\n")]);
     let viewer = Viewer::default();
