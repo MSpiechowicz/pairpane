@@ -1,3 +1,10 @@
+# [0.10.0](https://github.com/MSpiechowicz/pairpane/compare/v0.9.0...v0.10.0) (2026-11-21)
+
+
+### Features
+
+* properties, permissions, timestamps, checksums and file split ([44489b4](https://github.com/MSpiechowicz/pairpane/commit/44489b4b9f29ce976029c55277d6f30392869b06)), closes [#13](https://github.com/MSpiechowicz/pairpane/issues/13)
+
 # [0.9.0](https://github.com/MSpiechowicz/pairpane/compare/v0.8.0...v0.9.0) (2026-11-21)
 
 
