@@ -45,12 +45,21 @@
   const windows = isWindowsPlatform();
 
   const startMode = untrack(() => startModes(entries.map((entry) => entry.mode ?? 0)));
-  const startReadOnly = untrack(() => agreed(entries.map((entry) => entry.readonly)));
+  // The Windows attributes. A pane entry knows read-only and hidden; the others are not known, so they start left alone.
+  const ATTRIBUTES = ['readOnly', 'hidden', 'system', 'archive'] as const;
+  const LABELS = { readOnly: 'Read-only', hidden: 'Hidden', system: 'System', archive: 'Archive' } as const;
+  type Attribute = (typeof ATTRIBUTES)[number];
+  const startAttrs = untrack<Record<Attribute, Tri>>(() => ({
+    readOnly: agreed(entries.map((entry) => entry.readonly)),
+    hidden: agreed(entries.map((entry) => entry.hidden)),
+    system: 'keep',
+    archive: 'keep',
+  }));
   // The time the items have, when they have one in common; otherwise now.
   const startTime = untrack(() => formatStamp(entries.length === 1 ? (entries[0].modified ?? Date.now()) : Date.now()));
 
   let modes = $state<Record<number, Tri>>({ ...startMode });
-  let readOnly = $state<Tri>(startReadOnly);
+  let attrs = $state<Record<Attribute, Tri>>({ ...startAttrs });
   let setModified = $state(false);
   let setAccessed = $state(false);
   let modified = $state(startTime);
@@ -58,13 +67,10 @@
   let recursive = $state(false);
   const submission = new Submission(() => onClose());
 
-  /** The read-only attribute to set: sent when it was changed, or when what is inside folders gets it too. */
-  function readOnlyChange(everything: boolean): boolean | null {
-    if (readOnly === 'keep' || (!everything && readOnly === startReadOnly)) {
-      return null;
-    }
-
-    return readOnly === 'on';
+  /** The attributes to set: each is sent when it was changed, or when what is inside folders gets it too. */
+  function attributeChanges(everything: boolean): Record<Attribute, boolean | null> {
+    const asked = (name: Attribute) => (attrs[name] === 'keep' || (!everything && attrs[name] === startAttrs[name]) ? null : attrs[name] === 'on');
+    return { readOnly: asked('readOnly'), hidden: asked('hidden'), system: asked('system'), archive: asked('archive') };
   }
 
   /** What the boxes ask for, or why it cannot be asked. */
@@ -79,13 +85,14 @@
     const { add, remove } = windows ? { add: 0, remove: 0 } : modeMasks(startMode, modes, everything);
     const asked: AttributeChange = {
       mode: add === 0 && remove === 0 ? null : { kind: 'adjust', add, remove },
-      readOnly: windows ? readOnlyChange(everything) : null,
+      ...(windows ? attributeChanges(everything) : { readOnly: null, hidden: null, system: null, archive: null }),
       modified: modifiedAt,
       accessed: accessedAt,
       recursive: everything,
     };
 
-    const nothing = asked.mode === null && asked.readOnly === null && modifiedAt === null && accessedAt === null;
+    const attributes = ATTRIBUTES.every((name) => asked[name] === null);
+    const nothing = asked.mode === null && attributes && modifiedAt === null && accessedAt === null;
     return nothing ? 'Choose what to change.' : asked;
   }
 
@@ -109,8 +116,12 @@
 
 <JobDialog title="Change attributes of {what(names)}" confirm="Apply" {submission} onSubmit={submit}>
   {#if windows}
-    <label class="check"><TriBox bind:value={readOnly} mixed={startReadOnly === 'keep'} label="Read-only" />Read-only</label>
-    <p class="hint">Only the read-only attribute of files can be changed.</p>
+    <div class="special">
+      {#each ATTRIBUTES as name (name)}
+        <label class="check"><TriBox bind:value={attrs[name]} mixed={startAttrs[name] === 'keep'} label={LABELS[name]} />{LABELS[name]}</label>
+      {/each}
+    </div>
+    <p class="hint">Read-only can be changed on files only. A box that shows a dash leaves that attribute as it is.</p>
   {:else}
     <div class="modes" role="group" aria-label="Permissions">
       <span></span>
@@ -143,6 +154,9 @@
 
   {#if folders}
     <label class="check"><input type="checkbox" bind:checked={recursive} />Include what is inside folders</label>
+    {#if recursive}
+      <p class="hint">Everything inside gets each box as it shows now, ticked or clear; set a box to the dash to leave it alone.</p>
+    {/if}
   {/if}
 </JobDialog>
 

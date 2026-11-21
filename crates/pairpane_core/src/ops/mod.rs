@@ -61,8 +61,10 @@
 //!   paths below the job's folder (files are opened without following a link). On Windows all of them check the way by
 //!   name and open without following a link: a folder swapped for a link between the look and the open is the same race
 //!   the other Windows jobs have, needing write access to the folders involved.
-//! - On Windows only the read-only attribute can be set (hidden, system and archive are shown, not changed), and
-//!   only on files; a folder takes the times alone.
+//! - On Windows the read-only attribute is set on files only (a folder takes the other attributes and the times); hidden,
+//!   system and archive are set on files and folders, through the handle opened without following links, by the one
+//!   `unsafe` call of the workspace (`win_attrs`). The other attributes (compressed, encrypted, indexing and so on) are
+//!   shown but not changed.
 //! - Two jobs for one volume start in submit order once both volumes are known; while an earlier job's volume is
 //!   still being looked up, a later job that is ready does not wait for it (see `engine`).
 //!
@@ -120,6 +122,8 @@ mod trash;
 mod validate;
 mod verify;
 mod volume;
+#[cfg(any(windows, test))]
+mod win_attrs;
 
 #[cfg(test)]
 mod announce_tests;

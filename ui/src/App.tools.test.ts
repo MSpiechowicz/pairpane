@@ -100,7 +100,16 @@ describe('Change attributes', () => {
         names: ['a.pdf', 'b.txt'],
         task: {
           kind: 'attributes',
-          change: { mode: { kind: 'adjust', add: 0o100, remove: 0 }, readOnly: null, modified: null, accessed: null, recursive: false },
+          change: {
+            mode: { kind: 'adjust', add: 0o100, remove: 0 },
+            readOnly: null,
+            hidden: null,
+            system: null,
+            archive: null,
+            modified: null,
+            accessed: null,
+            recursive: false,
+          },
         },
       },
     ]);

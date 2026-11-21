@@ -15,6 +15,18 @@ mode: ModeChange | null,
  */
 readOnly: boolean | null, 
 /**
+ * The Windows hidden attribute of files and folders; refused on Unix.
+ */
+hidden: boolean | null, 
+/**
+ * The Windows system attribute of files and folders; refused on Unix.
+ */
+system: boolean | null, 
+/**
+ * The Windows archive attribute of files and folders; refused on Unix.
+ */
+archive: boolean | null, 
+/**
  * The new modification time, in milliseconds since the Unix epoch.
  */
 modified: number | null, 

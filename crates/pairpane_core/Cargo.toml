@@ -38,6 +38,7 @@ trash.workspace = true
 [target.'cfg(windows)'.dependencies]
 same-file.workspace = true
 sysinfo.workspace = true
+windows-sys.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

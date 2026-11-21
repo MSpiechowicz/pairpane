@@ -14,6 +14,9 @@ fn nothing() -> AttributeChange {
     AttributeChange {
         mode: None,
         read_only: None,
+        hidden: None,
+        system: None,
+        archive: None,
         modified: None,
         accessed: None,
         recursive: false,
@@ -178,17 +181,33 @@ fn an_attribute_change_must_change_something_that_exists_on_this_system() {
     );
 
     let other_systems = if cfg!(windows) {
-        AttributeChange {
+        vec![AttributeChange {
             mode: Some(ModeChange::Set { mode: 0o644 }),
             ..nothing()
-        }
+        }]
     } else {
-        AttributeChange {
-            read_only: Some(true),
-            ..nothing()
-        }
+        vec![
+            AttributeChange {
+                read_only: Some(true),
+                ..nothing()
+            },
+            AttributeChange {
+                hidden: Some(true),
+                ..nothing()
+            },
+            AttributeChange {
+                system: Some(false),
+                ..nothing()
+            },
+            AttributeChange {
+                archive: Some(true),
+                ..nothing()
+            },
+        ]
     };
-    assert_eq!(refused(other_systems), IpcErrorCode::Unsupported);
+    for change in other_systems {
+        assert_eq!(refused(change), IpcErrorCode::Unsupported);
+    }
 }
 
 #[test]

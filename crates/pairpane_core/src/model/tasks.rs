@@ -34,6 +34,12 @@ pub struct AttributeChange {
     pub mode: Option<ModeChange>,
     /// The Windows read-only attribute of files; refused on Unix.
     pub read_only: Option<bool>,
+    /// The Windows hidden attribute of files and folders; refused on Unix.
+    pub hidden: Option<bool>,
+    /// The Windows system attribute of files and folders; refused on Unix.
+    pub system: Option<bool>,
+    /// The Windows archive attribute of files and folders; refused on Unix.
+    pub archive: Option<bool>,
     /// The new modification time, in milliseconds since the Unix epoch.
     #[ts(type = "number | null")]
     pub modified: Option<i64>,
@@ -42,6 +48,20 @@ pub struct AttributeChange {
     pub accessed: Option<i64>,
     /// Also change what is inside the selected folders.
     pub recursive: bool,
+}
+
+impl AttributeChange {
+    /// Whether any Windows attribute (read-only, hidden, system or archive) is to be changed.
+    #[must_use]
+    pub fn sets_windows_attributes(&self) -> bool {
+        self.read_only.is_some() || self.hidden.is_some() || self.system.is_some() || self.archive.is_some()
+    }
+
+    /// Whether nothing at all is to be changed (`recursive` alone changes nothing).
+    #[must_use]
+    pub fn changes_nothing(&self) -> bool {
+        self.mode.is_none() && !self.sets_windows_attributes() && self.modified.is_none() && self.accessed.is_none()
+    }
 }
 
 /// A job other than a copy or a move, as the `ops_task` command takes it. The folder the items are in and their
@@ -64,7 +84,7 @@ pub enum JobTask {
     },
     /// Joins the parts of a file (the one item, its `.001` part) into the folder `to`.
     Combine { to: String },
-    /// Changes permissions and times.
+    /// Changes permissions (or the Windows attributes) and times.
     Attributes { change: AttributeChange },
 }
 
@@ -145,7 +165,8 @@ mod tests {
             "kind": "attributes",
             "change": {
                 "mode": { "kind": "adjust", "add": 8, "remove": 2 },
-                "readOnly": null, "modified": -5, "accessed": null, "recursive": true
+                "readOnly": null, "hidden": true, "system": null, "archive": false,
+                "modified": -5, "accessed": null, "recursive": true
             }
         });
 
@@ -157,6 +178,9 @@ mod tests {
                 change: AttributeChange {
                     mode: Some(ModeChange::Adjust { add: 8, remove: 2 }),
                     read_only: None,
+                    hidden: Some(true),
+                    system: None,
+                    archive: Some(false),
                     modified: Some(-5),
                     accessed: None,
                     recursive: true,

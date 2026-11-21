@@ -86,18 +86,21 @@ fn exactly_one(names: &[String]) -> CommandResult<()> {
     Err(invalid("choose exactly one item"))
 }
 
-/// Refuses an attribute change that changes nothing, that sets permissions on Windows or the read-only attribute
-/// elsewhere (a system has the one kind or the other), or that holds a permission mask with bits beyond `0o7777`.
+/// Refuses an attribute change that changes nothing, that sets permissions on Windows or the Windows attributes
+/// (read-only, hidden, system, archive) elsewhere (a system has the one kind or the other), or that holds a permission
+/// mask with bits beyond `0o7777`.
 fn check_attributes(change: &AttributeChange) -> CommandResult<()> {
-    if change.mode.is_none() && change.read_only.is_none() && change.modified.is_none() && change.accessed.is_none() {
+    if change.changes_nothing() {
         return Err(invalid("choose what to change"));
     }
 
     if cfg!(windows) && change.mode.is_some() {
         return Err(unsupported("this system has no Unix permissions to set"));
     }
-    if !cfg!(windows) && change.read_only.is_some() {
-        return Err(unsupported("the read-only attribute exists on Windows only"));
+    if !cfg!(windows) && change.sets_windows_attributes() {
+        return Err(unsupported(
+            "the read-only, hidden, system and archive attributes exist on Windows only",
+        ));
     }
 
     let masks = match change.mode {

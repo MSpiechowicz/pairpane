@@ -24,6 +24,9 @@ const apply = () => fireEvent.click(screen.getByRole('button', { name: 'Apply' }
 /** The change that `ops_task` was asked for. */
 const asked = (calls: (name: 'ops_task') => unknown[]) => (calls('ops_task')[0] as { task: { change: unknown } }).task.change;
 
+/** The four Windows attributes, none of them asked for. */
+const NO_ATTRIBUTES = { readOnly: null, hidden: null, system: null, archive: null };
+
 afterEach(() => vi.restoreAllMocks());
 
 describe('AttributesDialog on Unix', () => {
@@ -86,7 +89,7 @@ describe('AttributesDialog on Unix', () => {
           kind: 'attributes',
           change: {
             mode: { kind: 'adjust', add: 0o100, remove: 0o004 },
-            readOnly: null,
+            ...NO_ATTRIBUTES,
             modified: null,
             accessed: null,
             recursive: false,
@@ -120,7 +123,7 @@ describe('AttributesDialog on Unix', () => {
     await vi.waitFor(() => expect(calls('ops_task')).toHaveLength(1));
     expect(asked(calls)).toEqual({
       mode: null,
-      readOnly: null,
+      ...NO_ATTRIBUTES,
       modified: new Date(2026, 0, 2, 3, 4, 5).getTime(),
       accessed: new Date(2025, 11, 31, 23, 59, 0).getTime(),
       recursive: false,
@@ -160,6 +163,15 @@ describe('AttributesDialog on Unix', () => {
       mode: { kind: 'adjust', add: 0o775, remove: 0o4000 | 0o2000 | 0o1000 | 0o002 },
       recursive: true,
     });
+  });
+
+  it('says that going into folders applies every box that does not show a dash', async () => {
+    open([entry('docs', 'dir', { mode: 0o755 })]);
+    expect(screen.queryByText(/set a box to the dash/)).not.toBeInTheDocument();
+
+    await fireEvent.click(box('Include what is inside folders'));
+
+    expect(screen.getByText(/Everything inside gets each box as it shows now/)).toBeInTheDocument();
   });
 
   it('a folder without the box checked does not go into folders', async () => {
@@ -203,11 +215,14 @@ describe('AttributesDialog on Unix', () => {
 describe('AttributesDialog on Windows', () => {
   const windows = () => vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(WINDOWS);
 
-  it('has the read-only attribute and no permissions', () => {
+  it('has the read-only, hidden, system and archive attributes and no permissions', () => {
     windows();
-    open([entry('a.pdf', 'file', { readonly: true })]);
+    open([entry('a.pdf', 'file', { readonly: true, hidden: true })]);
 
     expect(box('Read-only')).toBeChecked();
+    expect(box('Hidden')).toBeChecked();
+    expect(box('System')).toBeInTheDocument();
+    expect(box('Archive')).toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: 'Owner read' })).not.toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Permissions' })).not.toBeInTheDocument();
   });
@@ -221,7 +236,78 @@ describe('AttributesDialog on Windows', () => {
     await apply();
 
     await vi.waitFor(() => expect(calls('ops_task')).toHaveLength(1));
-    expect(asked(calls)).toEqual({ mode: null, readOnly: true, modified: null, accessed: null, recursive: false });
+    expect(asked(calls)).toEqual({ mode: null, ...NO_ATTRIBUTES, readOnly: true, modified: null, accessed: null, recursive: false });
+  });
+
+  it('asks to set hidden alone, the other attributes stay null', async () => {
+    windows();
+    const { calls } = open([entry('a.pdf'), entry('b.txt')]);
+    expect(box('Hidden')).not.toBeChecked();
+
+    await fireEvent.click(box('Hidden'));
+    await apply();
+
+    await vi.waitFor(() => expect(calls('ops_task')).toHaveLength(1));
+    expect(asked(calls)).toEqual({ mode: null, ...NO_ATTRIBUTES, hidden: true, modified: null, accessed: null, recursive: false });
+  });
+
+  it('asks to clear hidden, and to set system and archive, which start left alone', async () => {
+    windows();
+    const { calls } = open([entry('a.pdf', 'file', { hidden: true })]);
+    expect(box('System')).toBePartiallyChecked();
+    expect(box('Archive')).toBePartiallyChecked();
+
+    await fireEvent.click(box('Hidden'));
+    await fireEvent.click(box('System'));
+    await fireEvent.click(box('Archive'));
+    await fireEvent.click(box('Archive'));
+    await apply();
+
+    await vi.waitFor(() => expect(calls('ops_task')).toHaveLength(1));
+    expect(asked(calls)).toMatchObject({ readOnly: null, hidden: false, system: true, archive: false });
+  });
+
+  it('a folder can change hidden, and read-only stays offered', async () => {
+    windows();
+    const { calls } = open([entry('docs', 'dir')]);
+
+    await fireEvent.click(box('Hidden'));
+    await apply();
+
+    await vi.waitFor(() => expect(calls('ops_task')).toHaveLength(1));
+    expect(asked(calls)).toEqual({ mode: null, ...NO_ATTRIBUTES, hidden: true, modified: null, accessed: null, recursive: false });
+    expect(box('Read-only')).toBeInTheDocument();
+  });
+
+  it('a change that goes into folders sends every attribute that is set or cleared', async () => {
+    windows();
+    const { calls } = open([entry('docs', 'dir', { hidden: true })]);
+
+    await fireEvent.click(box('Include what is inside folders'));
+    await apply();
+
+    await vi.waitFor(() => expect(calls('ops_task')).toHaveLength(1));
+    expect(asked(calls)).toMatchObject({ readOnly: false, hidden: true, system: null, archive: null, recursive: true });
+  });
+
+  it('a mixed hidden stays null unless it is touched', async () => {
+    windows();
+    const { calls, invoke } = open([entry('a.pdf', 'file', { hidden: true }), entry('b.txt')]);
+    expect(box('Hidden')).toBePartiallyChecked();
+
+    await apply();
+    expect(screen.getByRole('alert')).toHaveTextContent('Choose what to change.');
+    expect(invoke).not.toHaveBeenCalled();
+
+    await fireEvent.click(box('Hidden'));
+    await fireEvent.click(box('Hidden'));
+    await fireEvent.click(box('Hidden'));
+    expect(box('Hidden')).toBePartiallyChecked();
+    await fireEvent.click(box('Read-only'));
+    await apply();
+
+    await vi.waitFor(() => expect(calls('ops_task')).toHaveLength(1));
+    expect(asked(calls)).toMatchObject({ readOnly: true, hidden: null });
   });
 
   it('shows a dash when the items differ, and sends nothing for it', async () => {
@@ -243,6 +329,6 @@ describe('AttributesDialog on Windows', () => {
     await apply();
 
     await vi.waitFor(() => expect(calls('ops_task')).toHaveLength(1));
-    expect(asked(calls)).toMatchObject({ readOnly: null, modified: new Date(2026, 0, 2, 3, 4, 5).getTime() });
+    expect(asked(calls)).toMatchObject({ ...NO_ATTRIBUTES, modified: new Date(2026, 0, 2, 3, 4, 5).getTime() });
   });
 });

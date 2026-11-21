@@ -16,6 +16,9 @@ pub(super) fn nothing() -> AttributeChange {
     AttributeChange {
         mode: None,
         read_only: None,
+        hidden: None,
+        system: None,
+        archive: None,
         modified: None,
         accessed: None,
         recursive: false,
@@ -136,19 +139,29 @@ fn a_change_of_nothing_is_not_accepted_and_neither_is_the_other_systems_permissi
             .expect_err("refused")
     };
     let foreign = if cfg!(windows) {
-        AttributeChange {
+        vec![AttributeChange {
             mode: Some(ModeChange::Set { mode: 0o644 }),
             ..nothing()
-        }
+        }]
     } else {
-        AttributeChange {
-            read_only: Some(true),
-            ..nothing()
-        }
+        // Every attribute that Windows has and no other system does.
+        let read_only = Some(true);
+        let hidden = Some(true);
+        let system = Some(false);
+        let archive = Some(true);
+
+        vec![
+            AttributeChange { read_only, ..nothing() },
+            AttributeChange { hidden, ..nothing() },
+            AttributeChange { system, ..nothing() },
+            AttributeChange { archive, ..nothing() },
+        ]
     };
 
     assert_eq!(refused(nothing()), Refused::InvalidTask);
-    assert_eq!(refused(foreign), Refused::InvalidTask);
+    for change in foreign {
+        assert_eq!(refused(change), Refused::InvalidTask);
+    }
     assert_eq!(
         refused(AttributeChange {
             recursive: true,
@@ -234,6 +247,127 @@ mod windows {
         assert!(!read_only(&file));
     }
 
+    fn attributes(path: &Path) -> u32 {
+        use std::os::windows::fs::MetadataExt;
+
+        fs::metadata(path).expect("metadata").file_attributes()
+    }
+
+    const HIDDEN: u32 = 0x2;
+    const SYSTEM: u32 = 0x4;
+    const ARCHIVE: u32 = 0x20;
+
+    #[test]
+    fn hidden_and_system_are_set_and_cleared_on_a_file_and_on_a_folder() {
+        let root = temp();
+        put(root.path(), "src/f", b"x");
+        put(root.path(), "src/d/g", b"x");
+        let file = root.path().join("src/f");
+        let folder = root.path().join("src/d");
+
+        let ended = run(
+            root.path(),
+            &["f", "d"],
+            AttributeChange {
+                hidden: Some(true),
+                system: Some(true),
+                ..nothing()
+            },
+        );
+        assert!(ended.errors.is_empty(), "{:?}", ended.errors);
+        for path in [&file, &folder] {
+            assert_eq!(
+                attributes(path) & (HIDDEN | SYSTEM),
+                HIDDEN | SYSTEM,
+                "{}",
+                path.display()
+            );
+        }
+        // The contents of a folder are not touched without `recursive`.
+        assert_eq!(attributes(&folder.join("g")) & (HIDDEN | SYSTEM), 0);
+
+        let ended = run(
+            root.path(),
+            &["f", "d"],
+            AttributeChange {
+                hidden: Some(false),
+                system: Some(false),
+                ..nothing()
+            },
+        );
+        assert!(ended.errors.is_empty(), "{:?}", ended.errors);
+        for path in [&file, &folder] {
+            assert_eq!(attributes(path) & (HIDDEN | SYSTEM), 0, "{}", path.display());
+        }
+    }
+
+    #[test]
+    fn the_archive_attribute_is_cleared_and_set_and_read_only_goes_with_the_others() {
+        let root = temp();
+        put(root.path(), "src/f", b"x");
+        let file = root.path().join("src/f");
+
+        for archive in [true, false] {
+            run(
+                root.path(),
+                &["f"],
+                AttributeChange {
+                    archive: Some(archive),
+                    ..nothing()
+                },
+            );
+            assert_eq!(attributes(&file) & ARCHIVE != 0, archive);
+        }
+
+        let ended = run(
+            root.path(),
+            &["f"],
+            AttributeChange {
+                read_only: Some(true),
+                hidden: Some(true),
+                archive: Some(true),
+                ..nothing()
+            },
+        );
+        assert!(ended.errors.is_empty(), "{:?}", ended.errors);
+        assert!(read_only(&file));
+        assert_eq!(attributes(&file) & (HIDDEN | ARCHIVE), HIDDEN | ARCHIVE);
+
+        // Clearing everything leaves the file with no attribute at all, and a read-only file takes the change.
+        run(
+            root.path(),
+            &["f"],
+            AttributeChange {
+                read_only: Some(false),
+                hidden: Some(false),
+                archive: Some(false),
+                ..nothing()
+            },
+        );
+        assert_eq!(attributes(&file) & (HIDDEN | SYSTEM | ARCHIVE), 0);
+        assert!(!read_only(&file));
+    }
+
+    #[test]
+    fn hidden_goes_through_a_whole_tree_when_recursive() {
+        let root = temp();
+        put(root.path(), "src/d/sub/f", b"x");
+
+        run(
+            root.path(),
+            &["d"],
+            AttributeChange {
+                hidden: Some(true),
+                recursive: true,
+                ..nothing()
+            },
+        );
+
+        for rel in ["src/d", "src/d/sub", "src/d/sub/f"] {
+            assert_eq!(attributes(&root.path().join(rel)) & HIDDEN, HIDDEN, "{rel}");
+        }
+    }
+
     #[test]
     fn a_folder_is_entered_and_its_files_change_but_the_folder_keeps_its_attribute() {
         let root = temp();
@@ -269,11 +403,13 @@ mod windows {
             &["link"],
             AttributeChange {
                 read_only: Some(true),
+                hidden: Some(true),
                 ..nothing()
             },
         );
 
         assert_eq!(ended.skipped, 1);
         assert!(!read_only(&root.path().join("src/f")));
+        assert_eq!(attributes(&root.path().join("src/f")) & HIDDEN, 0);
     }
 }

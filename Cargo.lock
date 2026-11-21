@@ -3031,6 +3031,7 @@ dependencies = [
  "trash",
  "ts-rs",
  "uzers",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

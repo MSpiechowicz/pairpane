@@ -6,7 +6,8 @@
 //! access to the item; permissions through a handle opened from the folder without following links and compared (`fchmod`),
 //! and, for an item that cannot be opened at all (no read permission), through a handle that needs no read permission
 //! and is never a link (see `set_without_opening`). Windows: a handle opened for attributes only, without following
-//! links, sets the times and the read-only attribute.
+//! links, sets the times and the attributes (read-only on files; hidden, system and archive on files and folders; see
+//! `win_attrs`).
 
 use std::io;
 
@@ -197,24 +198,32 @@ fn unavailable(error: io::Error) -> io::Error {
 
 #[cfg(windows)]
 impl Held {
-    /// Sets the read-only attribute of a file as `change` says. A folder takes no permissions.
+    /// Sets the attributes of `change` on `node` through one handle: read-only on a file (a folder takes none), hidden,
+    /// system and archive on a file or a folder.
     pub(super) fn set_permissions(&self, node: &Node, change: &AttributeChange) -> io::Result<()> {
-        use super::plan::Kind;
+        use std::os::windows::fs::MetadataExt;
 
-        let (Some(read_only), Kind::File) = (change.read_only, node.kind) else {
+        use super::plan::Kind;
+        use super::win_attrs::{Wanted, set};
+
+        let wanted = Wanted::of(change, matches!(node.kind, Kind::File));
+        if wanted.is_empty() {
             return Ok(());
-        };
+        }
 
         let file = super::open::attributes(&node.path)?;
-        let mut permissions = file.metadata()?.permissions();
+        let metadata = file.metadata()?;
+        // A folder swapped in for a file (or the other way) is refused: read-only is for files only.
+        if metadata.is_dir() != matches!(node.kind, Kind::Dir) {
+            return Err(refusal(
+                io::ErrorKind::Other,
+                "it changed while its attributes were being changed",
+            ));
+        }
+        // The attributes adjusted are the ones the item has now.
+        let current = metadata.file_attributes();
 
-        #[allow(
-            clippy::permissions_set_readonly_false,
-            reason = "the Windows read-only attribute; there is no world-writable bit to set"
-        )]
-        permissions.set_readonly(read_only);
-
-        file.set_permissions(permissions)
+        set(&file, current, wanted)
     }
 
     /// Sets the times of `change` on `node`.

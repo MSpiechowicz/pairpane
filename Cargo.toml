@@ -11,7 +11,8 @@ repository = "https://github.com/MSpiechowicz/pairpane"
 rust-version = "1.98"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# Denied, not forbidden: the one module that calls into Windows (`pairpane_core::ops::win_attrs`) allows it.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
@@ -62,6 +63,10 @@ uzers = { version = "0.12.2", default-features = false, features = ["cache"] }
 # without following links), so two spellings of one place (8.3 names, case, a volume GUID path) compare equal. A safe
 # API over `winapi-util`; both are in the lockfile already through `walkdir`.
 same-file = "1.0.6"
+# Windows only: setting the hidden, system and archive attributes through a handle (`SetFileInformationByHandle`, the one
+# `unsafe` block of the workspace, in pairpane_core::ops::win_attrs). Only the two features that call needs; already in
+# the lockfile through other dependencies.
+windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 # Move to the Trash or Recycle Bin and put back (pairpane_core::ops::trash): the shell's IFileOperation on Windows,
 # Finder on macOS (which has no list or restore here, so no undo). A safe API. Not built on Linux and the BSDs, which
 # do the freedesktop Trash themselves (the crate follows links, copies across disks and panics on odd mount names).

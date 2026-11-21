@@ -57,7 +57,7 @@ pub(super) fn validate(request: &Request) -> Result<(), Refused> {
 
 /// Refuses a kind that is not the task's, a verify, split or combine that has other than one name, an output that
 /// is not a plain name, a part shorter than [`MIN_PART_SIZE`], and an attribute change that changes nothing, uses
-/// bits beyond `0o7777`, sets permissions on Windows or the read-only attribute elsewhere.
+/// bits beyond `0o7777`, sets permissions on Windows or the Windows attributes elsewhere.
 fn validate_task(request: &Request) -> Result<(), Refused> {
     let fits = match request.task.kind() {
         None => matches!(request.kind, OpKind::Copy | OpKind::Move),
@@ -79,9 +79,6 @@ fn validate_task(request: &Request) -> Result<(), Refused> {
 }
 
 fn attributes_acceptable(change: &AttributeChange) -> bool {
-    let nothing =
-        change.mode.is_none() && change.read_only.is_none() && change.modified.is_none() && change.accessed.is_none();
-
     let in_range = match change.mode {
         None => true,
         Some(ModeChange::Set { mode }) => mode <= MODE_MASK,
@@ -92,8 +89,8 @@ fn attributes_acceptable(change: &AttributeChange) -> bool {
     let here = if cfg!(windows) {
         change.mode.is_none()
     } else {
-        change.read_only.is_none()
+        !change.sets_windows_attributes()
     };
 
-    !nothing && in_range && here
+    !change.changes_nothing() && in_range && here
 }

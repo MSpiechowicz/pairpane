@@ -79,6 +79,9 @@ fn change_everything() -> Task {
     Task::Attributes(AttributeChange {
         mode: Some(ModeChange::Set { mode: 0o700 }),
         read_only: None,
+        hidden: None,
+        system: None,
+        archive: None,
         modified: Some(1_500_000_000_000),
         accessed: None,
         recursive: true,

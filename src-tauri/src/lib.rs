@@ -1,6 +1,9 @@
 //! Pairpane: the Tauri shell. It hosts the UI and exposes `pairpane_core` through IPC commands;
 //! all domain logic lives in the core crate.
 
+// The shell never needs `unsafe` (the workspace only denies it, for one module of the core crate).
+#![forbid(unsafe_code)]
+
 mod commands;
 mod error;
 mod logging;
