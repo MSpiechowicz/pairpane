@@ -1,3 +1,14 @@
+# [0.13.0](https://github.com/MSpiechowicz/pairpane/compare/v0.12.0...v0.13.0) (2026-11-21)
+
+
+### Features
+
+* HEIC preview on Linux and Windows with the system's codecs ([4a18261](https://github.com/MSpiechowicz/pairpane/commit/4a18261a63afadbfaca425074ffcc04be604b859)), closes [#14](https://github.com/MSpiechowicz/pairpane/issues/14)
+
+### Bug Fixes
+
+* HEIC tests per platform and the WIC step that failed ([1aca2a3](https://github.com/MSpiechowicz/pairpane/commit/1aca2a32865a8284f9e14426a0ec2732d0f692f6)), closes [#14](https://github.com/MSpiechowicz/pairpane/issues/14)
+
 # [0.12.0](https://github.com/MSpiechowicz/pairpane/compare/v0.11.0...v0.12.0) (2026-11-21)
 
 
