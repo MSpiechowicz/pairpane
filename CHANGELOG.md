@@ -1,3 +1,10 @@
+# [0.14.0](https://github.com/MSpiechowicz/pairpane/compare/v0.13.0...v0.14.0) (2026-11-21)
+
+
+### Features
+
+* F4 built-in editor and external editor ([97285ce](https://github.com/MSpiechowicz/pairpane/commit/97285ce47ee724d4aa32e94abe7b3a26096f188c)), closes [#15](https://github.com/MSpiechowicz/pairpane/issues/15)
+
 # [0.13.0](https://github.com/MSpiechowicz/pairpane/compare/v0.12.0...v0.13.0) (2026-11-21)
 
 

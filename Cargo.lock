@@ -3036,7 +3036,7 @@ dependencies = [
 
 [[package]]
 name = "pairpane_app"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "getrandom 0.4.3",
  "pairpane_core",
@@ -3057,7 +3057,7 @@ dependencies = [
 
 [[package]]
 name = "pairpane_core"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "base64 0.23.1",
  "blake3",
