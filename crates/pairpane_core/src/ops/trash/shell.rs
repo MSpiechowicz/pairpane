@@ -89,6 +89,10 @@ fn item_error(error: &::trash::Error, path: &Path) -> io::Error {
             Err(error) => io::Error::from(error.kind()),
             Ok(_) => io::Error::from(io::ErrorKind::PermissionDenied),
         },
+        // The shell on Windows fails an item that is gone with an error code of its own.
+        _ if fs::symlink_metadata(path).is_err_and(|error| error.kind() == io::ErrorKind::NotFound) => {
+            io::Error::from(io::ErrorKind::NotFound)
+        }
         _ => refusal(io::ErrorKind::Other, NOT_MOVED),
     }
 }

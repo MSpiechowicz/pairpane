@@ -111,7 +111,18 @@ pub(super) fn create_file(folder: &Path, name: &str) -> io::Result<PathBuf> {
 
     // Not `open::create_new`: that file is private to its owner until a copy sets its real permissions, and this
     // one is final. `create_new` also fails on a link at the name, even a dangling one, and never follows it.
-    OpenOptions::new().write(true).create_new(true).open(&path)?;
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| {
+            // Windows refuses a new file over a folder as access denied: the name is taken all the same.
+            if error.kind() == io::ErrorKind::PermissionDenied && fs::symlink_metadata(&path).is_ok() {
+                io::Error::from(io::ErrorKind::AlreadyExists)
+            } else {
+                error
+            }
+        })?;
 
     Ok(path)
 }

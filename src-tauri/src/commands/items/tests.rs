@@ -49,13 +49,16 @@ fn code<T: std::fmt::Debug>(result: CommandResult<T>) -> IpcErrorCode {
     result.expect_err("refused").code()
 }
 
+#[allow(
+    clippy::field_reassign_with_default,
+    reason = "a private field on Linux rules out a struct literal"
+)]
 fn trashed(names: &[&str]) -> Trashed {
     let mut record = Trashed::default();
     record.folder = root().into();
     record.names = self::names(names);
     record.from = 1;
     record.to = 2;
-
     record
 }
 
