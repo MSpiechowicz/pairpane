@@ -126,7 +126,17 @@ fn the_helper_decodes_the_fixture_where_the_system_has_a_decoder() {
 
             return;
         }
-        Err(error) => panic!("the fixture did not decode: {error}"),
+        Err(error) => {
+            #[cfg(windows)]
+            let step = super::wic::failed_at();
+            #[cfg(not(windows))]
+            let step: Option<(&str, i32)> = None;
+
+            panic!(
+                "the fixture did not decode: {error} (failed at {:?})",
+                step.map(|(step, code)| format!("{step} {:#010x}", code as u32))
+            )
+        }
     };
 
     assert_eq!(picture.len(), HEADER + 16 * 8 * 4);

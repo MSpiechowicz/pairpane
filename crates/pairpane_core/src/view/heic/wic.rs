@@ -76,29 +76,60 @@ pub(super) fn decode(bytes: &[u8]) -> io::Result<Vec<u8>> {
     let _com = Com::enter()?;
 
     // Every COM object lives inside `convert`, so all are released before `_com` leaves COM.
+    FAILED_AT.set(None);
     match convert(bytes) {
         Ok(result) => result,
         Err(error) => {
-            tracing::debug!(%error, "the imaging component refused");
+            let step = FAILED_AT.get().map_or("?", |(step, _)| step);
+            tracing::debug!(%error, step, "the imaging component refused");
+
+            // No HEIF decoder can be made at all: the HEIF extension is not installed (whatever the code says).
+            if step == "CreateDecoder" {
+                return Err(super::no_decoder());
+            }
 
             Err(map_hresult(error.code().0))
         }
     }
 }
 
+thread_local! {
+    /// The step of the last failed conversion on this thread and its `HRESULT`, for the log and the tests.
+    static FAILED_AT: std::cell::Cell<Option<(&'static str, i32)>> = const { std::cell::Cell::new(None) };
+}
+
+/// The step of the last failed decode on this thread and its `HRESULT` (for a test to say what Windows answered).
+#[cfg(test)]
+pub(super) fn failed_at() -> Option<(&'static str, i32)> {
+    FAILED_AT.get()
+}
+
+/// Notes `step` as the one that failed when `result` is an error.
+fn at<T>(step: &'static str, result: windows::core::Result<T>) -> windows::core::Result<T> {
+    if let Err(error) = &result {
+        FAILED_AT.set(Some((step, error.code().0)));
+    }
+
+    result
+}
+
 /// The conversion itself. The outer error is a COM failure to be mapped; the inner result is a refusal of our own.
 fn convert(bytes: &[u8]) -> windows::core::Result<io::Result<Vec<u8>>> {
     // SAFETY: the class and the flags are the documented way to get the imaging factory in this process, and the
     // result is an owned interface that releases itself.
-    let factory: IWICImagingFactory =
-        unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)? };
+    let factory: IWICImagingFactory = unsafe {
+        at(
+            "CoCreateInstance",
+            CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER),
+        )?
+    };
 
     // SAFETY: `factory` is a live interface. `bytes` is valid for its length and outlives `stream` and everything
     // made from it (it is a parameter of this function, and they are all dropped before it returns); the stream reads
     // it without copying and never writes it.
     let stream = unsafe {
-        let stream = factory.CreateStream()?;
-        stream.InitializeFromMemory(bytes)?;
+        let stream = at("CreateStream", factory.CreateStream())?;
+        at("InitializeFromMemory", stream.InitializeFromMemory(bytes))?;
 
         stream
     };
@@ -107,11 +138,17 @@ fn convert(bytes: &[u8]) -> windows::core::Result<io::Result<Vec<u8>>> {
     // (any HEIF decoder), so only the HEIF codec reads the stream; the decoder, the frame and its size are owned
     // interfaces and values made from them.
     let (frame, width, height) = unsafe {
-        let decoder = factory.CreateDecoder(&GUID_ContainerFormatHeif, ptr::null())?;
-        decoder.Initialize(&stream, WICDecodeMetadataCacheOnDemand)?;
-        let frame = decoder.GetFrame(0)?;
+        let decoder = at(
+            "CreateDecoder",
+            factory.CreateDecoder(&GUID_ContainerFormatHeif, ptr::null()),
+        )?;
+        at(
+            "Initialize",
+            decoder.Initialize(&stream, WICDecodeMetadataCacheOnDemand),
+        )?;
+        let frame = at("GetFrame", decoder.GetFrame(0))?;
         let (mut width, mut height) = (0, 0);
-        frame.GetSize(&raw mut width, &raw mut height)?;
+        at("GetSize", frame.GetSize(&raw mut width, &raw mut height))?;
 
         (frame, width, height)
     };
@@ -131,16 +168,20 @@ fn convert(bytes: &[u8]) -> windows::core::Result<io::Result<Vec<u8>>> {
     // the checked size: `width * 4` bytes per row (at most 131 068) and exactly `width * height * 4` bytes after the
     // header. `CopyPixels` gets a NULL rectangle, which means the whole frame, and writes only inside `out[HEADER..]`.
     unsafe {
-        let converter = factory.CreateFormatConverter()?;
-        converter.Initialize(
+        let converter = at("CreateFormatConverter", factory.CreateFormatConverter())?;
+        let initialized = converter.Initialize(
             &frame,
             &GUID_WICPixelFormat32bppRGBA,
             WICBitmapDitherTypeNone,
             None::<&IWICPalette>,
             0.0,
             WICBitmapPaletteTypeCustom,
+        );
+        at("FormatConverter::Initialize", initialized)?;
+        at(
+            "CopyPixels",
+            converter.CopyPixels(ptr::null(), width * 4, &mut out[HEADER..]),
         )?;
-        converter.CopyPixels(ptr::null(), width * 4, &mut out[HEADER..])?;
     }
 
     Ok(Ok(out))

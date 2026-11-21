@@ -55,6 +55,11 @@ fn a_file_that_is_not_a_heic_image_is_refused_before_a_thread_is_taken() {
     assert_eq!(code(block_on(viewer.image_decode(heic, nowhere()))), IpcErrorCode::Busy);
 }
 
+// Only where HEIC is decoded by the backend (on macOS the webview does it and the backend refuses at once).
+#[cfg(any(
+    windows,
+    all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))
+))]
 #[test]
 fn a_file_of_another_codec_in_a_heic_container_is_refused_before_a_helper_is_started() {
     let (_folder, path) = folder_with(&[("av1.heic", AV1_HEIC)]);
@@ -106,6 +111,11 @@ fn decoding_the_picture_of_a_session_that_is_not_there_is_not_found() {
     );
 }
 
+// Only where HEIC is decoded by the backend (on macOS the webview does it and the backend refuses at once).
+#[cfg(any(
+    windows,
+    all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))
+))]
 #[test]
 fn a_helper_that_cannot_be_started_is_a_plain_failure_without_its_text() {
     let (_folder, path) = folder_with(&[("tiny.heic", TINY_HEIC)]);
