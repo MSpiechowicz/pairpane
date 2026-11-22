@@ -234,6 +234,7 @@ fn random_hex() -> io::Result<String> {
 
 /// Creates the folder `path`, which must not exist yet, for its owner alone.
 fn private_folder(path: &Path) -> io::Result<()> {
+    #[cfg_attr(not(unix), expect(unused_mut, reason = "only Unix sets a mode on the builder"))]
     let mut builder = DirBuilder::new();
     #[cfg(unix)]
     builder.mode(0o700);
