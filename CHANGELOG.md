@@ -1,3 +1,10 @@
+# [0.15.0](https://github.com/MSpiechowicz/pairpane/compare/v0.14.0...v0.15.0) (2026-11-22)
+
+
+### Features
+
+* archives — browse as folders, view and extract (#35) ([f92e4bb](https://github.com/MSpiechowicz/pairpane/commit/f92e4bbd31c44e8a5cab164429938dc9ff92159f))
+
 # [0.14.0](https://github.com/MSpiechowicz/pairpane/compare/v0.13.0...v0.14.0) (2026-11-21)
 
 
