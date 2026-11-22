@@ -201,7 +201,6 @@ fn an_ignore_file_with_exactly_the_most_lines_and_a_final_newline_is_read() {
     assert_eq!(found.done().1, 0);
 }
 
-/// The rules of `root` for a search of it, to be asked about paths one by one.
 #[test]
 fn empty_ignore_files_take_no_room_and_are_not_counted_when_there_is_none() {
     let root = temp();
@@ -220,6 +219,7 @@ fn empty_ignore_files_take_no_room_and_are_not_counted_when_there_is_none() {
     assert_eq!(skipped.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
 
+/// The rules of `root` for a search of it, to be asked about paths one by one.
 pub(super) fn ignores(
     root: &std::path::Path,
 ) -> (super::ignored::Ignores, std::sync::Arc<std::sync::atomic::AtomicU64>) {

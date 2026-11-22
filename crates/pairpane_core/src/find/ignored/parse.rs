@@ -26,7 +26,8 @@ pub(super) fn listed(below: &Path, name: &str) -> Option<String> {
 
 /// Whether the name `name` of the folder `dir` is there, whatever it is (a link is not followed): one look, where opening
 /// it step by step costs a call for each folder on the way. An empty file holds no rule, so it is as good as not there:
-/// it takes no room and is never counted as left out.
+/// it takes no room and is never counted as left out. (A file system that reports a size of 0 for a file that has some,
+/// as `/proc` does, has its ignore files taken as empty: no project keeps its rules there.)
 pub(super) fn present(dir: &Path, name: &str) -> bool {
     match fs::symlink_metadata(dir.join(name)) {
         Ok(found) => !(found.is_file() && found.len() == 0),
