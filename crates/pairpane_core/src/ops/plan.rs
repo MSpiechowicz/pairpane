@@ -17,7 +17,7 @@ use super::volume;
 
 /// What an entry of a folder is. A link is a link whatever it points at: nothing here follows one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Kind {
+pub(crate) enum Kind {
     Dir,
     File,
     Link,
@@ -27,12 +27,12 @@ pub(super) enum Kind {
 
 /// One entry of a source folder, as the walk saw it.
 #[derive(Debug)]
-pub(super) struct Child {
-    pub(super) name: OsString,
-    pub(super) path: PathBuf,
-    pub(super) kind: Kind,
+pub(crate) struct Child {
+    pub(crate) name: OsString,
+    pub(crate) path: PathBuf,
+    pub(crate) kind: Kind,
     /// Read without following links.
-    pub(super) meta: Metadata,
+    pub(crate) meta: Metadata,
 }
 
 impl Child {
@@ -52,7 +52,7 @@ impl Child {
     }
 
     /// The top-level item `name` of the source folder `from`; fails when it is gone.
-    pub(super) fn lookup(from: &Path, name: &str) -> io::Result<Self> {
+    pub(crate) fn lookup(from: &Path, name: &str) -> io::Result<Self> {
         let path = from.join(name);
         let meta = fs::symlink_metadata(&path)?;
 
@@ -66,17 +66,17 @@ impl Child {
 }
 
 /// The entries of one folder.
-pub(super) struct Listing {
-    pub(super) children: Vec<Child>,
+pub(crate) struct Listing {
+    pub(crate) children: Vec<Child>,
     /// Entries that could not be read.
-    pub(super) failed: Vec<io::Error>,
+    pub(crate) failed: Vec<io::Error>,
     /// Entries left out because Windows would read their name as something else.
-    pub(super) skipped: u32,
+    pub(crate) skipped: u32,
 }
 
 /// Lists the folder `dir` without following any link. The folder is closed again before the caller goes into
 /// its subfolders, so a deep tree does not hold a descriptor per level.
-pub(super) fn read_children(dir: &Path) -> io::Result<Listing> {
+pub(crate) fn read_children(dir: &Path) -> io::Result<Listing> {
     let mut listing = Listing {
         children: Vec::new(),
         failed: Vec::new(),
@@ -109,7 +109,7 @@ pub(super) fn read_children(dir: &Path) -> io::Result<Listing> {
 }
 
 /// Whether `inner` is `outer` or below it, comparing names whole, and ignoring case where the platform does.
-pub(super) fn is_inside(inner: &Path, outer: &Path) -> bool {
+pub(crate) fn is_inside(inner: &Path, outer: &Path) -> bool {
     is_inside_with(inner, outer, platform::CASE_INSENSITIVE)
 }
 
@@ -139,7 +139,7 @@ pub(super) fn is_inside_with(inner: &Path, outer: &Path, ignore_case: bool) -> b
 
 /// The path with its links resolved, for comparing where two paths lead. On Windows `existing` was resolved
 /// already, link by link, with the checks that keep it off network paths.
-fn real(existing: &Path) -> io::Result<PathBuf> {
+pub(crate) fn real(existing: &Path) -> io::Result<PathBuf> {
     if cfg!(windows) {
         Ok(existing.to_owned())
     } else {
@@ -229,7 +229,7 @@ impl Run<'_> {
             platform::check_folder(folder).map_err(|reason| refusal(io::ErrorKind::InvalidInput, reason))?;
         }
         let spelled = |name: &String| match request.task {
-            Task::Pack { .. } => is_item_path(name),
+            Task::Pack { .. } | Task::Sync { .. } => is_item_path(name),
             _ => platform::is_plain_name(name),
         };
         if !request.names.iter().all(spelled) {

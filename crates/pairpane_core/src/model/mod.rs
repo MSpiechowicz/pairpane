@@ -6,6 +6,7 @@
 
 mod app;
 mod archive;
+mod compare;
 mod edit;
 mod find;
 mod ipc_error;
@@ -23,6 +24,10 @@ mod volume;
 
 pub use app::AppInfo;
 pub use archive::ArchiveSpot;
+pub use compare::{
+    CompareEvent, CompareFacts, CompareId, CompareOptions, CompareRoot, CompareRow, CompareStatus, SyncDirection,
+    SyncFacts, SyncItem,
+};
 pub use edit::{EditDocument, EditOpened, EditSaveOptions, EditSaved, ExternalEdit, LineEnding};
 pub use find::{FindCriteria, FindEvent, FindHit, FindId, FindQuery, FindText, SavedSearch, Tri};
 pub use ipc_error::{IpcError, IpcErrorCode};

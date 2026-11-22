@@ -49,6 +49,10 @@ impl Run<'_> {
             return self.rename_batch(targets, *undo, log);
         }
 
+        if let Task::Sync { left, right, plans } = task {
+            return self.sync(left, right, plans);
+        }
+
         let scene = self.prepare_task(task)?;
 
         match task {
@@ -61,7 +65,8 @@ impl Run<'_> {
             | Task::Extract { .. }
             | Task::Pack { .. }
             | Task::AddToArchive { .. }
-            | Task::Rename { .. } => {
+            | Task::Rename { .. }
+            | Task::Sync { .. } => {
                 Err(refusal(io::ErrorKind::InvalidInput, "this job cannot start with these items").into())
             }
         }

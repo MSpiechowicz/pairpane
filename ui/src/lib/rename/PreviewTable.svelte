@@ -4,11 +4,12 @@
   import VirtualRows from '$lib/panes/VirtualRows.svelte';
 
   import { PROBLEMS } from './problems';
+  import '../ops/table.css';
 
   let { rows, stale = false }: { rows: readonly RenameRow[]; stale?: boolean } = $props();
 </script>
 
-<div class="table" class:stale role="table" aria-label="Preview" aria-busy={stale}>
+<div class="table dialog-table" class:stale role="table" aria-label="Preview" aria-busy={stale}>
   <div class="head" role="row">
     <span role="columnheader">Now</span>
     <span aria-hidden="true"></span>
@@ -33,41 +34,17 @@
 </div>
 
 <style>
-  .table {
-    border: 1px solid var(--line);
-    border-radius: 7px;
-    background: var(--bg);
-    overflow: hidden;
-  }
-
   .stale .body {
     opacity: 0.6;
   }
 
   .head,
   .row {
-    display: grid;
     grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr) minmax(0, 0.8fr);
-    align-items: center;
-    gap: 8px;
-    height: 24px;
-    padding: 0 10px;
-  }
-
-  .head {
-    border-bottom: 1px solid var(--line);
-    background: var(--panel-2);
-    color: var(--dim);
-    font-size: 11.5px;
   }
 
   .body {
     height: 200px;
-  }
-
-  .row {
-    border-left: 2px solid transparent;
-    font-size: 12.5px;
   }
 
   .row.unchanged {
@@ -77,14 +54,6 @@
   .row.bad {
     border-left-color: var(--danger);
     background: color-mix(in srgb, var(--danger) 12%, transparent);
-  }
-
-  .name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: var(--font-mono);
-    unicode-bidi: isolate; /* a name may be written right to left: it is set apart from the text around it */
   }
 
   .arrow {

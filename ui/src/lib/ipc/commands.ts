@@ -1,6 +1,10 @@
 import type { Answer } from './bindings/Answer';
 import type { AppInfo } from './bindings/AppInfo';
 import type { ArchiveListing } from './bindings/ArchiveListing';
+import type { CompareEvent } from './bindings/CompareEvent';
+import type { CompareId } from './bindings/CompareId';
+import type { CompareOptions } from './bindings/CompareOptions';
+import type { CompareRoot } from './bindings/CompareRoot';
 import type { ControlAction } from './bindings/ControlAction';
 import type { EditOpened } from './bindings/EditOpened';
 import type { EditSaved } from './bindings/EditSaved';
@@ -27,6 +31,7 @@ import type { SavedState } from './bindings/SavedState';
 import type { SearchHit } from './bindings/SearchHit';
 import type { SearchQuery } from './bindings/SearchQuery';
 import type { SizeEvent } from './bindings/SizeEvent';
+import type { SyncItem } from './bindings/SyncItem';
 import type { TextQuery } from './bindings/TextQuery';
 import type { TextWindow } from './bindings/TextWindow';
 import type { TrashOutcome } from './bindings/TrashOutcome';
@@ -70,6 +75,12 @@ export const commands = {
   find_cancel: cmd<{ id: FindId }, null>(),
   find_forget: cmd<{ id: FindId }, null>(),
   find_open: cmd<{ pane: PaneId; id: FindId; onEvent: EventSink<ListEvent> }, null>(),
+  compare_start: cmd<
+    { left: CompareRoot; right: CompareRoot; options: CompareOptions; onEvent: EventSink<CompareEvent> },
+    CompareId
+  >(),
+  compare_cancel: cmd<{ id: CompareId }, null>(),
+  compare_forget: cmd<{ id: CompareId }, null>(),
   volumes_list: cmd<{ onEvent: EventSink<VolumeEvent> }, null>(),
   ops_subscribe: cmd<{ onEvent: EventSink<OpsEvent> }, null>(),
   ops_start: cmd<{ kind: OpKind; from: string; names: string[]; to: string; verify: boolean; within?: ResultFolder }, JobId>(),
@@ -93,6 +104,7 @@ export const commands = {
   ops_rename: cmd<{ path: string; from: string; to: string }, null>(),
   rename_preview: cmd<{ path: string; names: string[]; rule: RenameRule }, RenamePreview>(),
   ops_rename_undo: cmd<{ job: JobId }, JobId>(),
+  ops_sync: cmd<{ left: CompareRoot; right: CompareRoot; items: SyncItem[] }, JobId>(),
   ops_trash: cmd<{ path: string; names: string[]; within?: ResultFolder }, TrashOutcome>(),
   ops_untrash: cmd<{ token: number }, number>(),
   ops_delete: cmd<{ path: string; names: string[]; within?: ResultFolder }, null>(),

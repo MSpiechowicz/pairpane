@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-compare-cancel"
+description = "Enables the compare_cancel command without any pre-configured scope."
+commands.allow = ["compare_cancel"]
+
+[[permission]]
+identifier = "deny-compare-cancel"
+description = "Denies the compare_cancel command without any pre-configured scope."
+commands.deny = ["compare_cancel"]

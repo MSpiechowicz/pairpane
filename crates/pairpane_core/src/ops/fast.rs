@@ -72,12 +72,12 @@ fn clone_new(_source: &File, _temp: &Path) -> io::Result<Option<File>> {
 
 /// Linux: makes the empty `copy` share the data of `source` (a reflink). `false` when the filesystem cannot.
 #[cfg(target_os = "linux")]
-fn clone_into(copy: &File, source: &File) -> bool {
+pub(super) fn clone_into(copy: &File, source: &File) -> bool {
     rustix::fs::ioctl_ficlone(copy, source).is_ok()
 }
 
 #[cfg(not(target_os = "linux"))]
-fn clone_into(_copy: &File, _source: &File) -> bool {
+pub(super) fn clone_into(_copy: &File, _source: &File) -> bool {
     false
 }
 

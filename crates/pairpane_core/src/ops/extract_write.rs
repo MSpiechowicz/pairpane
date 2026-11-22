@@ -51,6 +51,11 @@ pub(super) struct Landing {
 }
 
 impl Landing {
+    /// Whether this job made the folder `rel` below the target, once it is known to be there (`None` before).
+    pub(super) fn made(&self, rel: &str) -> Option<bool> {
+        self.folders.get(&self.target.join(rel)).copied()
+    }
+
     pub(super) fn new(target: PathBuf, origin: Origin) -> Self {
         Self {
             target,
@@ -97,7 +102,7 @@ impl Run<'_> {
 
     /// Makes the folders of `relative` below the target, the ones that are there already being used as they are.
     /// Returns the last. Nothing is made through a link: a link or a file in the way is an error.
-    fn folder_for(&mut self, landing: &mut Landing, relative: &str) -> Result<PathBuf, Stop> {
+    pub(super) fn folder_for(&mut self, landing: &mut Landing, relative: &str) -> Result<PathBuf, Stop> {
         let mut path = landing.target.clone();
 
         for part in relative.split('/').filter(|part| !part.is_empty()) {

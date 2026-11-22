@@ -3,6 +3,7 @@
 
 pub mod app;
 pub mod archives;
+pub mod compare;
 pub mod edit;
 pub mod find;
 pub mod items;

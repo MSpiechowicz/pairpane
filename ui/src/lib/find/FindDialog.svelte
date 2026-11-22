@@ -114,12 +114,12 @@
 
 <Modal title="Find files" variant="wide" onClose={() => finder.close()}>
   <div class="find" {@attach enterSubmits(startOrStop)}>
-    <p class="root">Look in <span class="path">{displayName(finder.root ?? '')}</span></p>
+    <p class="root">Look in <span class="dialog-path">{displayName(finder.root ?? '')}</span></p>
 
     <SavedBar {saved} current={criteria} onLoad={(loaded) => Object.assign(form, toForm(loaded))} />
 
     <div class="form">
-      <fieldset>
+      <fieldset class="group">
         <legend>Name</legend>
         <label class="labelled">
           <span>Names</span>
@@ -138,7 +138,7 @@
         <label class="check"><input type="checkbox" bind:checked={form.nameCase} />Match case</label>
       </fieldset>
 
-      <fieldset>
+      <fieldset class="group">
         <legend>Content</legend>
         <label class="labelled">
           <span>Text</span>
@@ -164,7 +164,7 @@
         <label class="check"><input type="checkbox" disabled={lock.text} bind:checked={form.anySize} />Files of any size</label>
       </fieldset>
 
-      <fieldset>
+      <fieldset class="group">
         <legend>Size</legend>
         {#each SIZES as { label, size, unit } (size)}
           <label class="labelled">
@@ -184,7 +184,7 @@
         {/each}
       </fieldset>
 
-      <fieldset>
+      <fieldset class="group">
         <legend>Modified</legend>
         <label class="labelled">
           <span>From</span>
@@ -196,7 +196,7 @@
         </label>
       </fieldset>
 
-      <fieldset>
+      <fieldset class="group">
         <legend>Attributes</legend>
         {#each attributes as { label, key } (key)}
           <label class="labelled">
@@ -210,7 +210,7 @@
         {/each}
       </fieldset>
 
-      <fieldset>
+      <fieldset class="group">
         <legend>Options</legend>
         <label class="check"><input type="checkbox" disabled={lock.skipHidden} bind:checked={form.skipHidden} />Skip hidden</label>
         <label class="check"><input type="checkbox" bind:checked={form.skipIgnored} />Skip ignored (.gitignore)</label>
@@ -261,36 +261,12 @@
     color: var(--dim);
   }
 
-  .path {
-    color: var(--text);
-    font-family: var(--font-mono);
-    unicode-bidi: isolate; /* the folder may hold right-to-left names: it is set apart from the text around it */
-  }
-
   .form {
     display: grid;
     gap: 8px;
     max-height: min(300px, 34vh);
     padding-right: 4px;
     overflow-y: auto;
-  }
-
-  fieldset {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 14px;
-    min-width: 0;
-    margin: 0;
-    padding: 6px 10px 8px;
-    border: 1px solid var(--line);
-    border-radius: 7px;
-  }
-
-  legend {
-    padding: 0 4px;
-    color: var(--dim);
-    font-size: 11.5px;
   }
 
   .labelled .number {

@@ -4,7 +4,7 @@ import type { FileAction } from '$lib/ops/dialogs';
 export type Menu = 'drives' | 'hotlist';
 
 /**
- * What the Files menu asks for: an action of the file keys, the file in the built-in editor (F4 may mean another), or
- * the Find dialog.
+ * What the Files menu asks for: an action of the file keys, the file in the built-in editor (F4 may mean another), the
+ * Find dialog, or one of the two ways to compare the panes' folders.
  */
-export type FilesChoice = FileAction | 'editBuiltin' | 'find';
+export type FilesChoice = FileAction | 'editBuiltin' | 'find' | 'compare' | 'synchronize';

@@ -186,6 +186,7 @@
                 cursor={index === view.cursor}
                 selected={entry !== undefined && view.isSelected(entry.name)}
                 size={entry && view.sizes.text(entry)}
+                mark={entry && view.marks.get(entry.name)}
                 edit={editing !== undefined && entry?.name === editing.name ? rename : undefined}
               />
             {/snippet}

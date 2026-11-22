@@ -369,6 +369,7 @@ pub mod extract;
 mod extractions;
 pub mod pack;
 mod rename_undo;
+mod sync;
 pub mod tasks;
 
 #[cfg(test)]

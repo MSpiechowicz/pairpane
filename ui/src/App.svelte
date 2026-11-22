@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
 
+  import CompareTools from '$lib/compare/CompareTools.svelte';
+  import { Comparison } from '$lib/compare/controller.svelte';
   import { Editor } from '$lib/editor/editor.svelte';
   import EditorOverlay from '$lib/editor/EditorOverlay.svelte';
   import FindDialog from '$lib/find/FindDialog.svelte';
@@ -97,6 +99,7 @@
   });
   let panelOpen = $state(false);
   const files = new FileActions(ipc, panes, () => active);
+  const comparison = new Comparison(ipc, panes, (text, error) => files.say(text, error), () => showHidden);
   const viewer = new Viewer(ipc, panes, () => active);
   const editor = new Editor(ipc, {
     under: () => viewer.under,
@@ -106,7 +109,7 @@
   const question = $derived(transfers.question);
   /** A dialog (or the viewer's or editor's overlay) has the keyboard: the shortcuts and Tab are its own then. */
   const modal = $derived(
-    files.modal || question !== undefined || viewer.modal || editor.modal || passwords.modal || finder.modal,
+    files.modal || question !== undefined || viewer.modal || editor.modal || passwords.modal || finder.modal || comparison.modal,
   );
 
   /** Alt+F7: the Find dialog, on the folder the active pane shows (inside an archive: the folder that holds it). */
@@ -281,6 +284,8 @@
       edit(true);
     } else if (choice === 'find') {
       find();
+    } else if (choice === 'compare' || choice === 'synchronize') {
+      comparison.run(choice);
     } else {
       files.run(choice);
     }
@@ -337,6 +342,8 @@
     onToggleHidden={toggleHidden}
     onFiles={chooseFile}
     onFind={find}
+    onCompare={() => comparison.quick()}
+    onSync={() => comparison.synchronize()}
   />
 
   <main class="panes">
@@ -437,6 +444,8 @@
     onGoTo={(hit) => finder.root !== undefined && void goTo(panes[active].view, finder.root, hit)}
   />
 {/if}
+
+<CompareTools {comparison} />
 
 {#if editor.session}
   <EditorOverlay {editor} session={editor.session} />

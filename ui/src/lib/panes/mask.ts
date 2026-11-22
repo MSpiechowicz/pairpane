@@ -1,3 +1,5 @@
+import type { Entry } from '$lib/ipc/bindings/Entry';
+
 /** Whether `name` fits `pattern` (both already lower-case): `*` is any run of characters, `?` exactly one. */
 function fits(pattern: string, name: string): boolean {
   let p = 0;
@@ -49,4 +51,19 @@ export function parseMask(text: string): (name: string) => boolean {
     const lower = name.toLowerCase();
     return masks.some((mask) => fits(mask, lower));
   };
+}
+
+export type MaskMode = 'select' | 'deselect';
+
+/** The names of the files (not folders) among the entries `each` visits that the mask `text` matches. */
+export function maskedFiles(each: (visit: (entry: Entry) => void) => void, text: string): string[] {
+  const matches = parseMask(text);
+  const names: string[] = [];
+  each((entry) => {
+    if (entry.kind !== 'dir' && matches(entry.name)) {
+      names.push(entry.name);
+    }
+  });
+
+  return names;
 }

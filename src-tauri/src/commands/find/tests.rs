@@ -2,18 +2,14 @@
 //! stopped.
 
 use std::fs;
-use std::sync::{Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Mutex;
 
 use pairpane_core::model::FindCriteria;
-use tauri::ipc::InvokeResponseBody;
 
 use super::*;
 use crate::commands::archives::fixtures::collecting;
+pub(super) use crate::commands::testing::{Gate, gated, wait_until};
 use crate::commands::testing::{elsewhere, folder_with};
-
-/// How long a test waits for something that must happen before it calls it a hang.
-const PATIENCE: Duration = Duration::from_secs(20);
 
 pub(super) type Log = Arc<Mutex<Vec<FindEvent>>>;
 
@@ -35,15 +31,6 @@ pub(super) fn tree() -> (tempfile::TempDir, String) {
     fs::write(folder.path().join("sub").join("b.txt"), b"beta").expect("file");
 
     (folder, path)
-}
-
-pub(super) fn wait_until(what: &str, ready: impl Fn() -> bool) {
-    let limit = Instant::now() + PATIENCE;
-
-    while !ready() {
-        assert!(Instant::now() < limit, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(5));
-    }
 }
 
 pub(super) fn ended(log: &Log) -> bool {
@@ -95,54 +82,6 @@ pub(super) fn hit_paths(events: &[FindEvent]) -> Vec<String> {
     paths.sort();
 
     paths
-}
-
-/// A gate that holds the page's channel: while it is shut, the search waits in the delivery of an event, so it runs on.
-pub(super) struct Gate {
-    open: Mutex<bool>,
-    changed: Condvar,
-}
-
-impl Gate {
-    pub(super) fn release(&self) {
-        *self.open.lock().expect("not poisoned") = true;
-        self.changed.notify_all();
-    }
-
-    fn pass(&self) {
-        let open = self.open.lock().expect("not poisoned");
-        let (_open, result) = self
-            .changed
-            .wait_timeout_while(open, PATIENCE, |open| !*open)
-            .expect("not poisoned");
-
-        assert!(!result.timed_out(), "the gate was never opened");
-    }
-}
-
-/// A channel whose events are recorded and then held at the gate, until it is released.
-pub(super) fn gated() -> (Channel<FindEvent>, Arc<Gate>, Log) {
-    let gate = Arc::new(Gate {
-        open: Mutex::new(false),
-        changed: Condvar::new(),
-    });
-    let log = Log::default();
-    let (held, recorded) = (Arc::clone(&gate), Arc::clone(&log));
-
-    let channel = Channel::new(move |body| {
-        let InvokeResponseBody::Json(text) = body else {
-            panic!("events are sent as JSON");
-        };
-        recorded
-            .lock()
-            .expect("not poisoned")
-            .push(serde_json::from_str(&text).expect("an event"));
-        held.pass();
-
-        Ok(())
-    });
-
-    (channel, gate, log)
 }
 
 #[test]

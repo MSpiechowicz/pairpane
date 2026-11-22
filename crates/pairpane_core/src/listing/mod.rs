@@ -300,9 +300,12 @@ fn unread(name: &Name) -> Entry {
 
 /// Last modification in milliseconds since the Unix epoch (negative before it).
 pub(crate) fn modified_millis(metadata: &Metadata) -> Option<i64> {
-    let modified = metadata.modified().ok()?;
+    system_millis(metadata.modified().ok()?)
+}
 
-    match modified.duration_since(UNIX_EPOCH) {
+/// `time` in milliseconds since the Unix epoch (negative before it).
+pub(crate) fn system_millis(time: std::time::SystemTime) -> Option<i64> {
+    match time.duration_since(UNIX_EPOCH) {
         Ok(after) => i64::try_from(after.as_millis()).ok(),
         Err(before) => i64::try_from(before.duration().as_millis()).ok().map(|millis| -millis),
     }

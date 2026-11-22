@@ -81,7 +81,12 @@ impl Ops {
 /// thread. Fails with `passwordRequired` when the chosen entries are encrypted and there is no password, or when the
 /// archive's directory turns down the one there is (which is then forgotten, so the page asks again). A password that
 /// only fails later, while the job decrypts, ends the job with `passwordRequired` and is not forgotten here.
-fn prepare(archives: &Archives, target: &Target, dir: &str, names: &[String]) -> Result<ArchiveJob, IpcError> {
+pub(super) fn prepare(
+    archives: &Archives,
+    target: &Target,
+    dir: &str,
+    names: &[String],
+) -> Result<ArchiveJob, IpcError> {
     // A compressed tar is decoded by the job itself, which can be cancelled and shows its progress.
     let source = load(archives, target, false)?;
 
