@@ -28,6 +28,10 @@ pub enum OpKind {
     Attributes,
     /// Extracts entries of an archive into the target folder.
     Extract,
+    /// Writes the items into a new archive.
+    Pack,
+    /// Writes the items into an archive that exists, by writing a new one beside it and replacing the old.
+    AddToArchive,
 }
 
 /// Where a running job is. Runs in this order; `waiting` and `cancelling` can interrupt the later steps.
@@ -59,6 +63,8 @@ pub enum JobPhase {
     Changing,
     /// Reading an archive and writing the entries it holds (extract jobs).
     Extracting,
+    /// Reading the items and writing them into a new archive (pack jobs) or into the rewritten one (add jobs).
+    Packing,
     /// Stopped on a conflict question until [`Answer`] arrives (see [`OpsEvent::Conflict`]).
     Waiting,
     /// Cancel was requested; the job is stopping and removing what it created.

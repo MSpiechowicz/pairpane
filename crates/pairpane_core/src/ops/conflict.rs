@@ -212,10 +212,10 @@ impl Run<'_> {
 
     /// The phase the job is in while it works, which it returns to after a question.
     fn working_phase(&self) -> JobPhase {
-        if matches!(self.job.request.task, Task::Extract { .. }) {
-            JobPhase::Extracting
-        } else {
-            JobPhase::Copying
+        match self.job.request.task {
+            Task::Extract { .. } => JobPhase::Extracting,
+            Task::Pack { .. } | Task::AddToArchive { .. } => JobPhase::Packing,
+            _ => JobPhase::Copying,
         }
     }
 

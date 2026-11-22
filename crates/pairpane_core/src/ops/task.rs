@@ -37,6 +37,10 @@ impl Run<'_> {
             return self.extract(inner, entries, source);
         }
 
+        if matches!(task, Task::Pack { .. } | Task::AddToArchive { .. }) {
+            return Err(refusal(io::ErrorKind::Unsupported, "this job is not available yet").into());
+        }
+
         let scene = self.prepare_task(task)?;
 
         match task {
@@ -45,7 +49,7 @@ impl Run<'_> {
             Task::Split { part_size } => self.split_file(&scene, *part_size),
             Task::Combine => self.combine_parts(&scene),
             Task::Attributes(change) => self.change_attributes(&scene, change),
-            Task::Transfer | Task::Extract { .. } => {
+            Task::Transfer | Task::Extract { .. } | Task::Pack { .. } | Task::AddToArchive { .. } => {
                 Err(refusal(io::ErrorKind::InvalidInput, "this job cannot start with these items").into())
             }
         }
