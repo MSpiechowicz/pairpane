@@ -1,6 +1,8 @@
 <script lang="ts">
   import { untrack } from 'svelte';
 
+  import { displayName } from '$lib/panes/format';
+
   import type { Viewer } from './viewer.svelte';
   import ViewBody from './ViewBody.svelte';
 
@@ -24,7 +26,7 @@
     <p class="message">Nothing to show</p>
   {:else}
     {#key shown}
-      <header class="name">{shown.name}</header>
+      <header class="name">{displayName(shown.name)}</header>
       <ViewBody session={shown} />
     {/key}
   {/if}

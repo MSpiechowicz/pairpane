@@ -1,6 +1,8 @@
 <script lang="ts">
   import { untrack } from 'svelte';
 
+  import { displayName } from '$lib/panes/format';
+
   import ViewNotice from './ViewNotice.svelte';
   import { onNewHit, takeFocus, type ViewProps } from './viewProps.svelte';
   import ScrollTrack from './ScrollTrack.svelte';
@@ -56,7 +58,7 @@
     role="textbox"
     aria-readonly="true"
     aria-multiline="true"
-    aria-label="Text of {session.name}"
+    aria-label="Text of {displayName(session.name)}"
     data-wrap={session.wrap}
     tabindex="0"
     data-autofocus={focus ? '' : undefined}

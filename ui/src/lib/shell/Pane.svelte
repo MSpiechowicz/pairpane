@@ -2,6 +2,7 @@
   import { untrack } from 'svelte';
 
   import ColumnHeader from '$lib/panes/ColumnHeader.svelte';
+  import { displayName } from '$lib/panes/format';
   import type { Hotlist } from '$lib/panes/hotlist.svelte';
   import { handleKey } from '$lib/panes/keys';
   import type { InlineRename } from '$lib/panes/inlineRename.svelte';
@@ -158,7 +159,7 @@
 
   <div class="rows">
     {#if listing.status === 'error'}
-      <p class="message" role="alert">{listing.error}</p>
+      <p class="message" role="alert">{displayName(listing.error ?? '')}</p>
     {:else}
       <div
         class="list"
@@ -192,7 +193,7 @@
         {/key}
       </div>
       {#if listing.notice}
-        <p class="notice" role="alert">{listing.notice}</p>
+        <p class="notice" role="alert">{displayName(listing.notice)}</p>
       {/if}
       {#if listing.slow}
         <div class="spinner" role="status" aria-label="Loading"></div>

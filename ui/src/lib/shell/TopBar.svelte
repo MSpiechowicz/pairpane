@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
 
+  import { displayName } from '$lib/panes/format';
+
   import FilesMenu from './FilesMenu.svelte';
   import type { FilesChoice } from './menu';
   import { shortcutFor } from './shortcuts';
@@ -106,7 +108,7 @@
     {#if version}
       <span class="version">v{version}</span>
     {:else if failure}
-      <span class="failure" role="alert">Could not load app info: {failure}</span>
+      <span class="failure" role="alert">Could not load app info: {displayName(failure)}</span>
     {/if}
   </div>
 

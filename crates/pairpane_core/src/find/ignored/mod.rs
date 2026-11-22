@@ -12,22 +12,27 @@
 //! the files of a deeper folder come before those of a shallower one, and `.ignore` comes before `.gitignore`, which
 //! comes before the exclude file.
 
+mod budget;
+mod cache;
+mod parse;
+
+use std::collections::HashSet;
 use std::collections::hash_map::RandomState;
-use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::BuildHasher;
-use std::io::{self, Read};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use ignore::Match;
-use ignore::gitignore::{Gitignore, GitignoreBuilder, Glob};
+use ignore::gitignore::{Gitignore, Glob};
 
 use crate::ops::open_listed;
 
-/// The biggest ignore file that is read, in bytes.
-const MAX_BYTES: u64 = 256 * 1024;
+use budget::{Budget, Charge, Turns};
+use cache::{Kept, Slot, forget_older_half, forget_to_free};
+use parse::{MAX_BYTES, count_lines, listed, parse, read_limited};
 
 /// The most lines of an ignore file.
 pub(super) const MAX_LINES: usize = 2_000;
@@ -42,13 +47,20 @@ pub(super) const HELD_LINES: usize = 50_000;
 /// The most bytes of ignore files that are in use at once.
 pub(super) const HELD_BYTES: usize = 8 * 1024 * 1024;
 
-/// The most folders whose rules are remembered at once; past it the older half is dropped and read again when needed.
+/// The most folders whose rules are remembered at once; past it the older half of those that nothing uses is dropped and
+/// read again when needed.
 const KEPT: usize = 4096;
+
+/// An ignore file with more lines than this waits for a turn to be compiled.
+const BIG: usize = 200;
+
+/// How many folders the walk threads hold on to, one each, while they test the entries of a folder.
+const PINS: usize = 16;
 
 /// The rules of one ignore file, with the share of the budget they hold until they are dropped.
 struct Rules {
     gitignore: Gitignore,
-    _charge: Charge,
+    charge: Charge,
 }
 
 /// The rules that apply in one folder: its own files and, through `parent`, those of the folders above.
@@ -62,90 +74,40 @@ struct Layer {
     repository: bool,
     /// The folder is in a git repository: it holds a `.git` or a folder above does.
     in_repository: bool,
-}
-
-/// The lines and bytes of ignore files held by the rules that are alive: those remembered and those a lookup still uses.
-#[derive(Default)]
-struct Budget {
-    used: Mutex<Used>,
-}
-
-#[derive(Default)]
-struct Used {
-    lines: usize,
-    bytes: usize,
-    /// The most that was held at once.
-    #[cfg(test)]
-    peak: (usize, usize),
-}
-
-/// A share of the [`Budget`], given back when the rules it was taken for are dropped.
-struct Charge {
-    budget: Arc<Budget>,
-    lines: usize,
-    bytes: usize,
-}
-
-impl Budget {
-    /// A share for a file of `lines` and `bytes`; `None` when the budget has no room for it.
-    fn take(self: &Arc<Self>, lines: usize, bytes: usize) -> Option<Charge> {
-        let mut used = self.used.lock().unwrap_or_else(PoisonError::into_inner);
-
-        if used.lines + lines > HELD_LINES || used.bytes + bytes > HELD_BYTES {
-            return None;
-        }
-
-        used.lines += lines;
-        used.bytes += bytes;
-        #[cfg(test)]
-        {
-            used.peak = (used.peak.0.max(used.lines), used.peak.1.max(used.bytes));
-        }
-
-        Some(Charge {
-            budget: Arc::clone(self),
-            lines,
-            bytes,
-        })
-    }
-}
-
-impl Drop for Charge {
-    fn drop(&mut self) {
-        let mut used = self.budget.used.lock().unwrap_or_else(PoisonError::into_inner);
-
-        used.lines -= self.lines;
-        used.bytes -= self.bytes;
-    }
-}
-
-/// The place of one folder's rules in the memory of the search: read once, by whichever thread comes first.
-struct Slot {
-    layer: OnceLock<Arc<Layer>>,
-    /// When the folder was last asked for.
+    /// When the folder, or one below it, was last asked for.
     used: AtomicU64,
 }
 
-impl Slot {
-    fn new(used: u64) -> Self {
-        Self {
-            layer: OnceLock::new(),
-            used: AtomicU64::new(used),
-        }
-    }
+/// The numbers the threads that look rules up are given in turn, to tell them apart.
+static THREADS: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    static THREAD: usize = THREADS.fetch_add(1, Ordering::Relaxed);
 }
 
 /// What `.ignore` and git ignore files say about the paths of one search.
+///
+/// The rules of a folder live as long as something uses them: the folder's place in `kept`, a folder below that has them
+/// for a parent, a walk thread's pin, or a lookup. Only rules that nothing but `kept` holds are ever forgotten, so what
+/// is forgotten is freed at once, and the rules of a folder above one in use are never read a second time. The rules of
+/// the folder searched, and of those above it, are held by `top` for the whole search.
 pub(crate) struct Ignores {
     root: PathBuf,
     top: Arc<Layer>,
-    kept: RwLock<HashMap<PathBuf, Arc<Slot>>>,
+    kept: RwLock<Kept>,
+    /// One folder for each walk thread (shared by the threads that hash to the same place): the rules of the folder whose
+    /// entries a thread is testing, and so of the folders above it, are not forgotten for room for a file below.
+    pins: Vec<Mutex<Option<Arc<Layer>>>>,
     clock: AtomicU64,
     budget: Arc<Budget>,
+    turns: Turns,
     /// The files already counted as left out (by a hash of their path), so that reading a folder again counts nothing.
     counted: Mutex<HashSet<u64>>,
     hasher: RandomState,
     skipped: Arc<AtomicU64>,
+    /// How many files were compiled.
+    #[cfg(test)]
+    compiled: AtomicU64,
 }
 
 impl Ignores {
@@ -155,12 +117,16 @@ impl Ignores {
         let mut ignores = Self {
             root: root.to_owned(),
             top: Arc::new(Layer::empty(root)),
-            kept: RwLock::new(HashMap::new()),
+            kept: RwLock::new(Kept::new()),
+            pins: (0..PINS).map(|_| Mutex::new(None)).collect(),
             clock: AtomicU64::new(0),
             budget: Arc::new(Budget::default()),
+            turns: Turns::new(),
             counted: Mutex::new(HashSet::new()),
             hasher: RandomState::new(),
             skipped,
+            #[cfg(test)]
+            compiled: AtomicU64::new(0),
         };
 
         let mut above: Vec<&Path> = root.ancestors().skip(1).collect();
@@ -177,10 +143,16 @@ impl Ignores {
         ignores
     }
 
+    /// How many ignore files were compiled.
+    #[cfg(test)]
+    pub(super) fn compiles(&self) -> u64 {
+        self.compiled.load(Ordering::Relaxed)
+    }
+
     /// The most lines and bytes of ignore files that were held at once.
     #[cfg(test)]
     pub(super) fn peak(&self) -> (usize, usize) {
-        self.budget.used.lock().unwrap_or_else(PoisonError::into_inner).peak
+        self.budget.peak()
     }
 
     /// Whether the rules leave out `path` (below the folder searched), a folder when `is_dir`.
@@ -222,44 +194,70 @@ impl Ignores {
         ignore.or(git).or(exclude).is_ignore()
     }
 
-    /// The rules of the folder `dir`, read when they are not remembered yet. A folder is read once at a time: a thread
-    /// that finds it being read waits for the result.
+    /// The rules of the folder `dir`, read when they are not remembered yet. The folder and those above it count as used
+    /// now, and the folder is the one this thread holds on to.
     fn layer(&self, dir: &Path) -> Arc<Layer> {
+        let layer = self.find(dir);
+
+        let tick = self.clock.fetch_add(1, Ordering::Relaxed);
+        let mut next = Some(&layer);
+        while let Some(above) = next {
+            above.used.store(tick, Ordering::Relaxed);
+            next = above.parent.as_ref();
+        }
+
+        self.pin(&layer);
+
+        layer
+    }
+
+    /// The rules of the folder `dir`. A folder is read once at a time: a thread that finds it being read waits for the
+    /// result.
+    fn find(&self, dir: &Path) -> Arc<Layer> {
         if dir == self.root || !dir.starts_with(&self.root) {
             return Arc::clone(&self.top);
         }
 
         let slot = self.slot(dir);
-        if let Some(layer) = slot.layer.get() {
+        let mut held = slot.layer.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(layer) = held.as_ref() {
             return Arc::clone(layer);
         }
 
         let parent = dir
             .parent()
-            .map_or_else(|| Arc::clone(&self.top), |above| self.layer(above));
+            .map_or_else(|| Arc::clone(&self.top), |above| self.find(above));
+        let layer = Arc::new(self.read(Some(parent), dir));
 
-        Arc::clone(slot.layer.get_or_init(|| Arc::new(self.read(Some(parent), dir))))
+        *held = Some(Arc::clone(&layer));
+
+        layer
     }
 
     /// The place of the folder `dir`, made when there is none. Looking one up only reads the map.
     fn slot(&self, dir: &Path) -> Arc<Slot> {
-        let tick = self.clock.fetch_add(1, Ordering::Relaxed);
-
         if let Ok(kept) = self.kept.read()
-            && let Some(slot) = kept.get(dir)
+            && let Some(slot) = kept.slots.get(dir)
         {
-            slot.used.store(tick, Ordering::Relaxed);
-
             return Arc::clone(slot);
         }
 
         let Ok(mut kept) = self.kept.write() else {
-            return Arc::new(Slot::new(tick));
+            return Arc::new(Slot::new());
         };
 
-        let slot = Arc::clone(kept.entry(dir.to_owned()).or_insert_with(|| Arc::new(Slot::new(tick))));
-        let gone = if kept.len() > KEPT {
-            forget_older_half(&mut kept)
+        let slot = Arc::clone(
+            kept.slots
+                .entry(dir.to_owned())
+                .or_insert_with(|| Arc::new(Slot::new())),
+        );
+        let gone = if kept.slots.len() > kept.trim_at {
+            let gone = forget_older_half(&mut kept.slots);
+
+            // When most of the folders are in use there is little to forget: wait for some more before looking again.
+            kept.trim_at = KEPT.max(kept.slots.len() + KEPT / 8);
+
+            gone
         } else {
             Vec::new()
         };
@@ -271,23 +269,39 @@ impl Ignores {
         slot
     }
 
-    /// A share of the budget for a file; when there is none, the folders remembered longest ago are forgotten (what no
-    /// lookup uses is freed) until there is, or until none is left. `None` then: the file is left out.
+    /// Makes `layer` the folder this thread holds on to.
+    fn pin(&self, layer: &Arc<Layer>) {
+        let place = THREAD.with(|place| *place) % self.pins.len();
+        let mut pinned = self.pins[place].lock().unwrap_or_else(PoisonError::into_inner);
+
+        if pinned.as_ref().is_some_and(|pinned| Arc::ptr_eq(pinned, layer)) {
+            return;
+        }
+
+        let before = pinned.replace(Arc::clone(layer));
+
+        drop(pinned);
+        drop(before);
+    }
+
+    /// A share of the budget for a file. When there is none, the rules that nothing uses are forgotten, the ones used
+    /// longest ago first and no more than it takes, but only when they hold enough to make room: `None` otherwise, and
+    /// the file is left out. The rules of the folders in use (those above the file's own among them) are never given up.
     fn reserve(&self, lines: usize, bytes: usize) -> Option<Charge> {
         loop {
-            if let Some(charge) = self.budget.take(lines, bytes) {
-                return Some(charge);
-            }
-
+            let (more_lines, more_bytes) = match self.budget.take(lines, bytes) {
+                Ok(charge) => return Some(charge),
+                Err(more) => more,
+            };
             let gone = {
                 let mut kept = self.kept.write().ok()?;
 
-                if kept.is_empty() {
-                    return None;
-                }
-
-                forget_older_half(&mut kept)
+                forget_to_free(&mut kept.slots, more_lines, more_bytes)
             };
+
+            if gone.is_empty() {
+                return None;
+            }
 
             drop(gone);
         }
@@ -321,6 +335,7 @@ impl Ignores {
             exclude,
             repository,
             in_repository,
+            used: AtomicU64::new(self.clock.fetch_add(1, Ordering::Relaxed)),
         }
     }
 
@@ -357,12 +372,15 @@ impl Ignores {
             return self.left_out(dir, name);
         };
 
+        // The rules of a big file take much memory while they are built: only a few are built at a time.
+        let _turn = (lines > BIG).then(|| self.turns.wait());
+
+        #[cfg(test)]
+        self.compiled.fetch_add(1, Ordering::Relaxed);
+
         match parse(dir, bytes) {
             Some(gitignore) if gitignore.is_empty() => None,
-            Some(gitignore) => Some(Rules {
-                gitignore,
-                _charge: charge,
-            }),
+            Some(gitignore) => Some(Rules { gitignore, charge }),
             None => self.left_out(dir, name),
         }
     }
@@ -381,21 +399,6 @@ impl Ignores {
     }
 }
 
-/// Removes the older half of the remembered folders and returns them, to be dropped once the lock is released.
-fn forget_older_half(kept: &mut HashMap<PathBuf, Arc<Slot>>) -> Vec<Arc<Slot>> {
-    let mut ages: Vec<(u64, PathBuf)> = kept
-        .iter()
-        .map(|(dir, slot)| (slot.used.load(Ordering::Relaxed), dir.clone()))
-        .collect();
-
-    ages.sort_unstable();
-
-    ages.into_iter()
-        .take(kept.len().div_ceil(2))
-        .filter_map(|(_, dir)| kept.remove(&dir))
-        .collect()
-}
-
 impl Layer {
     fn empty(dir: &Path) -> Self {
         Self {
@@ -406,7 +409,18 @@ impl Layer {
             exclude: None,
             repository: false,
             in_repository: false,
+            used: AtomicU64::new(0),
         }
+    }
+
+    /// The lines and bytes of the budget the rules of this folder hold, not those of the folders above.
+    fn charged(&self) -> (usize, usize) {
+        [&self.ignore, &self.git, &self.exclude]
+            .into_iter()
+            .flatten()
+            .fold((0, 0), |(lines, bytes), rules| {
+                (lines + rules.charge.lines, bytes + rules.charge.bytes)
+            })
     }
 }
 
@@ -415,60 +429,4 @@ fn matched<'a>(rules: &'a Option<Rules>, relative: &Path, is_dir: bool) -> Match
         Some(rules) => rules.gitignore.matched(relative, is_dir),
         None => Match::None,
     }
-}
-
-/// The path of `name` in the folder `below` the one searched, names joined with `/`; `None` when a name is not valid Unicode.
-fn listed(below: &Path, name: &str) -> Option<String> {
-    let mut listed = String::new();
-
-    for part in below.components() {
-        listed.push_str(part.as_os_str().to_str()?);
-        listed.push('/');
-    }
-    listed.push_str(name);
-
-    Some(listed)
-}
-
-/// What `file` holds up to [`MAX_BYTES`]; `None` when it holds more, or cannot be read.
-fn read_limited(file: fs::File) -> Option<Vec<u8>> {
-    let mut bytes = Vec::new();
-    let mut limited = file.take(MAX_BYTES + 1);
-
-    limited.read_to_end(&mut bytes).ok()?;
-
-    (bytes.len() as u64 <= MAX_BYTES).then_some(bytes)
-}
-
-/// The lines of `bytes`: a final newline ends the last line, it does not start another.
-fn lines(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
-    let body = bytes.strip_suffix(b"\n").unwrap_or(bytes);
-
-    body.split(|byte| *byte == b'\n').filter(|_| !bytes.is_empty())
-}
-
-/// How many lines `bytes` has; `None` when there are too many or a line is too long.
-fn count_lines(bytes: &[u8]) -> Option<usize> {
-    let mut count = 0;
-
-    for line in lines(bytes) {
-        count += 1;
-        if count > MAX_LINES || line.len() > MAX_LINE {
-            return None;
-        }
-    }
-
-    Some(count)
-}
-
-/// The rules the lines of `bytes` (already within the limits) make, as if the file was in `dir`. `None` when the rules
-/// cannot be built. A line that is not a valid pattern is left out, as git does.
-fn parse(dir: &Path, bytes: &[u8]) -> Option<Gitignore> {
-    let mut builder = GitignoreBuilder::new(dir);
-
-    for line in lines(bytes) {
-        builder.add_line(None, &String::from_utf8_lossy(line)).ok();
-    }
-
-    builder.build().ok()
 }

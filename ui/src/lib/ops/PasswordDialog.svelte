@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { displayName } from '$lib/panes/format';
   import Modal from '$lib/shell/Modal.svelte';
 
   import DialogFooter from './DialogFooter.svelte';
@@ -30,7 +31,7 @@
   }
 </script>
 
-<Modal title="Password for “{prompt.name}”" onClose={() => passwords.cancel()}>
+<Modal title="Password for “{displayName(prompt.name)}”" onClose={() => passwords.cancel()}>
   <p class="message" role={prompt.reason === 'wrong' ? 'alert' : undefined}>{message}</p>
   <input
     class="field"

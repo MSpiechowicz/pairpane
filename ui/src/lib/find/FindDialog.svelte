@@ -228,7 +228,7 @@
         {finder.running ? 'Stop' : 'Start'}
       </button>
       {#if finder.failure}
-        <p class="failure" role="alert">{finder.failure}</p>
+        <p class="failure" role="alert">{displayName(finder.failure)}</p>
       {:else if finder.running}
         <p class="status">{progress()}</p>
       {:else if finder.summary}

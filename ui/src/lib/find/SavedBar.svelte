@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { FindCriteria } from '$lib/ipc/bindings/FindCriteria';
+  import { displayName } from '$lib/panes/format';
 
   import { MAX_SEARCH_NAME, type SavedSearches } from './saved.svelte';
   import '../ops/fields.css';
@@ -79,7 +80,7 @@
   <select class="field" aria-label="Saved search" value={choice} onchange={(event) => (choice = event.currentTarget.value)}>
     <option value="">{saved.list.length === 0 ? 'No saved searches' : 'Saved searches…'}</option>
     {#each saved.list as { name: kept } (kept)}
-      <option value={kept}>{kept}</option>
+      <option value={kept}>{displayName(kept)}</option>
     {/each}
   </select>
   <button class="btn" type="button" disabled={chosen === undefined} onclick={load}>Load</button>
@@ -102,7 +103,7 @@
   {/if}
 </div>
 {#if message}
-  <p class="failure" role="alert">{message}</p>
+  <p class="failure" role="alert">{displayName(message)}</p>
 {/if}
 
 <style>

@@ -48,6 +48,8 @@ mod dupes_tests;
 #[cfg(test)]
 mod filters_tests;
 #[cfg(test)]
+mod ignored_budget_tests;
+#[cfg(test)]
 mod ignored_tests;
 #[cfg(test)]
 mod inside_tests;

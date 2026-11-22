@@ -25,7 +25,7 @@ const places = [
 ];
 
 /** A drive menu for a pane that is in `path` (the crumbs are the whole path from the root). */
-async function menu(path = '/home/me/Projects') {
+async function menu(path = '/home/me/Projects', offered = places) {
   const backend = fakeBackend();
   const tabs = new PaneTabs(backend.ipc, 'left');
   await tabs.view.listing.open('/start');
@@ -45,8 +45,8 @@ async function menu(path = '/home/me/Projects') {
 
   const volumes = new Volumes(backend.ipc);
   await volumes.refresh();
-  backend.volumes[0].emit({ kind: 'list', volumes: places.map((place) => ({ ...place, free: null })) });
-  for (const place of places.filter((candidate) => candidate.free !== null)) {
+  backend.volumes[0].emit({ kind: 'list', volumes: offered.map((place) => ({ ...place, free: null })) });
+  for (const place of offered.filter((candidate) => candidate.free !== null)) {
     backend.volumes[0].emit({ kind: 'free', path: place.path, bytes: place.free as number });
   }
 
@@ -63,6 +63,12 @@ const highlighted = () => list().getAttribute('aria-activedescendant');
 afterEach(() => vi.useRealTimers());
 
 describe('DriveMenu', () => {
+  it('shows a volume name and label that reorder text with their characters written out', async () => {
+    await menu('/home/me', [volume('Disk\u202Efdp', '/mnt/d', { label: 'Photos\u200Bx' })]);
+
+    expect(options().map((option) => option.textContent?.replace(/\s+/g, ' ').trim())).toEqual(['Disk⟨U+202E⟩fdp Photos⟨U+200B⟩x']);
+  });
+
   it('shows each volume with its dimmed label and its free space when it is known', async () => {
     await menu();
 

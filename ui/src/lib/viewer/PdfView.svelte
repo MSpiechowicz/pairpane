@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { displayName } from '$lib/panes/format';
+
   import { openPdf, type PdfDocument } from './pdf';
   import type { PreviewProps } from './previews';
   import { takeFocus } from './viewProps.svelte';
@@ -72,7 +74,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions (PageUp and PageDown turn the page wherever the focus is inside) -->
-<div class="pdf" role="document" aria-label="PDF {session.name}" tabindex="-1" {onkeydown} {@attach takeFocus(focus)}>
+<div class="pdf" role="document" aria-label="PDF {displayName(session.name)}" tabindex="-1" {onkeydown} {@attach takeFocus(focus)}>
   <div class="bar">
     <button type="button" disabled={page <= 1} aria-label="Previous page" onclick={() => go(page - 1)}>Prev</button>
     <span role="status">{pages > 0 ? `Page ${page} of ${pages}` : ''}</span>

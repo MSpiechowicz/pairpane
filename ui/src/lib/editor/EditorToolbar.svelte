@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { LineEnding } from '$lib/ipc/bindings/LineEnding';
+  import { displayName } from '$lib/panes/format';
   import '$lib/shell/overlayBar.css';
   import { encodingChoices } from '$lib/viewer/encodings';
 
@@ -22,7 +23,7 @@
 </script>
 
 <div class="overlay-bar" role="toolbar" aria-label="Editor">
-  <span class="overlay-bar-name" aria-hidden="true">{session.name}</span>
+  <span class="overlay-bar-name" aria-hidden="true">{displayName(session.name)}</span>
   {#if session.dirty}
     <span class="dirty" role="img" aria-label="Unsaved changes">●</span>
   {/if}

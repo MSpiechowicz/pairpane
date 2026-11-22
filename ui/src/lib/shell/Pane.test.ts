@@ -118,6 +118,14 @@ describe('Pane', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('This folder does not exist.');
   });
 
+  it('shows the backend`s error with the characters that reorder text written out', async () => {
+    const { backend } = await huge();
+
+    backend.last().emit({ kind: 'error', error: { code: 'notFound', message: 'No folder a\u202Etxt.exe' } });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('No folder a⟨U+202E⟩txt.exe');
+  });
+
   it('omits the free space when the backend cannot tell', async () => {
     const { backend } = await huge();
 

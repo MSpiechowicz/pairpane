@@ -23,6 +23,13 @@ describe('ChoiceDialog', () => {
     expect([onConfirm, onAlternate, onCancel].map((handler) => handler.mock.calls.length)).toEqual([1, 1, 1]);
   });
 
+  it('shows the title and the message with the characters that reorder text written out', () => {
+    open({ title: 'Save “a\u202Etxt.exe”?', message: 'Not saved: b\u200Bc' });
+
+    expect(screen.getByRole('dialog', { name: 'Save “a⟨U+202E⟩txt.exe”?' })).toBeInTheDocument();
+    expect(screen.getByText('Not saved: b⟨U+200B⟩c')).toBeInTheDocument();
+  });
+
   it('Escape is Cancel', async () => {
     const { onCancel, onConfirm } = open();
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { displayName } from '$lib/panes/format';
   import type { Hotlist } from '$lib/panes/hotlist.svelte';
   import type { PaneTabs } from '$lib/panes/tabs.svelte';
 
@@ -84,7 +85,7 @@
   {/snippet}
 
   {#snippet row(index)}
-    <span class="fit">{matches[index]}</span>
+    <span class="fit">{displayName(matches[index])}</span>
   {/snippet}
 
   {#snippet footer()}

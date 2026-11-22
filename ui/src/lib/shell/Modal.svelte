@@ -16,6 +16,8 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
 
+  import { displayName } from '$lib/panes/format';
+
   let {
     title,
     variant = 'dialog',
@@ -90,7 +92,7 @@
 
 <div class="backdrop fade-in" class:full={variant === 'full'} class:wide={variant === 'wide'}>
   <div class="popup modal" role="dialog" aria-modal="true" aria-labelledby={titleId} tabindex="-1" bind:this={dialog} {@attach wire}>
-    <h2 id={titleId}>{title}</h2>
+    <h2 id={titleId}>{displayName(title)}</h2>
     {@render children()}
   </div>
 </div>

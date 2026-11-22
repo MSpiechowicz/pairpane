@@ -1,6 +1,6 @@
 <script lang="ts">
   import { volumeOf } from '$lib/panes/crumbs';
-  import { formatFree } from '$lib/panes/format';
+  import { displayName, formatFree } from '$lib/panes/format';
   import type { PaneTabs } from '$lib/panes/tabs.svelte';
   import type { Volumes } from '$lib/panes/volumes.svelte';
 
@@ -45,8 +45,8 @@
 >
   {#snippet row(index)}
     {@const volume = places[index]}
-    <span class="fit">{volume.name}</span>
-    {#if volume.label}<span class="dim fit">{volume.label}</span>{/if}
+    <span class="fit">{displayName(volume.name)}</span>
+    {#if volume.label}<span class="dim fit">{displayName(volume.label)}</span>{/if}
     {#if volume.free !== null}<span class="dim end">{formatFree(volume.free)}</span>{/if}
   {/snippet}
 </Dropdown>

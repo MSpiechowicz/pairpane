@@ -6,7 +6,7 @@ use crate::model::FindCriteria;
 
 use super::testing::{named, put, search, temp};
 
-fn ignoring() -> FindCriteria {
+pub(super) fn ignoring() -> FindCriteria {
     FindCriteria {
         skip_ignored: true,
         ..named("*")
@@ -201,89 +201,16 @@ fn an_ignore_file_with_exactly_the_most_lines_and_a_final_newline_is_read() {
     assert_eq!(found.done().1, 0);
 }
 
-/// The lines of the heavy ignore file, and how many folders it is linked into: more than the budget holds.
-const HEAVY: usize = 1_000;
-const FOLDERS: usize = 70;
-const _: () = assert!(
-    FOLDERS * HEAVY > super::ignored::HELD_LINES,
-    "the folders must outweigh the budget"
-);
-
-/// An ignore file of `lines` distinct patterns, the first of which leaves out `*.ignored-me`.
-fn heavy(lines: usize) -> String {
-    let mut text = String::from("*.ignored-me\n");
-
-    for index in 1..lines {
-        text.push_str(&format!("generated-pattern-{index}-*.log\n"));
-    }
-
-    text
-}
-
 /// The rules of `root` for a search of it, to be asked about paths one by one.
-fn ignores(root: &std::path::Path) -> (super::ignored::Ignores, std::sync::Arc<std::sync::atomic::AtomicU64>) {
+pub(super) fn ignores(
+    root: &std::path::Path,
+) -> (super::ignored::Ignores, std::sync::Arc<std::sync::atomic::AtomicU64>) {
     let skipped = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
 
     (
         super::ignored::Ignores::new(root, std::sync::Arc::clone(&skipped)),
         skipped,
     )
-}
-
-#[test]
-fn many_folders_with_one_heavy_ignore_file_never_hold_more_than_the_budget() {
-    let root = temp();
-    let text = heavy(HEAVY);
-    put(root.path(), "heavy.rules", text.as_bytes());
-    for index in 0..FOLDERS {
-        let folder = root.path().join(format!("d{index}"));
-
-        std::fs::create_dir_all(&folder).expect("folder");
-        std::fs::hard_link(root.path().join("heavy.rules"), folder.join(".ignore")).expect("a hard link");
-        put(&folder, "keep.txt", b"x");
-        put(&folder, "gone.ignored-me", b"x");
-    }
-
-    let (ignores, skipped) = ignores(root.path());
-    for index in 0..FOLDERS {
-        let folder = root.path().join(format!("d{index}"));
-
-        assert!(ignores.leaves_out(&folder.join("gone.ignored-me"), false));
-        assert!(!ignores.leaves_out(&folder.join("keep.txt"), false));
-    }
-
-    let (lines, bytes) = ignores.peak();
-    assert!(lines > 0 && lines <= super::ignored::HELD_LINES, "{lines} lines");
-    assert!(bytes <= super::ignored::HELD_BYTES, "{bytes} bytes");
-    assert_eq!(skipped.load(std::sync::atomic::Ordering::Relaxed), 0);
-
-    let found = search(root.path(), ignoring());
-    assert!(found.paths().contains(&"d69/keep.txt".to_owned()));
-    assert!(!found.paths().contains(&"d69/gone.ignored-me".to_owned()));
-}
-
-#[test]
-fn rules_that_the_folders_in_use_hold_past_the_budget_are_left_out_and_counted() {
-    let root = temp();
-    let text = heavy(HEAVY);
-    put(root.path(), "heavy.rules", text.as_bytes());
-
-    // Each folder is below the one before, so the rules of all of them are in use for a path at the bottom.
-    let mut folder = root.path().to_owned();
-    for index in 0..FOLDERS {
-        folder.push(format!("n{index}"));
-
-        std::fs::create_dir_all(&folder).expect("folder");
-        std::fs::hard_link(root.path().join("heavy.rules"), folder.join(".ignore")).expect("a hard link");
-    }
-
-    let (ignores, skipped) = ignores(root.path());
-    ignores.leaves_out(&folder.join("a.txt"), false);
-
-    let (lines, _) = ignores.peak();
-    let counted = skipped.load(std::sync::atomic::Ordering::Relaxed);
-    assert!(lines <= super::ignored::HELD_LINES, "{lines} lines");
-    assert!(counted > 0 && counted < FOLDERS as u64, "{counted} left out");
 }
 
 #[test]

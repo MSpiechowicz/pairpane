@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { formatSize } from '$lib/panes/format';
+  import { displayName, formatSize } from '$lib/panes/format';
   import '$lib/shell/overlayBar.css';
 
   import { encodingChoices } from './encodings';
@@ -51,7 +51,7 @@
 </script>
 
 <div class="overlay-bar" role="toolbar" aria-label="Viewer">
-  <span class="overlay-bar-name" aria-hidden="true">{session.name}</span>
+  <span class="overlay-bar-name" aria-hidden="true">{displayName(session.name)}</span>
   {#if session.status === 'ready'}
     <span class="size">{formatSize(session.size)}</span>
 
@@ -114,7 +114,7 @@
         {#if search.searching}
           <button type="button" onclick={() => search.cancel()}>Cancel</button>
         {/if}
-        <span class="message" role="status">{message ?? ''}</span>
+        <span class="message" role="status">{displayName(message ?? '')}</span>
       </div>
     {/if}
   {/if}

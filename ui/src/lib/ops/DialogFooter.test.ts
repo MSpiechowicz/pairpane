@@ -25,6 +25,12 @@ describe('DialogFooter', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('That name is taken.');
   });
 
+  it('shows a refusal that names a file with the characters that reorder text written out', () => {
+    render(DialogFooter, { busy: false, confirm: 'Create', failure: 'Cannot write a\u202Etxt.exe', onCancel: vi.fn() });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Cannot write a⟨U+202E⟩txt.exe');
+  });
+
   it('turns both buttons off while busy', () => {
     render(DialogFooter, { busy: true, confirm: 'Create', onCancel: vi.fn() });
 

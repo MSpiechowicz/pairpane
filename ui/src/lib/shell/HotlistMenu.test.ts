@@ -28,6 +28,15 @@ const options = () => screen.queryAllByRole('option').map((option) => option.tex
 const toggle = () => screen.getByRole('button', { name: /current folder$/ });
 
 describe('HotlistMenu', () => {
+  it('shows a favourite folder that reorders text with its characters written out, and opens the real one', async () => {
+    const { backend } = await menu(['/home/me/txt\u202Eexe']);
+
+    expect(options()).toEqual(['/home/me/txt⟨U+202E⟩exe']);
+
+    await fireEvent.click(screen.getByRole('option'));
+    expect(backend.last().args).toMatchObject({ path: '/home/me/txt\u202Eexe' });
+  });
+
   it('lists the favourites in the order they were added; the filter field has the focus', async () => {
     await menu();
 

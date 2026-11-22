@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { displayName } from '$lib/panes/format';
+
   import type { Updates } from './updates.svelte';
 
   let { updates }: { updates: Updates } = $props();
@@ -69,7 +71,7 @@
         <button class="btn btn-primary" type="button" onclick={() => updates.relaunch()}>Restart</button>
       </div>
     {:else if state.kind === 'failed'}
-      <p class="m-0 text-danger" role="alert">{state.message}</p>
+      <p class="m-0 text-danger" role="alert">{displayName(state.message)}</p>
       <div class="mt-3 flex justify-end gap-2">
         <button class="btn" type="button" onclick={() => updates.dismiss()}>Close</button>
         {#if state.info}

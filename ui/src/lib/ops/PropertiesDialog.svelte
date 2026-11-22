@@ -4,7 +4,7 @@
   import type { Entry } from '$lib/ipc/bindings/Entry';
   import type { ItemProperties } from '$lib/ipc/bindings/ItemProperties';
   import { IpcFailure, type Transport } from '$lib/ipc/transport';
-  import { formatSize } from '$lib/panes/format';
+  import { displayName, formatSize } from '$lib/panes/format';
   import type { FolderSizes } from '$lib/panes/sizes.svelte';
   import Modal from '$lib/shell/Modal.svelte';
 
@@ -109,7 +109,7 @@
     <dl>
       {#each rowsOf(properties) as [label, value] (label)}
         <dt>{label}</dt>
-        <dd>{value}</dd>
+        <dd>{displayName(value)}</dd>
       {/each}
     </dl>
   {:else if failure === undefined}

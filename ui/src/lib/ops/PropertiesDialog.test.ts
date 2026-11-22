@@ -41,6 +41,19 @@ describe('PropertiesDialog', () => {
     expect(screen.queryByText('Points to')).not.toBeInTheDocument();
   });
 
+  it('shows names and paths that reorder text with their characters written out', async () => {
+    const { calls } = open(entry('invoice\u202Efdp.exe'), {
+      ops_properties: () => properties({ name: 'invoice\u202Efdp.exe', linkTarget: '/t/a\u202Eb', owner: 'o\u200Bw' }),
+    });
+
+    expect(await screen.findByText('Permissions')).toBeInTheDocument();
+    expect(calls('ops_properties')).toEqual([{ path: '/work', name: 'invoice\u202Efdp.exe' }]);
+    expect(screen.getByRole('dialog', { name: 'Properties of “invoice⟨U+202E⟩fdp.exe”' })).toBeInTheDocument();
+    expect(line('Name')).toBe('invoice⟨U+202E⟩fdp.exe');
+    expect(line('Points to')).toBe('/t/a⟨U+202E⟩b');
+    expect(line('Owner')).toBe('o⟨U+200B⟩w');
+  });
+
   it('says it is reading until the answer comes, and has Close focused', async () => {
     open(undefined, { ops_properties: () => new Promise(() => {}) });
 

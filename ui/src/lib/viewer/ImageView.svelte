@@ -1,5 +1,6 @@
 <script lang="ts">
   import { IpcFailure } from '$lib/ipc/transport';
+  import { displayName } from '$lib/panes/format';
 
   import { retryBusy } from './busy';
   import { IMAGE_CAP, readWhole, TooBig } from './bytes';
@@ -157,13 +158,13 @@
     <!-- An <img> only: a script in an SVG does not run there. -->
     <img
       src={url}
-      alt={session.name}
+      alt={displayName(session.name)}
       onerror={failed}
     />
   {/if}
   {#if decoded}
     <!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -- a canvas is the picture itself, not a control -->
-    <canvas bind:this={canvas} role="img" aria-label={session.name} width={decoded.width} height={decoded.height}></canvas>
+    <canvas bind:this={canvas} role="img" aria-label={displayName(session.name)} width={decoded.width} height={decoded.height}></canvas>
   {/if}
   <ViewNotice {error} text={loading ? 'Loading…' : undefined} />
 </div>
