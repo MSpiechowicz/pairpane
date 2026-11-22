@@ -8,7 +8,7 @@ use tauri::async_runtime::block_on;
 
 use super::super::tests::{Log, gated, hit_paths, query, searched, tree};
 use super::*;
-use crate::commands::archives::fixtures::{collecting, path_text};
+use crate::commands::archives::fixtures::collecting;
 
 /// Opens the results of `id` in the left pane; the command answers once the listing is sent, so the events are all there.
 fn opened(panes: &Panes, finder: &Finder, id: FindId) -> (CommandResult<()>, Vec<ListEvent>) {
@@ -57,7 +57,7 @@ fn everything() -> (tempfile::TempDir, String, Finder, FindId) {
 
 #[test]
 fn the_results_are_listed_under_the_folder_searched_with_relative_names_folders_first() {
-    let (folder, root, finder, id) = everything();
+    let (_folder, root, finder, id) = everything();
 
     let (result, events) = opened(&Panes::default(), &finder, id);
 
@@ -74,7 +74,11 @@ fn the_results_are_listed_under_the_folder_searched_with_relative_names_folders_
         panic!("start comes first: {events:?}");
     };
     assert_eq!(*path, root);
-    assert_eq!(parent.as_deref(), folder.path().parent().map(path_text).as_deref());
+    assert_eq!(
+        parent.as_deref(),
+        Some(root.as_str()),
+        "up from the results is the folder searched"
+    );
     assert_eq!(crumbs.last().map(|crumb| crumb.path.as_str()), Some(root.as_str()));
     assert_eq!((*total, archive.is_none(), *results), (4, true, Some(id)));
 

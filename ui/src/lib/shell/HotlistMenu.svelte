@@ -17,6 +17,19 @@
   const listing = $derived(tabs.view.listing);
   const here = $derived(listing.path);
 
+  /** Why the current folder cannot be added, when it cannot. */
+  const unaddable = $derived.by(() => {
+    if (listing.readonly) {
+      return 'A folder inside an archive can’t be a favourite.';
+    }
+
+    if (listing.results !== undefined) {
+      return 'Search results are not a folder — open a file’s folder first.';
+    }
+
+    return undefined;
+  });
+
   let field = $state<HTMLInputElement>();
   let query = $state('');
   let active = $state(0);
@@ -79,7 +92,7 @@
       class="here"
       type="button"
       disabled={here === undefined}
-      title={listing.readonly ? 'A folder inside an archive can’t be a favourite.' : undefined}
+      title={unaddable}
       onclick={toggleHere}
     >
       {here !== undefined && hotlist.has(here) ? 'Remove current folder' : 'Add current folder'}

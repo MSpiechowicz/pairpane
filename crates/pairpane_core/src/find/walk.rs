@@ -1,13 +1,15 @@
 //! Walking the folder tree on the threads of `ignore`'s parallel walker, one search's own.
 //!
 //! The walker never follows a link (a link is a result, not a folder to enter), prunes what the options leave out
-//! before it enters it, and stops once the search does. Each thread tests the entries it meets and sends the ones that
+//! before it enters it, and stops once the search does. It reads no file by itself: the ignore files are read by
+//! [`Ignores`], which opens them without following a link or waiting on a pipe, within limits. Each thread tests the entries it meets and sends the ones that
 //! fit to the calling thread over a channel; the calling thread batches them (see [`Out`]). The depth is the only bound
 //! on a tree that loops back on itself (a bind mount): [`MAX_DEPTH`] levels, as deep as a copy goes.
 
 use std::fs::Metadata;
 use std::path::{Component, Path};
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 
@@ -19,6 +21,7 @@ use crate::ops::open_listed;
 
 use super::content::{Content, Scan};
 use super::filters::Facts;
+use super::ignored::Ignores;
 use super::inside;
 use super::out::{Out, Run, pump};
 use super::{Compiled, MAX_DEPTH, WALK_THREADS};
@@ -47,7 +50,8 @@ pub(crate) fn search(
     limit: usize,
 ) -> Vec<Candidate> {
     let (sender, receiver) = mpsc::channel();
-    let walker = builder(root, compiled);
+    let left_out = Arc::new(AtomicU64::new(0));
+    let walker = builder(root, compiled, &left_out);
     let mut candidates = Vec::new();
 
     thread::scope(|scope| {
@@ -62,62 +66,91 @@ pub(crate) fn search(
 
         pump(&receiver, run, out, |item, out| match item {
             Item::Hit(hit) => out.push(hit, run),
+            // Only the walk stops: what was collected is still compared.
             Item::Candidate(candidate) if candidates.len() >= limit => {
                 drop(candidate);
-                out.truncate(run);
+                out.truncate_walk(run);
             }
             Item::Candidate(candidate) => candidates.push(candidate),
         });
     });
 
+    run.skipped
+        .fetch_add(left_out.load(Ordering::Relaxed), Ordering::Relaxed);
+
     candidates
 }
 
-/// The walker for `compiled`: hidden entries and ignore files as asked, links never followed.
-fn builder(root: &Path, compiled: &Compiled) -> WalkBuilder {
-    let ignored = compiled.skip_ignored;
-    let hidden = compiled.skip_hidden;
+/// The walker for `compiled`: hidden entries and ignore files as asked, links never followed. What it leaves out for a
+/// name or an ignore file that cannot be used is added to `left_out`.
+fn builder(root: &Path, compiled: &Compiled, left_out: &Arc<AtomicU64>) -> WalkBuilder {
     let threads = thread::available_parallelism().map_or(1, usize::from).min(WALK_THREADS);
+    let filter = Filter {
+        skip_hidden: compiled.skip_hidden,
+        ignores: compiled.skip_ignored.then(|| Ignores::new(root, Arc::clone(left_out))),
+        left_out: Arc::clone(left_out),
+    };
     let mut builder = WalkBuilder::new(root);
 
-    // Nothing is left out unless the options say so: the standard filters are off and each is turned on by itself.
-    // Hidden entries are filtered below, by the platform's rule (on Windows the attribute, not the dot).
+    // Nothing is left out unless the options say so: every filter of the walker is off, and so is its reading of ignore
+    // files (see the module's note); each is done by `filter`. Hidden entries are filtered by the platform's rule (on
+    // Windows the attribute, not the dot).
     builder
         .standard_filters(false)
         .hidden(false)
+        .ignore(false)
+        .git_ignore(false)
+        .git_exclude(false)
+        .git_global(false)
+        .parents(false)
         .follow_links(false)
         .max_depth(Some(MAX_DEPTH))
         .threads(threads)
         .same_file_system(compiled.one_filesystem)
-        .ignore(ignored)
-        .git_ignore(ignored)
-        .git_exclude(ignored)
-        .git_global(false)
-        .parents(ignored)
-        .filter_entry(move |entry| entered(entry, hidden));
+        .filter_entry(move |entry| filter.enters(entry));
 
     builder
 }
 
-/// Whether the walk goes on with `entry` (and below it): not a name the system reads as something else, and not a hidden
-/// one when hidden entries are skipped.
-fn entered(entry: &DirEntry, skip_hidden: bool) -> bool {
-    if entry.depth() == 0 {
-        return true;
+/// What the walk leaves out before it enters or reports an entry.
+struct Filter {
+    skip_hidden: bool,
+    ignores: Option<Ignores>,
+    left_out: Arc<AtomicU64>,
+}
+
+impl Filter {
+    /// Whether the walk goes on with `entry` (and below it): a name that is valid Unicode (the paths of the results are
+    /// text, and a name that is not could stand for another file), not one the system reads as something else, not a
+    /// hidden one when hidden entries are skipped, and not one the ignore files leave out when they are asked for.
+    fn enters(&self, entry: &DirEntry) -> bool {
+        if entry.depth() == 0 {
+            return true;
+        }
+
+        let Some(name) = entry.file_name().to_str() else {
+            self.left_out.fetch_add(1, Ordering::Relaxed);
+            return false;
+        };
+        if platform::is_unsafe_name(name) {
+            return false;
+        }
+
+        if self.skip_hidden {
+            let metadata = platform::HIDDEN_NEEDS_METADATA.then(|| entry.metadata().ok()).flatten();
+
+            if platform::is_hidden(name, metadata.as_ref()) {
+                return false;
+            }
+        }
+
+        let is_dir = entry.file_type().is_some_and(|kind| kind.is_dir());
+
+        !self
+            .ignores
+            .as_ref()
+            .is_some_and(|ignores| ignores.leaves_out(entry.path(), is_dir))
     }
-
-    let name = entry.file_name().to_string_lossy();
-    if platform::is_unsafe_name(&name) {
-        return false;
-    }
-
-    if !skip_hidden {
-        return true;
-    }
-
-    let metadata = platform::HIDDEN_NEEDS_METADATA.then(|| entry.metadata().ok()).flatten();
-
-    !platform::is_hidden(&name, metadata.as_ref())
 }
 
 /// One walker thread: tests each entry it is given.
@@ -141,7 +174,7 @@ impl<'a> Worker<'a> {
     }
 
     fn visit(&mut self, entry: Result<DirEntry, ignore::Error>) -> WalkState {
-        if self.run.raised() {
+        if self.run.raised() || self.run.walk_over() {
             return WalkState::Quit;
         }
 
@@ -183,12 +216,12 @@ impl<'a> Worker<'a> {
     /// What `entry` is as a result, when it fits every test; archives are searched on the way.
     fn test(&mut self, entry: &DirEntry, metadata: &Metadata) -> Option<Item> {
         let compiled = self.compiled;
-        let name = entry.file_name().to_string_lossy();
+        let name = entry.file_name().to_str()?;
         let path = relative(self.root, entry.path())?;
 
         if compiled.archives
             && metadata.is_file()
-            && let Some(format) = inside::format(&name)
+            && let Some(format) = inside::format(name)
         {
             let skipped = inside::scan(self.root, &path, format, compiled, self.run, &mut |hit| {
                 self.sender.send(Item::Hit(hit)).ok();
@@ -196,8 +229,8 @@ impl<'a> Worker<'a> {
             self.run.skipped.fetch_add(skipped, Ordering::Relaxed);
         }
 
-        let facts = Facts::of(&name, metadata);
-        if !compiled.names.fits(&name, &path) || !compiled.filters.fits(&facts) {
+        let facts = Facts::of(name, metadata);
+        if !compiled.names.fits(name, &path) || !compiled.filters.fits(&facts) {
             return None;
         }
 
@@ -258,16 +291,17 @@ impl<'a> Worker<'a> {
     }
 }
 
-/// The path of `path` below `root`, names joined with `/`.
+/// The path of `path` below `root`, names joined with `/`. `None` when a name is not valid Unicode: the text of the path
+/// would stand for another file too.
 fn relative(root: &Path, path: &Path) -> Option<String> {
     let below = path.strip_prefix(root).ok()?;
-    let names: Vec<_> = below
-        .components()
-        .filter_map(|part| match part {
-            Component::Normal(name) => Some(name.to_string_lossy()),
-            _ => None,
-        })
-        .collect();
+    let mut names = Vec::new();
+
+    for part in below.components() {
+        if let Component::Normal(name) = part {
+            names.push(name.to_str()?);
+        }
+    }
 
     Some(names.join("/"))
 }

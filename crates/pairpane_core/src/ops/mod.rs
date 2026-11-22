@@ -139,6 +139,20 @@ mod volume;
 #[cfg(any(windows, test))]
 mod win_attrs;
 
+/// Checks that the folder `dir` (names joined with `/`, `""` for `base` itself) can be reached below `base` one name at a
+/// time with no link and no file on the way (the search results of a folder are read through it).
+pub(crate) fn check_folder_below(base: &std::path::Path, dir: &str) -> std::io::Result<()> {
+    listed::check_folder_below(base, dir)
+}
+
+/// [`check_folder_below`], and the folder reached is the folder `target` (same device and inode, or the Windows
+/// equivalent), so an operation on `target` is on the folder a search found its items in: one swapped for a link or
+/// for another folder since is refused, and so is one whose identity cannot be read. The check and the operation are
+/// two steps; what a folder swapped in between them does is the race every pane has.
+pub fn check_same_folder_below(base: &std::path::Path, dir: &str, target: &std::path::Path) -> std::io::Result<()> {
+    listed::check_same_folder_below(base, dir, target)
+}
+
 /// Opens the regular file `listed` below `base` for reading, with its metadata, the way a checksum check opens the files
 /// it lists (no link followed, no pipe waited on); the file viewer opens its file through this.
 pub(crate) fn open_listed(base: &std::path::Path, listed: &str) -> std::io::Result<(std::fs::File, std::fs::Metadata)> {
@@ -181,6 +195,8 @@ mod extract_scripted_tests;
 mod extract_tests;
 #[cfg(test)]
 mod failure_tests;
+#[cfg(test)]
+mod folder_below_tests;
 #[cfg(all(test, unix))]
 mod held_tests;
 #[cfg(test)]

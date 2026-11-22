@@ -21,6 +21,7 @@ const TICK: Duration = Duration::from_millis(20);
 pub(crate) struct Run<'a> {
     cancel: &'a AtomicBool,
     capped: AtomicBool,
+    walk_over: AtomicBool,
     pub(crate) folders: AtomicU64,
     pub(crate) files: AtomicU64,
     /// Bytes of the files looked at; while duplicates are hashed, the bytes hashed.
@@ -33,6 +34,7 @@ impl<'a> Run<'a> {
         Self {
             cancel,
             capped: AtomicBool::new(false),
+            walk_over: AtomicBool::new(false),
             folders: AtomicU64::new(0),
             files: AtomicU64::new(0),
             bytes: AtomicU64::new(0),
@@ -58,6 +60,16 @@ impl<'a> Run<'a> {
     /// Stops the work at a limit.
     pub(crate) fn cap(&self) {
         self.capped.store(true, Ordering::Relaxed);
+    }
+
+    /// Stops the walk alone, at a limit on what it collects: what was collected is still worked on.
+    pub(crate) fn end_walk(&self) {
+        self.walk_over.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether the walk was stopped at a limit (see [`Run::end_walk`]).
+    pub(crate) fn walk_over(&self) -> bool {
+        self.walk_over.load(Ordering::Relaxed)
     }
 
     /// Counts one thing that could not be looked at.
@@ -95,6 +107,12 @@ impl<'e> Out<'e> {
     pub(crate) fn truncate(&mut self, run: &Run<'_>) {
         self.truncated = true;
         run.cap();
+    }
+
+    /// Marks the search as stopped at a limit on what the walk collects; the walk ends, the rest of the work goes on.
+    pub(crate) fn truncate_walk(&mut self, run: &Run<'_>) {
+        self.truncated = true;
+        run.end_walk();
     }
 
     /// Adds one result; past the cap on results ([`super::MAX_HITS`]) the search stops, and the result is dropped.

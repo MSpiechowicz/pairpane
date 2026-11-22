@@ -1,6 +1,6 @@
 import { tick } from 'svelte';
 
-import { groupResults, type ResultGroup } from '$lib/find/results';
+import { deselectResults, groupResults, type ResultGroup, type Within } from '$lib/find/results';
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
 import { archiveName } from '$lib/panes/archive';
@@ -10,7 +10,7 @@ import type { PaneTabs } from '$lib/panes/tabs.svelte';
 import type { PaneView } from '$lib/panes/view.svelte';
 
 import { type FileAction, type Notice, trashName, what } from './dialogs';
-import { chosen, type DialogKind, type OpRequest, READ_ONLY_NOTICE, refusal, requestFor, targets } from './targets';
+import { chosen, type DialogKind, type OpRequest, READ_ONLY_NOTICE, refusal, requestFor, resultTargets, targets } from './targets';
 import { isTool, ItemTools } from './tools.svelte';
 
 /** The copy, move, add to archive, extract, combine, rename, new item or link dialog that is open, and the panes it works between. */
@@ -153,7 +153,9 @@ export class FileActions {
 
     if (dialog !== undefined) {
       const { request, source, other } = dialog;
-      if (request.kind === 'copy' || request.kind === 'move' || request.kind === 'add') {
+      if (request.kind === 'copy' && request.results) {
+        deselectResults(source, request.names);
+      } else if (request.kind === 'copy' || request.kind === 'move' || request.kind === 'add') {
         source.deselect(request.names);
       } else if (request.kind === 'extract') {
         source.deselect(request.names.length > 0 ? request.names : request.archives.map(({ archive }) => archiveName(archive)));
@@ -170,13 +172,18 @@ export class FileActions {
   #ask(permanent: boolean) {
     const source = this.#panes[this.#active()].view;
     const { path, folder, results } = source.listing;
-    const names = targets(source);
 
     if (results !== undefined) {
+      const names = resultTargets(source);
       if (folder !== undefined && names.length > 0) {
         this.removal = { permanent, path: folder, names, source, results: true };
       }
-    } else if (path !== undefined && names.length > 0) {
+
+      return;
+    }
+
+    const names = targets(source);
+    if (path !== undefined && names.length > 0) {
       this.removal = { permanent, path, names, source };
     }
   }
@@ -197,14 +204,15 @@ export class FileActions {
     }
 
     const { path, names } = removal;
-    const groups = removal.results ? groupResults(path, names) : [{ folder: path, names, rels: names }];
+    const groups: ResultGroup[] = removal.results ? groupResults(path, names) : [{ folder: path, dir: '', names, rels: names }];
+    const within = (dir: string): Within | undefined => (removal.results ? { root: path, dir } : undefined);
     const gone: string[] = [];
 
     try {
       if (removal.permanent) {
-        await this.#delete(groups, gone);
+        await this.#delete(groups, within, gone);
       } else {
-        await this.#trash(groups, gone);
+        await this.#trash(groups, within, gone);
       }
     } finally {
       this.#removed(removal, gone);
@@ -214,9 +222,9 @@ export class FileActions {
   }
 
   /** Deletes the groups in turn; `gone` collects the items that are. A refusal rejects. */
-  async #delete(groups: ResultGroup[], gone: string[]) {
-    for (const { folder, names, rels } of groups) {
-      await this.#ipc.invoke('ops_delete', { path: folder, names });
+  async #delete(groups: ResultGroup[], within: (dir: string) => Within | undefined, gone: string[]) {
+    for (const { folder, dir, names, rels } of groups) {
+      await this.#ipc.invoke('ops_delete', { path: folder, names, within: within(dir) });
       gone.push(...rels);
     }
   }
@@ -224,15 +232,16 @@ export class FileActions {
   /**
    * Moves the groups to the Trash in turn, one request (and undo token) for each, and says what happened; `gone`
    * collects the items that went. The move stops at the first group that does not go through whole; a refusal of
-   * the first rejects, a later one is told with what already moved.
+   * the first rejects, a later one is told with what already moved. `within` is what search results ask the backend
+   * to check of their folder (`undefined` for a plain folder).
    */
-  async #trash(groups: ResultGroup[], gone: string[]) {
+  async #trash(groups: ResultGroup[], within: (dir: string) => Within | undefined, gone: string[]) {
     const undos: number[] = [];
     let failure: string | undefined;
 
     try {
-      for (const { folder, names, rels } of groups) {
-        const result = await this.#ipc.invoke('ops_trash', { path: folder, names });
+      for (const { folder, dir, names, rels } of groups) {
+        const result = await this.#ipc.invoke('ops_trash', { path: folder, names, within: within(dir) });
         if (result.undo !== null) {
           undos.push(result.undo);
         }
@@ -257,11 +266,12 @@ export class FileActions {
 
   /** The removed items are not selected any more; search results are listed again, and a dialog that stays asks only about the rest. */
   #removed(removal: Removal, gone: readonly string[]) {
-    removal.source.deselect(gone);
     if (!removal.results) {
+      removal.source.deselect(gone);
       return;
     }
 
+    deselectResults(removal.source, gone);
     void removal.source.listing.reload();
     if (this.removal === removal && gone.length > 0) {
       const removed = new Set(gone);

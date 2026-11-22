@@ -163,4 +163,14 @@ describe('HotlistMenu', () => {
     expect(toggle()).toBeDisabled();
     expect(toggle()).toHaveAttribute('title', 'A folder inside an archive can’t be a favourite.');
   });
+
+  it('cannot add search results either, and says why', async () => {
+    const { backend, tabs } = await menu();
+    await tabs.view.listing.openResults(3);
+    backend.last().emit({ kind: 'start', path: '/home/me/Projects', parent: '/home/me', crumbs: [], total: 0, results: 3 });
+    await tick();
+
+    expect(toggle()).toBeDisabled();
+    expect(toggle()).toHaveAttribute('title', 'Search results are not a folder — open a file’s folder first.');
+  });
 });

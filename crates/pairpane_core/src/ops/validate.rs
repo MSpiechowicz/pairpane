@@ -46,14 +46,25 @@ pub fn is_item_path(name: &str) -> bool {
 }
 
 /// Whether one of `names` is a folder that another is in (`a` and `a/b`): packing both would put the same file in the
-/// archive twice.
+/// archive twice. Where the file system tells `A` from `a` no more than a person does (Windows, macOS) the names are
+/// compared that way too: `a` and `A/x` are the same folder.
 #[must_use]
 pub fn has_nested_names(names: &[String]) -> bool {
-    let all: HashSet<&str> = names.iter().map(String::as_str).collect();
+    let folded: Vec<String> = names.iter().map(|name| fold_case(name)).collect();
+    let all: HashSet<&str> = folded.iter().map(String::as_str).collect();
 
-    names
+    folded
         .iter()
         .any(|name| name.match_indices('/').any(|(at, _)| all.contains(&name[..at])))
+}
+
+/// `name` as the file system compares it.
+fn fold_case(name: &str) -> String {
+    if platform::CASE_INSENSITIVE {
+        name.to_lowercase()
+    } else {
+        name.to_owned()
+    }
 }
 
 /// Refuses what `submit` can tell without the disk: no names, too many, a name twice, one that is not a plain file

@@ -42,4 +42,26 @@ describe('Dock', () => {
     expect(onKey.mock.calls).toEqual([['F5']]);
     expect(screen.getByRole('button', { name: 'Move (F6)' })).toBeInTheDocument();
   });
+
+  it('over search results Move and New folder are marked as unavailable, with why; a click still reports, so the card can say it', async () => {
+    const onKey = vi.fn();
+    render(Dock, { onKey, inResults: true });
+
+    const move = screen.getByRole('button', { name: 'Move (F6)' });
+    const folder = screen.getByRole('button', { name: 'New folder (F7)' });
+    expect([move, folder]).toSatisfy(([a, b]: HTMLElement[]) => a.getAttribute('aria-disabled') === 'true' && b.getAttribute('aria-disabled') === 'true');
+    expect(move).toHaveAttribute('title', 'Open the file’s folder first.');
+    for (const key of ['Copy (F5)', 'Delete (F8)', 'View (F3)', 'Edit (F4)']) {
+      expect(screen.getByRole('button', { name: key })).not.toHaveAttribute('aria-disabled');
+    }
+
+    await fireEvent.click(move);
+    expect(onKey.mock.calls).toEqual([['F6']]);
+  });
+
+  it('in a folder no key is marked as unavailable', () => {
+    render(Dock);
+
+    expect(document.querySelectorAll('[aria-disabled]')).toHaveLength(0);
+  });
 });

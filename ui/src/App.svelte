@@ -353,7 +353,7 @@
     {/each}
   </main>
 
-  <Dock inArchive={panes[active].view.listing.readonly} onKey={onDockKey}>
+  <Dock inArchive={panes[active].view.listing.readonly} inResults={panes[active].view.listing.results !== undefined} onKey={onDockKey}>
     <TransfersChip {transfers} open={panelOpen} onToggle={() => (panelOpen = !panelOpen)} />
   </Dock>
 </div>

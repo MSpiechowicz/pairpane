@@ -14,6 +14,7 @@ pub mod state;
 pub mod updates;
 pub mod view;
 pub mod volumes;
+mod within;
 
 #[cfg(test)]
 mod testing;

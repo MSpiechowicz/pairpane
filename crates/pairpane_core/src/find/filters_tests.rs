@@ -252,5 +252,5 @@ fn the_folder_is_checked_by_its_syntax_when_the_search_is_compiled() {
     };
 
     assert!(compile(&query("relative/path")).is_err());
-    assert!(compile(&query(if cfg!(windows) { "C:\\data" } else { "/data/../x" })).is_err());
+    assert!(compile(&query(if cfg!(windows) { "C:\\data\\..\\x" } else { "/data/../x" })).is_err());
 }

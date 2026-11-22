@@ -1,3 +1,4 @@
+import { withoutNested } from '$lib/find/results';
 import type { Entry } from '$lib/ipc/bindings/Entry';
 import { type ArchiveSpot, archiveFile, archiveName, isWritableArchive } from '$lib/panes/archive';
 import type { PaneView } from '$lib/panes/view.svelte';
@@ -175,10 +176,15 @@ export function requestFor(kind: DialogKind, source: PaneView, other: PaneView):
   return { kind, from: path, names, to: other.listing.path ?? '' };
 }
 
+/** The names of the chosen results, as paths below the folder searched; those inside another chosen one are left out. */
+export function resultTargets(view: PaneView): string[] {
+  return withoutNested(targets(view));
+}
+
 /** Copying the chosen results of a search into the folder `to`: their names are paths below the folder searched. */
 function resultsRequest(source: PaneView, to: string): OpRequest | undefined {
   const from = source.listing.folder;
-  const names = targets(source);
+  const names = resultTargets(source);
   return from !== undefined && names.length > 0 ? { kind: 'copy', from, names, to, results: true } : undefined;
 }
 

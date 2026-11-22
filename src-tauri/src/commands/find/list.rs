@@ -6,7 +6,8 @@
 //! open of the pane supersedes this one, and its slot is keyed by a path no folder has: nothing is watched and the pane's
 //! size jobs stop.
 //!
-//! The `start` event carries the folder that was searched as `path` and its crumbs, and the search's id as `results`.
+//! The `start` event carries the folder that was searched as `path` and as `parent` (so that going up from the results
+//! goes to the folder searched, not to the folder above it), its crumbs, and the search's id as `results`.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -89,7 +90,7 @@ fn list_results(
     on_start();
     let start = ListEvent::Start {
         path: root.to_string_lossy().into_owned(),
-        parent: root.parent().map(|parent| parent.to_string_lossy().into_owned()),
+        parent: Some(root.to_string_lossy().into_owned()),
         crumbs: crumbs(root),
         total: count(entries.len()),
         archive: None,

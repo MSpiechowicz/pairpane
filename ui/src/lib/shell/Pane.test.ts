@@ -62,6 +62,16 @@ describe('Pane', () => {
     expect((document.querySelector('.spacer') as HTMLElement).style.height).toBe(`${(TOTAL + 1) * 24}px`);
   });
 
+  it('a name that would pass for another shows its bidirectional and control characters written out', async () => {
+    const { backend } = await huge();
+
+    backend.last().emit({ kind: 'batch', offset: 0, entries: [entry('report\u202Egpj.exe', 'file')] });
+    await tick();
+
+    expect(screen.getByText('report⟨U+202E⟩gpj')).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('\u202E');
+  });
+
   it('a batch that arrives after the first render fills the rows in place', async () => {
     const { backend } = await huge();
     viewport().scrollTop = 5_000 * 24;

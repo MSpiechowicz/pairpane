@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { FindHit } from '$lib/ipc/bindings/FindHit';
-  import { formatDate, formatSize } from '$lib/panes/format';
+  import { displayName, formatDate, formatSize } from '$lib/panes/format';
   import VirtualRows from '$lib/panes/VirtualRows.svelte';
 
   import type { Finder } from './finder.svelte';
@@ -128,8 +128,8 @@
           {:else if item?.kind === 'hit'}
             {@const hit = item.hit}
             <div id="{uid}-{index}" class="row" class:cursor={index === selected} role="option" aria-selected={index === selected} data-row={index}>
-              <span class="path" title={hit.inner === null ? hit.path : `${hit.path} › ${hit.inner}`}
-                >{hit.path}{#if hit.inner !== null}<span class="inner"> › {hit.inner}</span>{/if}</span
+              <span class="path" title={displayName(hit.inner === null ? hit.path : `${hit.path} › ${hit.inner}`)}
+                >{displayName(hit.path)}{#if hit.inner !== null}<span class="inner"> › {displayName(hit.inner)}</span>{/if}</span
               >
               <span class="sz">{hit.kind === 'file' ? formatSize(hit.size) : ''}</span>
               <span class="dt">{formatDate(hit.modified)}</span>

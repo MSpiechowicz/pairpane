@@ -126,7 +126,7 @@ fn hard_links_are_one_file_and_links_are_not_files_of_their_own() {
 }
 
 #[test]
-fn too_many_candidates_stop_the_walk_and_say_so() {
+fn too_many_candidates_stop_the_walk_and_the_ones_collected_are_still_compared() {
     let root = temp();
     for index in 0..20 {
         put(root.path(), &format!("f{index}"), b"same");
@@ -139,7 +139,8 @@ fn too_many_candidates_stop_the_walk_and_say_so() {
     let found = search_limited(root.path(), duplicates(), limits);
 
     assert!(found.done().2);
-    assert!(found.groups().iter().all(|group| group.len() <= 4));
+    assert_eq!(found.groups().len(), 1);
+    assert_eq!(found.groups()[0].len(), 4);
 }
 
 #[test]

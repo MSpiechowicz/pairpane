@@ -18,19 +18,24 @@
 //!   [`crate::ops::open_listed`], which refuses a link on the way. A link is a result by its name, with kind `other`.
 //! - Entries whose names the system reads as something else (Windows devices, streams) are skipped. Hidden files are
 //!   included unless `skip_hidden`; `.gitignore`, `.ignore` and `.git/info/exclude` are read only for `skip_ignored`
-//!   (and, as in ripgrep, `.gitignore` files count inside a git repository only).
+//!   (and, as in ripgrep, `.gitignore` files count inside a git repository only). This crate reads them itself and not
+//!   the walker (see `ignored.rs`): no link followed, no pipe waited on, at most 1 MiB, 10 000 lines and 4 KiB a line
+//!   each; one over a limit or unreadable is left out and counted as skipped. A `.git` file (a worktree) is not followed.
 //! - Everything is bounded: a pattern of 1024 bytes, 64 masks, a regular expression of 1 MiB compiled (and 1 MiB of lazy
 //!   automaton), at most 100 000 results (the walk stops there and `done` says `truncated`), 16 MiB of buffer for each
-//!   of at most 8 walking threads, 1 GiB read to list one archive, 500 000 candidates of a duplicate search. The
-//!   depth of the tree is bounded by 1024 levels, which is the only bound on a tree that loops back on itself.
+//!   of at most 8 walking threads, 1 GiB read to list one archive, 500 000 candidates of a duplicate search (the walk
+//!   stops there, `done` says `truncated` and the candidates collected are still compared). The depth of the tree is
+//!   bounded by 1024 levels, which is the only bound on a tree that loops back on itself.
 //! - Text search reads UTF-8 (and UTF-8 and UTF-16 byte order marks) or the one encoding the search names; a file with a
 //!   NUL byte in it is binary and left out whole. A file over 64 MiB is skipped (and counted) unless the search says any
-//!   size. A file whose name is not valid Unicode cannot be opened by its name and is skipped (and counted).
+//!   size. An entry with a name that is not valid Unicode (in its path below the folder) is skipped and counted, and a
+//!   folder with such a name is not entered: the text of a path could stand for another file.
 //! - With a text, a size limit or duplicates only files are results (a folder or a link has no content to test).
 
 mod content;
 mod dupes;
 mod filters;
+mod ignored;
 mod inside;
 mod mask;
 mod out;
@@ -42,6 +47,8 @@ mod content_tests;
 mod dupes_tests;
 #[cfg(test)]
 mod filters_tests;
+#[cfg(test)]
+mod ignored_tests;
 #[cfg(test)]
 mod inside_tests;
 #[cfg(test)]
@@ -256,7 +263,10 @@ pub(crate) fn run_limited(
 }
 
 /// The result `hit` of a search in `root` as a pane lists it (its name is the path below `root`), read now. `None` when
-/// the file is gone, or the hit is inside an archive, or its path is not made of plain names.
+/// the file is gone, or the hit is inside an archive, or its path is not made of plain names, or a folder on the way to it
+/// is a link or a file now (the folders are walked one name at a time from `root`, none followed; a folder swapped for a
+/// link after the search drops its hits). What is left between that check and the read of the entry is the window every
+/// pane has.
 pub fn entry(root: &Path, hit: &FindHit) -> Option<Entry> {
     if hit.inner.is_some() {
         return None;
@@ -267,6 +277,8 @@ pub fn entry(root: &Path, hit: &FindHit) -> Option<Entry> {
     if !names.iter().chain([&leaf]).all(|name| platform::is_plain_name(name)) {
         return None;
     }
+
+    crate::ops::check_folder_below(root, &names.join("/")).ok()?;
 
     let folder = names.iter().fold(root.to_owned(), |folder, name| folder.join(name));
     let mut entry = describe_present(&folder, leaf)?;

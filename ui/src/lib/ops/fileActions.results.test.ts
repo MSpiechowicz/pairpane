@@ -12,21 +12,24 @@ import { INTO_RESULTS_NOTICE, RESULTS_NOTICE, RESULTS_TO_ARCHIVE_NOTICE } from '
 
 const ROWS = ['a/x.txt', 'a/y.txt', 'b/z.txt', 'top.txt'];
 
-/** Lists the results of search 3 in `/work` in `tabs`: the rows are `ROWS`, below the folder searched. */
-async function results(backend: ReturnType<typeof fakeBackend>, tabs: PaneTabs) {
+/** A folder and what it holds, as a search for `*` finds them (rows 1 to 3; the row 4 is another folder's file). */
+const NESTED = ['d', 'd/f', 'd/sub/g', 'e/h'];
+
+/** Lists the results of search 3 in `/work` in `tabs`: the rows are `rows`, below the folder searched. */
+async function results(backend: ReturnType<typeof fakeBackend>, tabs: PaneTabs, rows = ROWS) {
   await tabs.view.listing.openResults(3);
-  backend.last().emit({ kind: 'start', path: '/work', parent: '/', crumbs: [], total: ROWS.length, results: 3 });
-  backend.last().emit({ kind: 'batch', offset: 0, entries: ROWS.map((name) => entry(name)) });
-  backend.last().emit({ kind: 'done', dirs: 0, files: ROWS.length, bytes: 0, free: null });
+  backend.last().emit({ kind: 'start', path: '/work', parent: '/', crumbs: [], total: rows.length, results: 3 });
+  backend.last().emit({ kind: 'batch', offset: 0, entries: rows.map((name) => entry(name)) });
+  backend.last().emit({ kind: 'done', dirs: 0, files: rows.length, bytes: 0, free: null });
 }
 
 /** The actions of a window whose left pane is active; `inside` says which pane shows the results, the other lists `/dest`. */
-async function world(inside: PaneId, answers: Parameters<typeof fakeBackend>[0] = {}) {
+async function world(inside: PaneId, answers: Parameters<typeof fakeBackend>[0] = {}, rows = ROWS) {
   const backend = fakeBackend(answers);
   const panes = { left: new PaneTabs(backend.ipc, 'left'), right: new PaneTabs(backend.ipc, 'right') };
   const other = inside === 'left' ? panes.right : panes.left;
 
-  await results(backend, panes[inside]);
+  await results(backend, panes[inside], rows);
   await other.view.listing.open('/dest');
   arrive(backend.last(), '/dest', []);
 
@@ -88,9 +91,9 @@ describe('FileActions on search results', () => {
     await perform(backend.ipc, files.dialog!.request, '/dest', true);
 
     expect(sent(backend, 'ops_start')).toEqual([
-      { kind: 'copy', from: '/work/a', names: ['x.txt', 'y.txt'], to: '/dest', verify: true },
-      { kind: 'copy', from: '/work/b', names: ['z.txt'], to: '/dest', verify: true },
-      { kind: 'copy', from: '/work', names: ['top.txt'], to: '/dest', verify: true },
+      { kind: 'copy', from: '/work/a', names: ['x.txt', 'y.txt'], to: '/dest', verify: true, within: { root: '/work', dir: 'a' } },
+      { kind: 'copy', from: '/work/b', names: ['z.txt'], to: '/dest', verify: true, within: { root: '/work', dir: 'b' } },
+      { kind: 'copy', from: '/work', names: ['top.txt'], to: '/dest', verify: true, within: { root: '/work', dir: '' } },
     ]);
   });
 
@@ -157,9 +160,9 @@ describe('removing search results', () => {
     await files.confirmRemoval();
 
     expect(sent(backend, 'ops_trash')).toEqual([
-      { path: '/work/a', names: ['x.txt', 'y.txt'] },
-      { path: '/work/b', names: ['z.txt'] },
-      { path: '/work', names: ['top.txt'] },
+      { path: '/work/a', names: ['x.txt', 'y.txt'], within: { root: '/work', dir: 'a' } },
+      { path: '/work/b', names: ['z.txt'], within: { root: '/work', dir: 'b' } },
+      { path: '/work', names: ['top.txt'], within: { root: '/work', dir: '' } },
     ]);
     expect(files.toast).toMatchObject({ text: 'Moved 4 items to the Trash.', error: false, undo: null });
     expect(files.removal).toBeUndefined();
@@ -178,7 +181,7 @@ describe('removing search results', () => {
 
     await files.confirmRemoval();
 
-    expect(sent(backend, 'ops_trash')).toEqual([{ path: '/work/a', names: ['x.txt', 'y.txt'] }]);
+    expect(sent(backend, 'ops_trash')).toEqual([{ path: '/work/a', names: ['x.txt', 'y.txt'], within: { root: '/work', dir: 'a' } }]);
     expect(files.toast).toMatchObject({ text: 'Moved 2 items to the Trash.', undo: 5 });
 
     await files.undo();
@@ -230,8 +233,8 @@ describe('removing search results', () => {
     await expect(files.confirmRemoval()).rejects.toBe(refusal);
 
     expect(sent(backend, 'ops_delete')).toEqual([
-      { path: '/work/a', names: ['x.txt', 'y.txt'] },
-      { path: '/work/b', names: ['z.txt'] },
+      { path: '/work/a', names: ['x.txt', 'y.txt'], within: { root: '/work', dir: 'a' } },
+      { path: '/work/b', names: ['z.txt'], within: { root: '/work', dir: 'b' } },
     ]);
     expect(files.removal?.names).toEqual(['b/z.txt', 'top.txt']);
     expect(view.selectedShown().map((item) => item.name)).toEqual(['b/z.txt', 'top.txt']);
@@ -249,5 +252,64 @@ describe('Viewer on search results', () => {
 
     expect(backend.invoke).toHaveBeenCalledWith('view_open', { path: '/work/b', name: 'z.txt' });
     viewer.close();
+  });
+});
+
+describe('a folder and what it holds, both selected in search results', () => {
+  it('copy is about the folder only: one job, the folder, and the dialog counts one item', async () => {
+    const { backend, files, view } = await world('left', {}, NESTED);
+    view.selectAll();
+
+    files.run('copy');
+    await perform(backend.ipc, files.dialog!.request, '/dest', true);
+
+    expect(files.dialog?.request).toMatchObject({ names: ['d', 'e/h'] });
+    expect(sent(backend, 'ops_start')).toEqual([
+      { kind: 'copy', from: '/work', names: ['d'], to: '/dest', verify: true, within: { root: '/work', dir: '' } },
+      { kind: 'copy', from: '/work/e', names: ['h'], to: '/dest', verify: true, within: { root: '/work', dir: 'e' } },
+    ]);
+  });
+
+  it('starting the copy deselects what is inside the folder too', async () => {
+    const { files, view } = await world('left', {}, NESTED);
+    view.selectAll();
+    files.run('copy');
+
+    files.dialogDone('/dest');
+
+    expect(view.selectedShown()).toEqual([]);
+  });
+
+  it.each([
+    ['trash', 'ops_trash', { undo: 4, failure: null }],
+    ['deletePermanently', 'ops_delete', null],
+  ] as const)('%s asks about and sends the folder once, not what is inside it', async (action, command, answer) => {
+    const { backend, files, view } = await world('left', { [command]: () => answer }, NESTED);
+    view.selectAll();
+
+    files.run(action);
+    expect(files.removal?.names).toEqual(['d', 'e/h']);
+    await files.confirmRemoval();
+
+    expect(sent(backend, command)).toEqual([
+      { path: '/work', names: ['d'], within: { root: '/work', dir: '' } },
+      { path: '/work/e', names: ['h'], within: { root: '/work', dir: 'e' } },
+    ]);
+    expect(files.toast?.error).not.toBe(true);
+    expect(view.selectedShown()).toEqual([]);
+  });
+
+  it('pack takes the folder only, and the selection inside it is let go when the job started', async () => {
+    const { files, view } = await world('left', {}, NESTED);
+    view.selectAll();
+
+    files.run('pack');
+
+    expect(files.toast).toBeUndefined();
+    expect(files.tools.dialog).toMatchObject({ kind: 'pack', path: '/work', names: ['d', 'e/h'] });
+
+    files.toolDone();
+
+    expect(view.selectedShown()).toEqual([]);
   });
 });

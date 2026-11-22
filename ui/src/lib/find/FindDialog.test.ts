@@ -149,6 +149,16 @@ describe('FindDialog', () => {
     expect(rows()[0]).toContain('<img src=x onerror=alert(1)>.txt');
   });
 
+  it('a path that would pass for another is written out and so is its tooltip', async () => {
+    const s = open();
+
+    await found(s, hit('invoice\u202Efdp.exe', { inner: 'in\nner' }));
+
+    expect(rows()[0]).toContain('invoice⟨U+202E⟩fdp.exe› in⟨U+000A⟩ner');
+    expect(options()[0].textContent).not.toMatch(/[\u202E\n]/);
+    expect(options()[0].querySelector('.path')).toHaveAttribute('title', 'invoice⟨U+202E⟩fdp.exe › in⟨U+000A⟩ner');
+  });
+
   it('says it stopped at the limit, and that it was stopped', async () => {
     const s = open();
     await start();

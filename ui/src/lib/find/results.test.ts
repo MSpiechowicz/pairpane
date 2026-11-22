@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { groupResults, joinResult, splitResult } from './results';
+import { groupResults, joinResult, splitResult, withNested, withoutNested } from './results';
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('joinResult', () => {
   it('puts the names below the folder searched, with the separator of the folder', () => {
@@ -25,9 +27,45 @@ describe('splitResult', () => {
 describe('groupResults', () => {
   it('groups the results by their folder, in the order the folders first appear', () => {
     expect(groupResults('/r', ['x/a', 'b', 'x/c', 'y/z/d', 'e'])).toEqual([
-      { folder: '/r/x', names: ['a', 'c'], rels: ['x/a', 'x/c'] },
-      { folder: '/r', names: ['b', 'e'], rels: ['b', 'e'] },
-      { folder: '/r/y/z', names: ['d'], rels: ['y/z/d'] },
+      { folder: '/r/x', dir: 'x', names: ['a', 'c'], rels: ['x/a', 'x/c'] },
+      { folder: '/r', dir: '', names: ['b', 'e'], rels: ['b', 'e'] },
+      { folder: '/r/y/z', dir: 'y/z', names: ['d'], rels: ['y/z/d'] },
     ]);
+  });
+
+  it('leaves out a result inside another one, so that a folder and what it holds are one request', () => {
+    expect(groupResults('/r', ['d', 'd/f', 'd/sub/g', 'e/h'])).toEqual([
+      { folder: '/r', dir: '', names: ['d'], rels: ['d'] },
+      { folder: '/r/e', dir: 'e', names: ['h'], rels: ['e/h'] },
+    ]);
+  });
+});
+
+describe('withoutNested', () => {
+  it('drops each result that has a chosen folder above it, whatever the depth, and keeps the order', () => {
+    expect(withoutNested(['a/b/c', 'a', 'x/y', 'a/b', 'x/z'])).toEqual(['a', 'x/y', 'x/z']);
+  });
+
+  it('keeps a name that only starts like a folder’s, and results that share a folder nobody chose', () => {
+    expect(withoutNested(['d', 'd2/f', 'dd', 'e/f', 'e/g'])).toEqual(['d', 'd2/f', 'dd', 'e/f', 'e/g']);
+  });
+
+  it('tells Docs from docs on Linux', () => {
+    expect(withoutNested(['Docs', 'docs/f'])).toEqual(['Docs', 'docs/f']);
+  });
+
+  it.each(['Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)'])(
+    'does not on Windows and macOS (%s)',
+    (agent) => {
+      vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(agent);
+
+      expect(withoutNested(['Docs', 'docs/f', 'DOCS/g/h'])).toEqual(['Docs']);
+    },
+  );
+});
+
+describe('withNested', () => {
+  it('adds the selected results inside the names to them, and none else', () => {
+    expect(withNested(['d', 'x/y'], ['d', 'd/f', 'x/y/z', 'x/other', 'e'])).toEqual(['d', 'x/y', 'd/f', 'x/y/z']);
   });
 });

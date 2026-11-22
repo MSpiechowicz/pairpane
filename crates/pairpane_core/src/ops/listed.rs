@@ -52,38 +52,38 @@ fn names_of(listed: &str) -> io::Result<Vec<&str>> {
     }
 }
 
-/// Opens the regular file `listed` below the folder `base` for reading, with its metadata. A link on the way or at the
-/// file, a folder where the file should be and a file where a folder should be are refused with a fixed text.
+/// The entry `name` of `dir`, looked at without following a link.
 #[cfg(unix)]
-pub(super) fn open_listed(base: &Path, listed: &str) -> io::Result<(File, Metadata)> {
-    use rustix::fs::{AtFlags, FileType, Mode, OFlags, Stat, openat, statat};
+fn look(dir: &File, name: &str) -> io::Result<rustix::fs::Stat> {
+    rustix::fs::statat(dir, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(io::Error::from)
+        .map_err(missing)
+}
 
-    fn look(dir: &File, name: &str) -> io::Result<Stat> {
-        statat(dir, name, AtFlags::SYMLINK_NOFOLLOW)
-            .map_err(io::Error::from)
-            .map_err(missing)
+/// Opens the entry `name` of `dir` as what was seen there, and checks the open is that very entry.
+#[cfg(unix)]
+fn enter(dir: &File, name: &str, seen: &rustix::fs::Stat, flags: rustix::fs::OFlags) -> io::Result<File> {
+    use rustix::fs::{Mode, OFlags, openat};
+
+    let flags = flags | OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let file = File::from(openat(dir, name, flags, Mode::empty()).map_err(io::Error::from)?);
+    let now = rustix::fs::fstat(&file).map_err(io::Error::from)?;
+
+    if (now.st_dev, now.st_ino) != (seen.st_dev, seen.st_ino) {
+        return Err(refusal(io::ErrorKind::Other, "it changed while it was being checked"));
     }
 
-    /// Opens the entry `name` of `dir` as what was seen there, and checks the open is that very entry.
-    fn enter(dir: &File, name: &str, seen: &Stat, flags: OFlags) -> io::Result<File> {
-        let flags = flags | OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-        let file = File::from(openat(dir, name, flags, Mode::empty()).map_err(io::Error::from)?);
-        let now = rustix::fs::fstat(&file).map_err(io::Error::from)?;
+    Ok(file)
+}
 
-        if (now.st_dev, now.st_ino) != (seen.st_dev, seen.st_ino) {
-            return Err(refusal(io::ErrorKind::Other, "it changed while it was being checked"));
-        }
-
-        Ok(file)
-    }
-
-    let names = names_of(listed)?;
-    let Some((last, folders)) = names.split_last() else {
-        return Err(unreadable_line());
-    };
+/// Opens the folder `names` lead to below the folder `base`, one folder at a time from the handle of the one before.
+#[cfg(unix)]
+fn open_folders(base: &Path, names: &[&str]) -> io::Result<File> {
+    use rustix::fs::{FileType, OFlags};
 
     let mut dir = super::open::root_folder(base).map_err(missing)?;
-    for name in folders {
+
+    for name in names {
         let seen = look(&dir, name)?;
 
         dir = match FileType::from_raw_mode(seen.st_mode) {
@@ -92,6 +92,22 @@ pub(super) fn open_listed(base: &Path, listed: &str) -> io::Result<(File, Metada
             _ => return Err(through_a_file()),
         };
     }
+
+    Ok(dir)
+}
+
+/// Opens the regular file `listed` below the folder `base` for reading, with its metadata. A link on the way or at the
+/// file, a folder where the file should be and a file where a folder should be are refused with a fixed text.
+#[cfg(unix)]
+pub(super) fn open_listed(base: &Path, listed: &str) -> io::Result<(File, Metadata)> {
+    use rustix::fs::{FileType, OFlags};
+
+    let names = names_of(listed)?;
+    let Some((last, folders)) = names.split_last() else {
+        return Err(unreadable_line());
+    };
+
+    let dir = open_folders(base, folders)?;
 
     let seen = look(&dir, last)?;
     match FileType::from_raw_mode(seen.st_mode) {
@@ -144,4 +160,73 @@ pub(super) fn open_listed(base: &Path, listed: &str) -> io::Result<(File, Metada
     }
 
     Err(unreadable_line())
+}
+
+/// Checks that the folder `dir` (names joined with `/`, `""` the folder `base` itself) below `base` can be reached one
+/// name at a time with no link and no file on the way. Fails with a fixed text when it cannot.
+pub(super) fn check_folder_below(base: &Path, dir: &str) -> io::Result<()> {
+    resolve_folder_below(base, dir).map(drop)
+}
+
+/// Checks that the folder `dir` below `base` (see [`check_folder_below`]) is the folder `target`, by identity and not by
+/// name: a folder swapped for a link, or for another folder, since `target` was looked at is refused. Where the check
+/// cannot be made the answer is no.
+pub(super) fn check_same_folder_below(base: &Path, dir: &str, target: &Path) -> io::Result<()> {
+    let folder = resolve_folder_below(base, dir)?;
+
+    if same_folder(&folder, target)? {
+        Ok(())
+    } else {
+        Err(refusal(io::ErrorKind::Other, "it is not the folder that was searched"))
+    }
+}
+
+/// What a folder below `base` is reached as: its handle on Unix, whose steps were relative to handles that cannot move,
+/// its path on Windows, which was checked name by name.
+#[cfg(unix)]
+type Folder = File;
+#[cfg(windows)]
+type Folder = std::path::PathBuf;
+
+fn folder_names(dir: &str) -> io::Result<Vec<&str>> {
+    if dir.is_empty() { Ok(Vec::new()) } else { names_of(dir) }
+}
+
+#[cfg(unix)]
+fn resolve_folder_below(base: &Path, dir: &str) -> io::Result<Folder> {
+    open_folders(base, &folder_names(dir)?)
+}
+
+#[cfg(windows)]
+fn resolve_folder_below(base: &Path, dir: &str) -> io::Result<Folder> {
+    use std::fs;
+
+    let mut path = base.to_owned();
+
+    for name in folder_names(dir)? {
+        path.push(name);
+
+        let meta = fs::symlink_metadata(&path).map_err(missing)?;
+        if meta.file_type().is_symlink() {
+            return Err(through_a_link());
+        }
+        if !meta.is_dir() {
+            return Err(through_a_file());
+        }
+    }
+
+    Ok(path)
+}
+
+#[cfg(unix)]
+fn same_folder(folder: &Folder, target: &Path) -> io::Result<bool> {
+    let now = rustix::fs::fstat(folder).map_err(io::Error::from)?;
+    let there = std::fs::metadata(target)?;
+
+    Ok(platform::identity(&there) == Some((now.st_dev, now.st_ino)))
+}
+
+#[cfg(windows)]
+fn same_folder(folder: &Folder, target: &Path) -> io::Result<bool> {
+    same_file::is_same_file(folder, target)
 }

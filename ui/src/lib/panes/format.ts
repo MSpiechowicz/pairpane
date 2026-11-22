@@ -27,6 +27,18 @@ export function formatDate(millis: number | null): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+/** Characters that can make one name pass for another: controls and the ones that reorder or hide text around them. */
+const MISLEADING = /[\p{Cc}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu;
+
+/**
+ * A name (or a path) as it is shown: each control and bidirectional-formatting character is written out as `⟨U+202E⟩`,
+ * so that a name cannot read as another (`txt.exe` behind a right-to-left override). Only for display: the real name
+ * is what goes to the backend.
+ */
+export function displayName(name: string): string {
+  return name.replace(MISLEADING, (char) => `⟨U+${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}⟩`);
+}
+
 /** Name and extension as the columns show them. Folders and dot files (`.bashrc`) have no extension. */
 export function splitName(entry: Entry): { base: string; ext: string } {
   const dot = entry.name.lastIndexOf('.');

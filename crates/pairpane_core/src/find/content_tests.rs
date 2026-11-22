@@ -84,6 +84,25 @@ fn a_literal_is_not_a_regular_expression_and_a_regular_expression_is() {
 }
 
 #[test]
+fn the_end_of_a_line_is_found_before_a_carriage_return_too() {
+    let root = temp();
+    put(root.path(), "dos.txt", b"first line\r\nend\r\n");
+    put(root.path(), "unix.txt", b"first line\nend\n");
+    put(root.path(), "other.txt", b"endless\r\n");
+    let mut found = text("end$");
+    found.regex = true;
+
+    assert_eq!(search(root.path(), looking_for(found)).paths(), ["dos.txt", "unix.txt"]);
+
+    let mut whole_line = text("^first line$");
+    whole_line.regex = true;
+    assert_eq!(
+        search(root.path(), looking_for(whole_line)).paths(),
+        ["dos.txt", "unix.txt"]
+    );
+}
+
+#[test]
 fn a_regular_expression_that_would_backtrack_runs_in_linear_time() {
     let root = temp();
     put(root.path(), "long.txt", format!("{}\n", "a".repeat(200_000)).as_bytes());

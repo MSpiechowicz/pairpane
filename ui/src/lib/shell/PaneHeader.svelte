@@ -2,6 +2,7 @@
   import type { Crumb } from '$lib/ipc/bindings/Crumb';
   import type { Volume } from '$lib/ipc/bindings/Volume';
   import { crumbKey } from '$lib/panes/archive';
+  import { displayName } from '$lib/panes/format';
   import { anchored, tabLabel } from '$lib/panes/crumbs';
   import type { PaneTabs } from '$lib/panes/tabs.svelte';
 
@@ -72,7 +73,7 @@
               <button
                 type="button"
                 class:last={position === crumbs.length - 1 && listing.results === undefined}
-                onclick={() => goTo(crumb)}>{crumb.name}</button
+                onclick={() => goTo(crumb)}>{displayName(crumb.name)}</button
               >
             {/each}
             <!-- The crumbs are the folder searched; the results are what is listed in it. -->

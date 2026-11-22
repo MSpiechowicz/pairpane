@@ -254,6 +254,31 @@ fn a_result_with_a_path_that_climbs_or_inside_an_archive_is_not_read() {
     assert_eq!(entry(root.path(), &hit("a.txt", Some("inner"))), None);
 }
 
+// A name is bytes on Linux: `x\xFF` and `x\u{FFFD}` are two files, and a lossy path would read the second for the first.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_name_that_is_not_valid_unicode_is_skipped_and_cannot_stand_for_another_file() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let root = temp();
+    fs::write(root.path().join(OsStr::from_bytes(b"x\xFF")), b"needle in the odd one").expect("write");
+    put(root.path(), "x\u{FFFD}", b"nothing here");
+    fs::create_dir(root.path().join(OsStr::from_bytes(b"d\xFE"))).expect("folder");
+    fs::write(root.path().join(OsStr::from_bytes(b"d\xFE")).join("in.txt"), b"needle").expect("write");
+    put(root.path(), "plain.txt", b"needle");
+    let mut criteria = named("*");
+    criteria.text = Some(super::content_tests::text("needle"));
+
+    let by_content = search(root.path(), criteria);
+    let by_name = search(root.path(), named("*"));
+
+    assert_eq!(by_content.paths(), ["plain.txt"]);
+    assert_eq!(by_content.done().1, 2);
+    assert_eq!(by_name.paths(), ["plain.txt", "x\u{FFFD}"]);
+    assert_eq!(by_name.done().1, 2);
+}
+
 #[cfg(unix)]
 mod links {
     use std::os::unix::fs::symlink;
@@ -276,6 +301,37 @@ mod links {
         assert!(hits[1].link && hits[2].link);
         assert!(hits[1..].iter().all(|hit| hit.kind == EntryKind::Other));
         assert!(!hits[0].link);
+    }
+
+    #[test]
+    fn a_result_in_a_folder_that_was_swapped_for_a_link_after_the_search_is_not_read() {
+        let root = sample();
+        let found = search(root.path(), named("c.txt"));
+        let hit = &found.hits()[0];
+        assert!(entry(root.path(), hit).is_some());
+
+        let elsewhere = temp();
+        put(elsewhere.path(), "deep/c.TXT", b"another file");
+        fs::remove_dir_all(root.path().join("docs")).expect("remove");
+        symlink(elsewhere.path(), root.path().join("docs")).expect("link");
+
+        assert!(
+            root.path().join("docs/deep/c.TXT").exists(),
+            "the path now leads to another file"
+        );
+        assert_eq!(entry(root.path(), hit), None);
+    }
+
+    #[test]
+    fn a_result_below_a_folder_that_became_a_file_is_not_read() {
+        let root = sample();
+        let found = search(root.path(), named("c.txt"));
+        let hit = &found.hits()[0];
+
+        fs::remove_dir_all(root.path().join("docs")).expect("remove");
+        put(root.path(), "docs", b"a file now");
+
+        assert_eq!(entry(root.path(), hit), None);
     }
 
     #[test]

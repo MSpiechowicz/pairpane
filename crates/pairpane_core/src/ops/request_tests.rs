@@ -143,6 +143,23 @@ fn a_pack_takes_relative_paths_of_plain_names_none_inside_another() {
 }
 
 #[test]
+fn a_folder_and_what_it_holds_are_nested_by_the_case_rule_of_the_file_system() {
+    let nested = |names: &[&str]| {
+        let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
+
+        crate::ops::has_nested_names(&names)
+    };
+
+    assert!(nested(&["a", "a/x"]));
+    assert!(!nested(&["a", "ab/x"]));
+    assert_eq!(nested(&["a", "A/x"]), cfg!(any(windows, target_os = "macos")));
+
+    let zip = pack("a.zip", options(PackFormat::Zip));
+    let refused = submitted(zip, &["a", "A/x"]) == Err(Refused::InvalidNames);
+    assert_eq!(refused, cfg!(any(windows, target_os = "macos")));
+}
+
+#[test]
 fn only_a_pack_takes_relative_paths() {
     for task in [Task::Transfer, add("a.zip", ""), Task::Split { part_size: u64::MAX }] {
         assert_eq!(

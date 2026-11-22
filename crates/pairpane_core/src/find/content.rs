@@ -49,7 +49,11 @@ impl Content {
             .fixed_strings(!text.regex)
             .case_insensitive(!text.case_sensitive)
             .word(text.whole_word)
+            // The searcher splits lines at `\n`, and `^` and `$` hold at the ends of a line, before a `\r\n` too. `crlf` sets
+            // the line terminator to `\r\n`, which the searcher would refuse, so the terminator is set after it.
+            .crlf(true)
             .line_terminator(Some(b'\n'))
+            .multi_line(true)
             .size_limit(REGEX_LIMIT)
             .dfa_size_limit(REGEX_LIMIT)
             .nest_limit(NEST_LIMIT)
