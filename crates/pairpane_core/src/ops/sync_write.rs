@@ -57,15 +57,28 @@ impl Held {
             Err(errno) => return Err(io::Error::from(errno)),
         };
 
-        let node = self.look(name)?;
-        if node.kind != Kind::Dir {
-            return Err(refusal(
-                io::ErrorKind::AlreadyExists,
-                "a file or link has the name of a folder",
-            ));
-        }
+        let opened = self.look(name).and_then(|node| {
+            if node.kind != Kind::Dir {
+                return Err(refusal(
+                    io::ErrorKind::AlreadyExists,
+                    "a file or link has the name of a folder",
+                ));
+            }
 
-        Ok((self.subfolder(&node)?, made))
+            self.subfolder(&node)
+        });
+
+        match opened {
+            Ok(held) => Ok((held, made)),
+            Err(error) => {
+                // A folder made here and then not opened is not left behind (it is empty; removing it fails otherwise).
+                if made {
+                    let _ = unlinkat(&self.dir, name, AtFlags::REMOVEDIR);
+                }
+
+                Err(error)
+            }
+        }
     }
 
     /// Renames the file `from` of this folder to `to`, replacing what is there. Both are plain names.
