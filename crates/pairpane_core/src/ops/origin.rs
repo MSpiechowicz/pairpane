@@ -67,13 +67,14 @@ impl Origin {
     }
 }
 
-/// The marker a Windows archive gives its files: what was read when it is a `[ZoneTransfer]` section, else a minimal one,
-/// keeping the zone that can be read from the first bytes. `None` only when there is no marker.
+/// The marker a Windows archive gives its files: what was read when it is a `[ZoneTransfer]` section with a zone in it,
+/// else a minimal one. A minimal marker is never below the internet zone, so a malformed or cut marker can only keep the
+/// restricted zone (4), never lower the warning. `None` only when there is no marker.
 #[cfg(any(windows, test))]
 pub(super) fn windows_marker(found: Found) -> Option<Vec<u8>> {
     match found {
         Found::Absent => None,
-        Found::Marker(bytes) if is_zone_transfer(&bytes) => Some(bytes),
+        Found::Marker(bytes) if is_zone_transfer(&bytes) && zone_id(&bytes).is_some() => Some(bytes),
         Found::Marker(bytes) | Found::TooLong(bytes) => Some(zone_transfer(zone_id(&bytes))),
         Found::Unreadable => Some(zone_transfer(None)),
     }
@@ -85,7 +86,7 @@ const INTERNET_ZONE: u8 = 3;
 
 #[cfg(any(windows, test))]
 fn zone_transfer(zone: Option<u8>) -> Vec<u8> {
-    let zone = zone.unwrap_or(INTERNET_ZONE);
+    let zone = zone.map_or(INTERNET_ZONE, |zone| zone.max(INTERNET_ZONE));
 
     format!("[ZoneTransfer]\r\nZoneId={zone}\r\n").into_bytes()
 }

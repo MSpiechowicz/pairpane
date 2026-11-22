@@ -62,11 +62,21 @@ fn a_windows_marker_that_is_too_long_malformed_or_unreadable_is_replaced_never_d
         windows_marker(Found::TooLong(long)).as_deref(),
         Some(&b"[ZoneTransfer]\r\nZoneId=4\r\n"[..])
     );
-    // Malformed, with a zone to read, and without one.
-    assert_eq!(
-        windows_marker(Found::Marker(b"junk\r\nZoneId = 1\r\n".to_vec())).as_deref(),
-        Some(&b"[ZoneTransfer]\r\nZoneId=1\r\n"[..])
-    );
+    // Malformed or cut: a lower zone read from it never lowers the warning below the internet zone.
+    for bytes in [
+        &b"junk\r\nZoneId = 1\r\n"[..],
+        b"[X]\r\nZoneId=0\r\n[ZoneTransfer]\r\nZoneId=3\r\n",
+        b"[ZoneTransfer]\r\nZoneId=abc\r\n",
+    ] {
+        assert_eq!(
+            windows_marker(Found::Marker(bytes.to_vec())).as_deref(),
+            Some(ZONE_3),
+            "{bytes:?}"
+        );
+    }
+    let mut cut = b"[ZoneTransfer]\r\nZoneId=0\r\n".to_vec();
+    cut.resize(4096, b'x');
+    assert_eq!(windows_marker(Found::TooLong(cut)).as_deref(), Some(ZONE_3));
     for bytes in [
         &b""[..],
         b"junk",
