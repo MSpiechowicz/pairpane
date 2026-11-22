@@ -1,50 +1,26 @@
 //! The saved searches of the state file, and the form in which the webview sends the state to be saved.
 //!
 //! A saved search is untrusted like everything else in the file, and it is only ever run later, with a folder chosen
-//! then. So [`clean_searches`] keeps the ones that could run: a name that is usable and not taken, criteria that
-//! [`find::compile`] accepts (their syntax and consistency, and every pattern compiled within its limits).
-
-use std::collections::HashSet;
+//! then. So [`clean_searches`] keeps the ones that could run (see `named`).
 
 use serde::Deserialize;
 
 use crate::find;
 use crate::model::{FindQuery, PaneId, SavedPane, SavedRename, SavedSearch, SavedState};
 
+use super::named::{MAX_NAME_CHARS, clean_named};
+
 /// Saved searches kept.
 pub const MAX_SEARCHES: usize = 50;
 
 /// The longest name of a saved search, in characters (after trimming).
-pub const MAX_SEARCH_NAME_CHARS: usize = 64;
+pub const MAX_SEARCH_NAME_CHARS: usize = MAX_NAME_CHARS;
 
-/// `searches` with everything unusable removed, the first [`MAX_SEARCHES`] of the rest kept, in their order.
-///
-/// Dropped: a name that is empty or only whitespace, one over [`MAX_SEARCH_NAME_CHARS`] characters, one that an earlier
-/// kept search has (names are compared without regard to case; a dropped search does not take its name), and criteria
-/// that cannot run. A kept name is the trimmed one. Searches beyond the cap are not even examined.
+/// `searches` with everything unusable removed, the first [`MAX_SEARCHES`] of the rest kept, in their order (see
+/// [`clean_named`] for what is dropped). A search whose criteria cannot run is dropped too: [`find::compile`] must accept
+/// them (their syntax and consistency, and every pattern compiled within its limits).
 pub(super) fn clean_searches(searches: Vec<SavedSearch>) -> Vec<SavedSearch> {
-    let mut names = HashSet::new();
-
-    searches
-        .into_iter()
-        .filter_map(|search| {
-            let name = search.name.trim();
-            if name.is_empty() || name.chars().count() > MAX_SEARCH_NAME_CHARS {
-                return None;
-            }
-            if names.contains(&name.to_lowercase()) || !can_run(&search) {
-                return None;
-            }
-
-            names.insert(name.to_lowercase());
-
-            Some(SavedSearch {
-                name: name.to_owned(),
-                criteria: search.criteria,
-            })
-        })
-        .take(MAX_SEARCHES)
-        .collect()
+    clean_named(searches, MAX_SEARCHES, |search| &mut search.name, can_run)
 }
 
 /// Whether the criteria of `search` compile. The folder is a placeholder: it is only checked for its syntax.

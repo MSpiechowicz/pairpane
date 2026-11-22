@@ -26,7 +26,7 @@ use super::job::Job;
 use super::transfer::{self, Finish};
 use super::validate::validate;
 use super::volume::VolumeKey;
-use super::{AnswerError, MAX_JOBS, MAX_WORKERS, Refused, Request, Sink, UnknownJob};
+use super::{AnswerError, MAX_JOBS, MAX_WORKERS, Refused, Request, Sink, Task, UnknownJob};
 
 /// Stack of a worker: a folder tree is walked recursively, up to [`super::transfer::MAX_DEPTH`] levels.
 const WORKER_STACK: usize = 8 * 1024 * 1024;
@@ -252,7 +252,13 @@ impl Inner {
     }
 }
 
+/// The event that ends `job`, which every way a job ends goes through (it finished, it failed, it panicked, it was cancelled
+/// while it waited): a rename's log is closed first, so whoever hears of the end reads it whole.
 fn ended(job: &Job, finish: Finish) -> OpsEvent {
+    if let Task::Rename { log, .. } = &job.request.task {
+        log.finish();
+    }
+
     OpsEvent::Ended {
         id: job.id,
         outcome: finish.outcome,

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::archive::Password;
 use crate::model::{AttributeChange, HashAlgorithm, IpcError, IpcErrorCode, OpKind, PackFormat, PackLevel};
 
-use super::ArchiveJob;
+use super::{ArchiveJob, RenameLog};
 
 /// What a job does. [`Task::Transfer`] is the copy or move that [`Request::kind`] names; every other task has
 /// its own [`OpKind`] (see [`Task::kind`]).
@@ -44,6 +44,15 @@ pub enum Task {
         name: String,
         inner: String,
         source: ArchiveJob,
+    },
+    /// Renames the items (in `from`; `to` is `from` too) to `targets`, plain names in the order of the items. A swap, a
+    /// cycle or a chain of names works (see `batch_rename`) and nothing is ever replaced. `undo` is a job that puts an
+    /// earlier one back: an item that is gone, or whose old name is taken now, is skipped and counted, not an error.
+    /// `log` receives the pairs that were renamed.
+    Rename {
+        targets: Vec<String>,
+        undo: bool,
+        log: RenameLog,
     },
 }
 
@@ -103,6 +112,7 @@ impl Task {
             Self::Extract { .. } => Some(OpKind::Extract),
             Self::Pack { .. } => Some(OpKind::Pack),
             Self::AddToArchive { .. } => Some(OpKind::AddToArchive),
+            Self::Rename { .. } => Some(OpKind::Rename),
         }
     }
 }

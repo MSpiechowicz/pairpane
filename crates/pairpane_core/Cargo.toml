@@ -24,6 +24,9 @@ grep-regex.workspace = true
 grep-searcher.workspace = true
 hmac.workspace = true
 ignore.workspace = true
+# The local time of a file's modification for the date placeholders of a rename (pairpane_core::rename), and of a
+# `.trashinfo` record. Windows has no zoneinfo files, so the database is bundled there.
+jiff = { workspace = true, features = ["tzdb-bundle-platform"] }
 lzma-rust2.workspace = true
 md-5.workspace = true
 memchr.workspace = true
@@ -56,7 +59,6 @@ libc.workspace = true
 
 # The freedesktop Trash is done in pairpane_core::ops::trash::freedesktop on these systems.
 [target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
-jiff.workspace = true
 libloading.workspace = true
 
 # Elsewhere the system does the Trash, through the crate.

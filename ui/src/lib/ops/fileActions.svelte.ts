@@ -1,6 +1,7 @@
 import { tick } from 'svelte';
 
 import { deselectResults, groupResults, type ResultGroup, type Within } from '$lib/find/results';
+import type { JobId } from '$lib/ipc/bindings/JobId';
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
 import { archiveName } from '$lib/panes/archive';
@@ -8,6 +9,7 @@ import { focusActiveList } from '$lib/panes/focus';
 import { InlineRename } from '$lib/panes/inlineRename.svelte';
 import type { PaneTabs } from '$lib/panes/tabs.svelte';
 import type { PaneView } from '$lib/panes/view.svelte';
+import { RenameReports } from '$lib/rename/undo';
 
 import { type FileAction, type Notice, trashName, what } from './dialogs';
 import { chosen, type DialogKind, type OpRequest, READ_ONLY_NOTICE, refusal, RESULTS_NOTICE, requestFor, resultTargets, targets } from './targets';
@@ -35,10 +37,13 @@ export interface Removal {
 /** Added to the card about a move to the Trash that took several requests (search results in several folders). */
 const NO_UNDO_NOTICE = 'Undo is only offered when one folder is affected.';
 
-/** The card that says what happened; `undo` is the token that takes a move to the Trash back. */
+/** What the Undo of a card takes back: a move to the Trash (by its token) or a rename (by its job). */
+export type ToastUndo = { kind: 'trash'; token: number } | { kind: 'rename'; job: JobId };
+
+/** The card that says what happened; `undo` is what its Undo button takes back. */
 export interface ToastState extends Notice {
   id: number;
-  undo: number | null;
+  undo: ToastUndo | null;
 }
 
 /** The dialog each action opens. */
@@ -65,6 +70,8 @@ export class FileActions {
   toast = $state.raw<ToastState | undefined>();
   readonly rename: InlineRename;
   readonly tools: ItemTools;
+  /** Tells how a rename and its undo went, in a card. */
+  readonly renames = new RenameReports(({ text, error, undo }) => this.say(text, error, undo === null ? null : { kind: 'rename', job: undo }));
 
   readonly #ipc: Transport;
   readonly #panes: Record<PaneId, PaneTabs>;
@@ -298,7 +305,7 @@ export class FileActions {
    */
   #trashed(moved: string[], undos: number[], failure: string | undefined) {
     const place = `the ${trashName()}`;
-    const undo = undos.length === 1 ? undos[0] : null;
+    const undo: ToastUndo | null = undos.length === 1 ? { kind: 'trash', token: undos.at(0) as number } : null;
     const why = undos.length > 1 ? ` ${NO_UNDO_NOTICE}` : '';
     if (failure === undefined) {
       this.say(`Moved ${what(moved)} to ${place}.${why}`, false, undo);
@@ -309,31 +316,35 @@ export class FileActions {
     }
   }
 
-  /** Puts the move to the Trash the card tells of back. */
+  /** Takes back what the card tells of: a move to the Trash, or a rename (its undo is a job, which tells how it went when it ends). */
   async undo() {
     const shown = this.toast;
-    const token = shown?.undo;
-    if (shown === undefined || token === null || token === undefined) {
+    const undo = shown?.undo;
+    if (shown === undefined || undo === null || undo === undefined) {
       return;
     }
 
     this.toast = { ...shown, undo: null }; // a second click has nothing to undo
 
     try {
-      const count = await this.#ipc.invoke('ops_untrash', { token });
-      this.say(`Restored ${count === 1 ? '1 item' : `${count} items`}.`, false);
+      if (undo.kind === 'trash') {
+        const count = await this.#ipc.invoke('ops_untrash', { token: undo.token });
+        this.say(`Restored ${count === 1 ? '1 item' : `${count} items`}.`, false);
+      } else {
+        await this.renames.undo(this.#ipc, undo.job);
+      }
     } catch (error) {
       const failure = IpcFailure.from(error);
-      // The backend keeps the record when something is in the way, the restore failed or it was busy: Undo again.
+      // The backend keeps the record when something is in the way, the restore failed, it was busy or the rename still runs: Undo again.
       const again = failure.code === 'invalidInput' || failure.code === 'io' || failure.code === 'busy';
 
-      this.say(failure.message, true, again ? token : null);
+      this.say(failure.message, true, again ? undo : null);
     }
 
     this.#settle();
   }
 
-  say(text: string, error: boolean, undo: number | null = null) {
+  say(text: string, error: boolean, undo: ToastUndo | null = null) {
     this.#toasts += 1;
     this.toast = { id: this.#toasts, text, error, undo };
   }

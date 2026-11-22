@@ -16,6 +16,7 @@ export type Action =
   | 'move'
   | 'rename'
   | 'renameInline'
+  | 'multiRename'
   | 'newFolder'
   | 'newFile'
   | 'trash'
@@ -48,6 +49,8 @@ function withCtrl(event: KeyboardEvent): Action | undefined {
       return 'hotlist';
     case 'j':
       return 'transfers';
+    case 'm':
+      return 'multiRename';
     case 'q':
       return 'quickView';
     default:

@@ -12,6 +12,7 @@ export type FileAction =
   | 'move'
   | 'rename'
   | 'renameInline'
+  | 'multiRename'
   | 'newFolder'
   | 'newFile'
   | 'trash'

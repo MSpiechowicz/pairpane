@@ -1,21 +1,23 @@
-<script lang="ts">
-  import type { FindCriteria } from '$lib/ipc/bindings/FindCriteria';
+<script lang="ts" generics="T extends { name: string }, V">
   import { displayName } from '$lib/panes/format';
 
-  import { MAX_SEARCH_NAME, type SavedSearches } from './saved.svelte';
+  import { MAX_SAVED_NAME, type SavedNamed } from './named.svelte';
   import '../ops/fields.css';
 
   let {
     saved,
-    criteria,
+    current,
     onLoad,
   }: {
-    saved: SavedSearches;
-    /** What the form asks for now, or why it cannot be searched. */
-    criteria: () => FindCriteria | string;
-    /** A saved search was chosen to be loaded into the form. */
-    onLoad: (criteria: FindCriteria) => void;
+    saved: SavedNamed<T, V>;
+    /** What the form holds now, or why it cannot be kept. */
+    current: () => V | string;
+    /** A saved item was chosen to be loaded into the form. */
+    onLoad: (value: V) => void;
   } = $props();
+
+  const one = $derived(saved.words.one);
+  const many = $derived(saved.words.many);
 
   let choice = $state('');
   let naming = $state(false);
@@ -27,7 +29,7 @@
   function load() {
     if (chosen !== undefined) {
       message = undefined;
-      onLoad(chosen.criteria);
+      onLoad(saved.valueFor(chosen.name) as V);
     }
   }
 
@@ -44,7 +46,7 @@
   }
 
   function save() {
-    const asked = criteria();
+    const asked = current();
     const refusal = typeof asked === 'string' ? asked : saved.save(name, asked);
     if (refusal !== undefined) {
       message = refusal;
@@ -76,9 +78,9 @@
   }
 </script>
 
-<div class="saved" role="group" aria-label="Saved searches">
-  <select class="field" aria-label="Saved search" value={choice} onchange={(event) => (choice = event.currentTarget.value)}>
-    <option value="">{saved.list.length === 0 ? 'No saved searches' : 'Saved searches…'}</option>
+<div class="saved" role="group" aria-label="Saved {many}">
+  <select class="field" aria-label="Saved {one}" value={choice} onchange={(event) => (choice = event.currentTarget.value)}>
+    <option value="">{saved.list.length === 0 ? `No saved ${many}` : `Saved ${many}…`}</option>
     {#each saved.list as { name: kept } (kept)}
       <option value={kept}>{displayName(kept)}</option>
     {/each}
@@ -91,8 +93,8 @@
       type="text"
       spellcheck="false"
       autocomplete="off"
-      maxlength={MAX_SEARCH_NAME}
-      aria-label="Name of the search"
+      maxlength={MAX_SAVED_NAME}
+      aria-label="Name of the {one}"
       bind:value={name}
       {@attach watch}
     />

@@ -11,6 +11,7 @@ describe('FilesMenu', () => {
     expect(screen.getByRole('menuitem', { name: 'New folder' })).toHaveAttribute('aria-keyshortcuts', 'F7');
     expect(screen.getByRole('menuitem', { name: 'New file' })).toHaveAttribute('aria-keyshortcuts', 'Shift+F4');
     expect(screen.getByRole('menuitem', { name: 'Rename' })).toHaveAttribute('aria-keyshortcuts', 'F2');
+    expect(screen.getByRole('menuitem', { name: 'Multi-rename…' })).toHaveAttribute('aria-keyshortcuts', 'Ctrl+M');
     expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveAttribute('aria-keyshortcuts', 'F8');
     expect(screen.getByRole('menuitem', { name: 'Create symbolic link…' })).not.toHaveAttribute('aria-keyshortcuts');
     expect(screen.getByRole('menuitem', { name: 'Create hard link…' })).toBeEnabled();
@@ -40,6 +41,7 @@ describe('FilesMenu', () => {
       'New folder',
       'New file',
       'Rename',
+      'Multi-rename…',
       'Delete',
       'Create symbolic link…',
       'Create hard link…',
@@ -61,6 +63,7 @@ describe('FilesMenu', () => {
       'newFolder',
       'newFile',
       'renameInline',
+      'multiRename',
       'trash',
       'symlink',
       'hardlink',

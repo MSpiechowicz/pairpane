@@ -4,6 +4,7 @@
   let {
     failure,
     busy,
+    disabled = false,
     confirm,
     cancel = 'Cancel',
     alternate,
@@ -17,6 +18,8 @@
     failure?: string;
     /** Something is being done: the buttons are off. */
     busy: boolean;
+    /** The button that does it is off because the dialog is not ready (what it asks is not complete or not allowed). */
+    disabled?: boolean;
     /** The label of the button that does it; a dialog that only shows something has none. */
     confirm?: string;
     /** The label of the other button (`Close` for a dialog with nothing to confirm). */
@@ -45,7 +48,7 @@
     <button
       class="btn {danger ? 'btn-danger' : 'btn-primary'}"
       type="button"
-      disabled={busy}
+      disabled={busy || disabled}
       data-autofocus={focus === 'confirm' ? '' : undefined}
       onclick={onConfirm}>{confirm}</button
     >

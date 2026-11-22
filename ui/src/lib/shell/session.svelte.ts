@@ -7,6 +7,7 @@ import { IpcFailure, type Transport } from '$lib/ipc/transport';
 import type { SavedSearches } from '$lib/find/saved.svelte';
 import type { Hotlist } from '$lib/panes/hotlist.svelte';
 import type { PaneTabs } from '$lib/panes/tabs.svelte';
+import type { SavedRenames } from '$lib/rename/saved.svelte';
 
 /** The load is given this long; a config folder on a dead share must not keep the panes empty. */
 export const LOAD_TIMEOUT_MS = 2000;
@@ -22,13 +23,14 @@ export interface SessionParts {
   panes: Record<PaneId, PaneTabs>;
   hotlist: Hotlist;
   searches: SavedSearches;
+  renames: SavedRenames;
   /** The pane that has the keyboard focus. */
   active: { get: () => PaneId; set: (pane: PaneId) => void };
 }
 
 /**
  * What survives a restart: both panes' tabs (folder and sort), their active tabs, the active pane and the
- * hotlist and the saved searches. {@link restore} runs once at startup, before any folder is opened; {@link watch} then saves every change
+ * hotlist, the saved searches and the saved rename rules. {@link restore} runs once at startup, before any folder is opened; {@link watch} then saves every change
  * a moment after it, and once more when the page goes away.
  */
 export class Session {
@@ -56,7 +58,7 @@ export class Session {
   async restore(): Promise<void> {
     const loaded = await this.#load();
     const saved = loaded === UNKNOWN ? null : loaded;
-    const { panes, hotlist, searches, active } = this.#parts;
+    const { panes, hotlist, searches, renames, active } = this.#parts;
 
     for (const side of ['left', 'right'] as const) {
       const pane: SavedPane = saved?.[side] ?? { tabs: [], active: 0 };
@@ -65,6 +67,7 @@ export class Session {
 
     hotlist.restore(saved?.hotlist ?? []);
     searches.restore(saved?.searches ?? []);
+    renames.restore(saved?.renames ?? []);
     if (saved !== null) {
       active.set(saved.active);
       // What was loaded is what the backend has: starting up is not a change to save.
@@ -114,7 +117,7 @@ export class Session {
 
   /** The state as it is now; `undefined` while a folder has not been listed yet (there is no path to save). */
   #snapshot(): { state: SavedState; text: string } | undefined {
-    const { panes, hotlist, searches, active } = this.#parts;
+    const { panes, hotlist, searches, renames, active } = this.#parts;
     const left = this.#pane(panes.left);
     const right = this.#pane(panes.right);
     if (left === undefined || right === undefined) {
@@ -122,7 +125,14 @@ export class Session {
     }
 
     // Always sent, even when there are none: a save without them would leave what the backend has, and a delete would not stick.
-    const state: SavedState = { active: active.get(), left, right, hotlist: [...hotlist.paths], searches: [...searches.list] };
+    const state: SavedState = {
+      active: active.get(),
+      left,
+      right,
+      hotlist: [...hotlist.paths],
+      searches: [...searches.list],
+      renames: [...renames.list],
+    };
     return { state, text: JSON.stringify(state) };
   }
 

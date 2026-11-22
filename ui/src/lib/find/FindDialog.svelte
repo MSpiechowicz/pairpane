@@ -4,13 +4,13 @@
   import { enterSubmits } from '$lib/ops/submission.svelte';
   import { displayName, formatSize } from '$lib/panes/format';
   import { isWindowsPlatform } from '$lib/panes/keys';
+  import SavedBar from '$lib/saved/SavedBar.svelte';
   import Modal from '$lib/shell/Modal.svelte';
   import { ENCODINGS } from '$lib/viewer/encodings';
 
   import FindResults from './FindResults.svelte';
   import type { Finder, FindSummary, ResultsTarget } from './finder.svelte';
   import { blocked, SIZE_UNITS, type SizeUnit, toCriteria, toForm } from './query';
-  import SavedBar from './SavedBar.svelte';
   import type { SavedSearches } from './saved.svelte';
   import '../ops/fields.css';
 
@@ -116,7 +116,7 @@
   <div class="find" {@attach enterSubmits(startOrStop)}>
     <p class="root">Look in <span class="path">{displayName(finder.root ?? '')}</span></p>
 
-    <SavedBar {saved} {criteria} onLoad={(loaded) => Object.assign(form, toForm(loaded))} />
+    <SavedBar {saved} current={criteria} onLoad={(loaded) => Object.assign(form, toForm(loaded))} />
 
     <div class="form">
       <fieldset>
@@ -291,20 +291,6 @@
     padding: 0 4px;
     color: var(--dim);
     font-size: 11.5px;
-  }
-
-  .labelled {
-    display: flex;
-    flex: 1 1 200px;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    color: var(--dim);
-  }
-
-  .labelled .field {
-    flex: 1;
-    min-width: 0;
   }
 
   .labelled .number {

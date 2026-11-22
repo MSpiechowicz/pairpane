@@ -59,7 +59,7 @@ pub fn has_nested_names(names: &[String]) -> bool {
 }
 
 /// `name` as the file system compares it.
-fn fold_case(name: &str) -> String {
+pub(crate) fn fold_case(name: &str) -> String {
     if platform::CASE_INSENSITIVE {
         name.to_lowercase()
     } else {
@@ -160,8 +160,9 @@ fn is_writable(format: Option<ArchiveFormat>) -> bool {
 /// Refuses a kind that is not the task's, a verify, split, combine or extraction that has other than one name, an output
 /// that is not a plain name, a pack whose archive name is not a plain name with the extension of its format (or that
 /// has a password for a tar.zst, or encrypted names without one in a 7z), an add whose archive is not a plain name of a
-/// format that is written or whose folder is not a normalized path, a part shorter than [`MIN_PART_SIZE`], and an attribute change that changes nothing, uses
-/// bits beyond `0o7777`, sets permissions on Windows or the Windows attributes elsewhere.
+/// format that is written or whose folder is not a normalized path, a part shorter than [`MIN_PART_SIZE`], an attribute change that changes nothing, uses
+/// bits beyond `0o7777`, sets permissions on Windows or the Windows attributes elsewhere, and new names that are not
+/// right (see [`check_targets`]).
 fn validate_task(request: &Request) -> Result<(), Refused> {
     let fits = match request.task.kind() {
         None => matches!(request.kind, OpKind::Copy | OpKind::Move),
@@ -190,9 +191,43 @@ fn validate_task(request: &Request) -> Result<(), Refused> {
         }
         Task::Split { part_size } => request.names.len() == 1 && *part_size >= MIN_PART_SIZE,
         Task::Attributes(change) => attributes_acceptable(change),
+        Task::Rename { targets, .. } => {
+            check_targets(&request.names, targets)?;
+
+            true
+        }
     };
 
     if accepted { Ok(()) } else { Err(Refused::InvalidTask) }
+}
+
+/// Refuses new names that are not one for each item, that are not plain names that fit (together within
+/// [`MAX_NAMES_BYTES`]), that are one that the same item has, or that are the same name twice (as the file system
+/// compares them).
+fn check_targets(names: &[String], targets: &[String]) -> Result<(), Refused> {
+    if targets.len() != names.len() {
+        return Err(Refused::InvalidTask);
+    }
+
+    let mut seen = HashSet::with_capacity(targets.len());
+    let mut bytes = 0_usize;
+
+    for (name, target) in names.iter().zip(targets) {
+        if !platform::is_plain_name(target) || target == name {
+            return Err(Refused::InvalidTask);
+        }
+
+        bytes = bytes.saturating_add(target.len());
+        if !name_fits(target) || bytes > MAX_NAMES_BYTES {
+            return Err(Refused::NamesTooLarge);
+        }
+
+        if !seen.insert(fold_case(target)) {
+            return Err(Refused::InvalidTask);
+        }
+    }
+
+    Ok(())
 }
 
 fn attributes_acceptable(change: &AttributeChange) -> bool {

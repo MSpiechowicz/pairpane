@@ -57,6 +57,9 @@ pub(super) struct Hooks {
     /// Called with the path of the temporary file of an add or a pack job right after it was made, before it is given
     /// its final permissions.
     pub(super) after_temp: Option<PathHook>,
+    /// Called with the path of the temporary name an item of a multi-rename was just moved aside to, before the next
+    /// one is: a test puts something at a new name, or cancels the job, there.
+    pub(super) after_aside: Option<PathHook>,
     /// The new archive of an add job cannot be given the old one's group, as when the user is not in it (Unix).
     #[cfg(unix)]
     pub(super) refuse_group: bool,

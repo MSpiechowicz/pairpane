@@ -6,7 +6,7 @@ import type { PaneView } from '$lib/panes/view.svelte';
 import { chosen } from './targets';
 
 /** The file tools: what the Files menu and Alt+Enter ask for besides copying, moving and the like. */
-export type ToolAction = 'properties' | 'attributes' | 'checksum' | 'verifyChecksum' | 'split' | 'pack';
+export type ToolAction = 'properties' | 'attributes' | 'checksum' | 'verifyChecksum' | 'split' | 'pack' | 'multiRename';
 
 /** The dialog of a tool that is open; `source` is the pane its items are in. */
 export type ToolDialog =
@@ -16,9 +16,19 @@ export type ToolDialog =
   /** The parts go into the folder `to` to begin with: the other pane's. */
   | { kind: 'split'; path: string; entry: Entry; to: string; source: PaneView }
   /** The archive is made in the folder `to` to begin with: the other pane's (the folder of the items when that pane is in an archive). */
-  | { kind: 'pack'; path: string; names: string[]; to: string; source: PaneView; results?: true };
+  | { kind: 'pack'; path: string; names: string[]; to: string; source: PaneView; results?: true }
+  /** The items are renamed in the folder they are in. */
+  | { kind: 'multiRename'; path: string; names: string[]; source: PaneView };
 
-const TOOLS: ReadonlySet<string> = new Set<ToolAction>(['properties', 'attributes', 'checksum', 'verifyChecksum', 'split', 'pack']);
+const TOOLS: ReadonlySet<string> = new Set<ToolAction>([
+  'properties',
+  'attributes',
+  'checksum',
+  'verifyChecksum',
+  'split',
+  'pack',
+  'multiRename',
+]);
 
 export const isTool = (action: string): action is ToolAction => TOOLS.has(action);
 
@@ -29,8 +39,8 @@ const NOT_A_FILE = {
 } as const;
 
 /**
- * The properties dialog, the attributes dialog, the checksum file, the split, the archive and the check of a checksum
- * file, on the items of the active pane. The window shows `dialog` and hands the user's answers back; `say` is how a
+ * The properties dialog, the attributes dialog, the checksum file, the split, the archive, the check of a checksum
+ * file and the multi-rename, on the items of the active pane. The window shows `dialog` and hands the user's answers back; `say` is how a
  * refusal that needs no dialog reaches the user.
  */
 export class ItemTools {
@@ -72,6 +82,9 @@ export class ItemTools {
         break;
       case 'pack':
         this.#pack(path, entries, source, other);
+        break;
+      case 'multiRename':
+        this.dialog = { kind: 'multiRename', path, names: entries.map((entry) => entry.name), source };
         break;
       case 'properties':
         if (under !== undefined) {
@@ -130,7 +143,7 @@ export class ItemTools {
     this.dialog = undefined;
   }
 
-  /** A job started: a checksum file or an archive takes the selection it was made for, and the cursor goes to a new checksum file. */
+  /** A job started: a checksum file, an archive or a rename takes the selection it was made for, and the cursor goes to a new checksum file. */
   done(output?: string) {
     const dialog = this.dialog;
     this.dialog = undefined;
@@ -140,7 +153,7 @@ export class ItemTools {
       dialog.source.pointAt(output);
     } else if (dialog?.kind === 'pack' && dialog.results) {
       deselectResults(dialog.source, dialog.names);
-    } else if (dialog?.kind === 'pack') {
+    } else if (dialog?.kind === 'pack' || dialog?.kind === 'multiRename') {
       dialog.source.deselect(dialog.names);
     }
   }

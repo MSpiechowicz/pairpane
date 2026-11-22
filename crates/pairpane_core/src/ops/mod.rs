@@ -88,6 +88,11 @@
 //! handle), `attrs` and `attrs_apply`, `partial` (temporary files that clean up after themselves) and `props` (the
 //! Properties of an item).
 //!
+//! Renaming many items at once (multi-rename and its undo): `batch_rename` (the job: moves a name out of the way before another
+//! item takes it, so a swap, a cycle or a chain works and nothing is replaced), `held_rename` (a rename that refuses to replace,
+//! inside a folder held open) and `rename_log` (the pairs it renamed, which an undo reads). The rule that makes the new names
+//! is in [`crate::rename`].
+//!
 //! Outside the engine, single changes that are not jobs: `items` (new folders and files, links, permanent
 //! delete) and `trash` (move to the Trash, put back). Each is a plain blocking function; the caller runs it off the
 //! command thread.
@@ -96,6 +101,7 @@ mod add;
 mod announce;
 mod attrs;
 mod attrs_apply;
+mod batch_rename;
 mod checksum;
 mod checksum_verify;
 mod combine;
@@ -109,6 +115,7 @@ mod extract;
 mod extract_write;
 mod fast;
 mod held;
+mod held_rename;
 mod hooks;
 mod identity;
 mod items;
@@ -125,6 +132,7 @@ mod progress;
 mod props;
 mod rate;
 mod rename;
+mod rename_log;
 mod report;
 mod request;
 mod runnable;
@@ -174,6 +182,10 @@ mod announce_tests;
 mod attrs_tests;
 #[cfg(all(test, unix))]
 mod attrs_unix_tests;
+#[cfg(test)]
+mod batch_rename_hook_tests;
+#[cfg(test)]
+mod batch_rename_tests;
 #[cfg(test)]
 mod checksum_tests;
 #[cfg(test)]
@@ -236,8 +248,10 @@ pub use items::{ItemFailure, MAX_FOLDER_DEPTH};
 pub(crate) use open::OPEN_REPARSE_POINT;
 pub(crate) use open::create_new;
 pub(crate) use partial::{Partial, run_token};
+pub use rename_log::RenameLog;
 pub use request::{AnswerError, PackJob, Refused, Request, Task, UnknownJob};
 pub use trash::{CAN_UNTRASH, Trashed, UntrashFailure};
+pub(crate) use validate::fold_case;
 pub use validate::{has_nested_names, is_item_path, name_fits};
 
 use std::io;

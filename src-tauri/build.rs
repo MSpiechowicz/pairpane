@@ -39,6 +39,8 @@ const COMMANDS: &[&str] = &[
     "ops_mkfile",
     "ops_link",
     "ops_task",
+    "ops_rename_undo",
+    "rename_preview",
     "ops_properties",
     "view_open",
     "archive_view_open",

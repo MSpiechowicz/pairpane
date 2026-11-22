@@ -38,6 +38,13 @@ describe('DialogFooter', () => {
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
   });
 
+  it('turns the confirm button off while the dialog is not ready, and leaves Cancel', () => {
+    render(DialogFooter, { busy: false, disabled: true, confirm: 'Rename', onCancel: vi.fn() });
+
+    expect(screen.getByRole('button', { name: 'Rename' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+  });
+
   it('a dialog with nothing to confirm has only the close button', () => {
     render(DialogFooter, { busy: false, cancel: 'Close', onCancel: vi.fn() });
 

@@ -7,6 +7,7 @@
     { action: 'newFile', label: 'New file', keys: 'Shift+F4' },
     { action: 'editBuiltin', label: 'Edit in built-in editor' },
     { action: 'renameInline', label: 'Rename', keys: 'F2' },
+    { action: 'multiRename', label: 'Multi-rename…', keys: 'Ctrl+M' },
     { action: 'trash', label: 'Delete', keys: 'F8' },
     { action: 'symlink', label: 'Create symbolic link…' },
     { action: 'hardlink', label: 'Create hard link…' },

@@ -162,6 +162,7 @@ describe('the Files menu', () => {
       'New file Shift+F4',
       'Edit in built-in editor',
       'Rename F2',
+      'Multi-rename… Ctrl+M',
       'Delete F8',
       'Create symbolic link…',
       'Create hard link…',

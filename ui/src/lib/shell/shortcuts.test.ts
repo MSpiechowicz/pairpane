@@ -42,6 +42,15 @@ describe('shortcutFor', () => {
     expect(press('F9', { altKey: true, ctrlKey: true })).toBeUndefined();
   });
 
+  it('Ctrl+M opens the multi-rename; M alone, with Shift or with the other modifiers does not', () => {
+    expect(press('m', { ctrlKey: true })).toBe('multiRename');
+    expect(press('M', { ctrlKey: true })).toBe('multiRename'); // caps lock
+    expect(press('m')).toBeUndefined();
+    expect(press('m', { ctrlKey: true, shiftKey: true })).toBeUndefined();
+    expect(press('m', { metaKey: true })).toBeUndefined();
+    expect(press('m', { ctrlKey: true, altKey: true })).toBeUndefined(); // AltGr types characters
+  });
+
   it('Alt+F5 packs; F5 alone and the other modifiers do not', () => {
     expect(press('F5', { altKey: true })).toBe('pack');
     expect(press('F5')).toBe('copy');
