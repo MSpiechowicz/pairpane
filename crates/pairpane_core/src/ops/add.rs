@@ -6,7 +6,10 @@
 //! [`Run::indexed`]); one that changed is refused with "the archive changed; open it again", at the start and once more just
 //! before it is replaced. An archive that is not written (a RAR, a single gzip file), whose index is not whole (too large,
 //! or with names that are refused, which a rewrite could not keep) or that lacks the folder is refused, and so is an
-//! archive with encrypted entries when the password is missing or wrong.
+//! archive with encrypted entries when the password is missing or wrong (the new entries are sealed with it: a zip's is
+//! judged by decrypting its smallest encrypted file whole, not only by its check byte). What a rewrite would lose is
+//! refused as well (see `archive::rewrite`): data after the end of a tar, before the first entry of a zip, or a tar's
+//! global settings that would change the added files.
 //!
 //! The items are planned as a pack plans them (no link is followed, names in order, what the archive code would refuse
 //! fails the item), under `inner`. A file or a folder that the archive has as the other kind fails that item (with all
@@ -16,7 +19,8 @@
 //! overwrite older replaces the entry only when the new file's time is later.
 //!
 //! The new archive is written to a temporary file next to the old one (the disk keeps its reserve), flushed to the disk,
-//! given the permission bits of the old one on Unix, and put in place with the replacing rename. A cancel or any failure
+//! given the permission bits and the group of the old one on Unix (through its open handle; its owner, hard links, extended
+//! attributes and ACLs are not kept), and put in place with the replacing rename. A cancel or any failure
 //! removes the temporary file and leaves the old archive as it was. The progress counts the bytes of the new files and
 //! the bytes taken from the old archive.
 
@@ -24,7 +28,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, BufWriter};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -144,7 +148,7 @@ impl Run<'_> {
         check_changeable(&index, inner)?;
 
         let password = source.password.as_deref();
-        self.check_password(&index, &archive, password)?;
+        self.check_password(&index, &archive, cancel, password)?;
 
         self.phase(JobPhase::Scanning);
         let mut plan = self.plan_additions(root, items, &index, inner)?;
@@ -169,7 +173,10 @@ impl Run<'_> {
         self.phase(JobPhase::Packing);
         let (temp, file) = self.make_temp(&opened.folder, create_plain)?;
         let mut guard = Partial::new(temp.clone());
-        keep_mode(&archive, &temp)?;
+        if let Some(hook) = &self.inner.hooks.after_temp {
+            hook(&temp);
+        }
+        self.keep_mode(&archive, &file)?;
 
         self.write_changed(&plan, &change, (opened, &archive, file), cancel)?;
         self.checkpoint()?;
@@ -186,8 +193,16 @@ impl Run<'_> {
         Ok(())
     }
 
-    /// Fails when `password` is missing for an archive with encrypted content, or does not open it.
-    fn check_password(&self, index: &ArchiveIndex, file: &File, password: Option<&Password>) -> Result<(), Stop> {
+    /// Fails when `password` is missing for an archive with encrypted content, or does not open it: the new entries are
+    /// sealed with it, so it is checked as far as `archive::confirm_password` can (a whole entry of a zip, not only its
+    /// check byte, which a wrong password passes one time in 256).
+    fn check_password(
+        &self,
+        index: &ArchiveIndex,
+        file: &File,
+        cancel: &AtomicBool,
+        password: Option<&Password>,
+    ) -> Result<(), Stop> {
         if !rewrite::is_encrypted(index) {
             return Ok(());
         }
@@ -196,7 +211,7 @@ impl Run<'_> {
             return Err(password_error(PasswordFault::Needed).into());
         };
 
-        match archive::check_password(index, file, password) {
+        match archive::confirm_password(index, file, cancel, password) {
             Ok(true) => Ok(()),
             Ok(false) => Err(password_error(PasswordFault::Wrong).into()),
             Err(error) => Err(self.stopped(error)),
@@ -405,19 +420,31 @@ fn paths_of(index: &ArchiveIndex) -> HashMap<&str, Vec<u32>> {
     paths
 }
 
-/// Gives the new archive `temp` the permission bits of the old one, which `archive` is open (Unix).
-#[cfg(unix)]
-fn keep_mode(archive: &File, temp: &Path) -> Result<(), Stop> {
-    use std::os::unix::fs::PermissionsExt;
+impl Run<'_> {
+    /// Gives the new archive `temp` the permission bits and the group of the old one, which `archive` is open (Unix). It is
+    /// done through the handle of the new file, never its path, which someone may have swapped for a link by now. The
+    /// group is set first: a user who is not in it cannot, and then the group's bits are cleared, so the new archive is not
+    /// open to a group it did not have. The owner, hard links, extended attributes and ACLs of the old file are not kept.
+    #[cfg(unix)]
+    fn keep_mode(&self, archive: &File, temp: &File) -> Result<(), Stop> {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
-    let mode = archive.metadata()?.permissions().mode() & 0o777;
-    fs::set_permissions(temp, fs::Permissions::from_mode(mode))?;
+        let old = archive.metadata()?;
+        let mut mode = old.permissions().mode() & 0o777;
 
-    Ok(())
-}
+        let group = rustix::fs::Gid::from_raw(old.gid());
+        if self.inner.hooks.refuse_group || rustix::fs::fchown(temp, None, Some(group)).is_err() {
+            mode &= !0o070;
+        }
 
-/// Windows keeps the permissions of a file with the file's own attributes, which a new file has as it is made.
-#[cfg(not(unix))]
-fn keep_mode(_archive: &File, _temp: &Path) -> Result<(), Stop> {
-    Ok(())
+        temp.set_permissions(fs::Permissions::from_mode(mode))?;
+
+        Ok(())
+    }
+
+    /// Windows keeps the permissions of a file with the file's own attributes, which a new file has as it is made.
+    #[cfg(not(unix))]
+    fn keep_mode(&self, _archive: &File, _temp: &File) -> Result<(), Stop> {
+        Ok(())
+    }
 }

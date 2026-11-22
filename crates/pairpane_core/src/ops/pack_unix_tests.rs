@@ -1,6 +1,7 @@
 //! Pack jobs and the things only Unix has: links, pipes, names that are not text, and a folder swapped for a link.
 
 use std::fs;
+#[cfg(target_os = "linux")]
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::symlink;
 use std::sync::Arc;
@@ -45,8 +46,10 @@ fn links_and_special_files_are_skipped_and_counted_and_never_followed() {
 fn a_name_that_is_not_text_or_cannot_be_read_back_fails_its_item_and_the_job_goes_on() {
     let root = scene();
     let docs = root.path().join("src/docs");
-    fs::write(docs.join(std::ffi::OsStr::from_bytes(b"bad-\xff.txt")), b"x").expect("file");
     fs::write(docs.join("back\\slash.txt"), b"x").expect("file");
+    // Only Linux takes any bytes in a name: APFS refuses a name that is not UTF-8, so the file cannot be made there.
+    #[cfg(target_os = "linux")]
+    fs::write(docs.join(std::ffi::OsStr::from_bytes(b"bad-\xff.txt")), b"x").expect("file");
     // The folders get their times back: the two files above changed the one of `docs`.
     set_times(&docs, at(1_000_000_006));
 
@@ -58,10 +61,11 @@ fn a_name_that_is_not_text_or_cannot_be_read_back_fails_its_item_and_the_job_goe
     ));
 
     assert_eq!(ended.outcome, Outcome::Done);
-    assert_eq!(
-        ended.errors.iter().map(|error| error.path.as_str()).collect::<Vec<_>>(),
-        ["docs/back\\slash.txt", "docs/bad-\u{fffd}.txt"]
-    );
+    let failed = ended.errors.iter().map(|error| error.path.as_str()).collect::<Vec<_>>();
+    #[cfg(target_os = "linux")]
+    assert_eq!(failed, ["docs/back\\slash.txt", "docs/bad-\u{fffd}.txt"]);
+    #[cfg(not(target_os = "linux"))]
+    assert_eq!(failed, ["docs/back\\slash.txt"]);
     assert_eq!(archived(&root, "out.7z", ArchiveFormat::SevenZ), expected());
 }
 

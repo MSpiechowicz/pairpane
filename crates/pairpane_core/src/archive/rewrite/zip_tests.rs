@@ -13,6 +13,7 @@ use crate::model::{ArchiveFormat, PackLevel};
 
 use super::testing::{SECRET, archive, changed, index, ordinal, rewrite_by, rewrite_with, secret, seen, wanted};
 use super::zip;
+use crate::archive::zip::directory;
 
 const ZIP: ArchiveFormat = ArchiveFormat::Zip;
 
@@ -198,4 +199,51 @@ fn bsdtar_lists_and_extracts_the_rewritten_zips_plain_and_encrypted() {
 
         assert_bsdtar_reads(&path, &changed(&items, &[], &added()), Some(SECRET));
     }
+}
+
+/// The zip `bytes` with the comment `comment` in its end record (the writers make none).
+fn commented(mut bytes: Vec<u8>, comment: &[u8]) -> Vec<u8> {
+    let at = bytes.len() - 2;
+    assert_eq!(bytes[at..], [0, 0], "the end record has no comment");
+    bytes[at..].copy_from_slice(&(comment.len() as u16).to_le_bytes());
+    bytes.extend_from_slice(comment);
+
+    bytes
+}
+
+#[test]
+fn the_comment_of_the_archive_is_carried_over_with_what_is_added_and_what_is_left_out() {
+    let comment = "made by hand ✓".as_bytes();
+    let old = commented(archive(ZIP, &sample(), None, false), comment);
+    assert_eq!(directory::comment(&old).expect("a comment"), comment);
+    let gone = ordinal(&old, ZIP, "text.txt");
+
+    let new = rewrite_with(&old, ZIP, (&[gone], &added()), None).expect("rewritten");
+
+    assert_eq!(directory::comment(&new).expect("a comment"), comment);
+    assert_eq!(
+        seen(&new, ZIP, None),
+        wanted(ZIP, &changed(&sample(), &["text.txt"], &added()))
+    );
+}
+
+#[test]
+fn a_zip_with_a_program_before_its_entries_is_refused_and_one_without_is_not() {
+    let zip_bytes = archive(ZIP, &sample(), None, false);
+    let mut old = b"MZ a self-extracting stub, 64 bytes of it .....................".to_vec();
+    old.extend_from_slice(&zip_bytes);
+    // The entries are still listed, from where they are.
+    assert_eq!(
+        index(&old, ZIP, None).expect("an index").entries().len(),
+        sample().len()
+    );
+
+    let error = rewrite_with(&old, ZIP, (&[], &added()), None).expect_err("refused");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+    assert_eq!(
+        error.to_string(),
+        "this archive has data before its entries, so it can't be changed"
+    );
+    assert!(rewrite_with(&zip_bytes, ZIP, (&[], &added()), None).is_ok());
 }

@@ -17,6 +17,9 @@ pub(super) type Keyer = Arc<dyn Fn(&Path) -> VolumeKey + Send + Sync>;
 /// What a test runs before a folder is opened by a walk, given the folder's path relative to the job's folder.
 pub(super) type OpenHook = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// What a test runs with the path of a temporary file just after it was made: it swaps the path for a link there.
+pub(super) type PathHook = Arc<dyn Fn(&Path) + Send + Sync>;
+
 /// Makes the source of the data of an extraction from its index, in place of the archive's own.
 pub(super) type SourceHook = Arc<dyn Fn(&ArchiveIndex) -> Box<dyn EntrySource> + Send + Sync>;
 
@@ -51,6 +54,12 @@ pub(super) struct Hooks {
     pub(super) entry_source: Option<SourceHook>,
     /// The free space an extraction leaves on the disk, in place of `MIN_FREE_RESERVE`.
     pub(super) free_reserve: Option<u64>,
+    /// Called with the path of the temporary file of an add job right after it was made, before it is given the old
+    /// archive's permissions.
+    pub(super) after_temp: Option<PathHook>,
+    /// The new archive of an add job cannot be given the old one's group, as when the user is not in it (Unix).
+    #[cfg(unix)]
+    pub(super) refuse_group: bool,
     /// The most entries and the most bytes of names a pack job takes, in place of the limits of the archive readers.
     pub(super) pack_limits: Option<(usize, usize)>,
 }

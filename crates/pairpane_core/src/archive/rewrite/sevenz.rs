@@ -4,6 +4,9 @@
 //! again, in a block of its own, from the stream the block decoder gives. Entries with no stream (folders, empty files) are
 //! written as they are. The new entries are written last, in a new block.
 //!
+//! Anti-items (the marks of a 7z update that say a file is removed) are not carried over: they are not entries of the
+//! index, and the new archive is a whole one in which nothing is removed by a later part of it.
+//!
 //! Encryption follows the old archive: when any block is encrypted (or the headers are) the password is needed, and every
 //! block that is written (re-encoded or new) is AES-256 with a fresh IV, as the writer does for a pack; the headers are
 //! encrypted again when they were. The blocks that are copied keep the IV and the salt they had.
@@ -44,7 +47,7 @@ pub(super) fn rewrite<'a, W: Write + Seek>(out: W, old: Old<'a>, added: Vec<Entr
         }
     }
 
-    let headers = headers_are_encrypted(old.file, old.cancel);
+    let headers = headers_are_encrypted(old.file, old.cancel)?;
     let secured = headers || (0..archive.files.len()).any(|file| archive.is_file_encrypted(file));
     if secured && old.password.is_none() {
         return Err(password_error(PasswordFault::Needed));

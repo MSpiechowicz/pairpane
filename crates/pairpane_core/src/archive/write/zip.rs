@@ -16,14 +16,13 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::sync::atomic::AtomicBool;
 
 use crc32fast::Hasher;
-use flate2::Compression;
-use flate2::write::DeflateEncoder;
 
 use crate::archive::Password;
 use crate::archive::error::{check, unreadable};
 use crate::archive::zip::winzip_aes::Sealing;
 use crate::view::refusal;
 
+use super::zip_data::{Counting, deflated};
 use super::{Budget, Content, Entry, Options, Put, deflate_level, dos, pump};
 
 /// The sentinel of a 32-bit field that is in the zip64 field instead, and of a 16-bit count.
@@ -104,25 +103,6 @@ struct Outcome {
     compressed: u64,
 }
 
-/// Counts what is written through it.
-struct Counting<W> {
-    inner: W,
-    written: u64,
-}
-
-impl<W: Write> Write for Counting<W> {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        let count = self.inner.write(buffer)?;
-        self.written += count as u64;
-
-        Ok(count)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
-    }
-}
-
 pub struct ZipWriter<'a, W: Write + Seek> {
     out: W,
     /// Where the next byte goes (the file is sought back from here and to here).
@@ -134,6 +114,8 @@ pub struct ZipWriter<'a, W: Write + Seek> {
     limits: Limits,
     budget: Budget,
     cancel: &'a AtomicBool,
+    /// The comment of the archive, written in the end record.
+    comment: Vec<u8>,
 }
 
 impl<'a, W: Write + Seek> ZipWriter<'a, W> {
@@ -153,7 +135,17 @@ impl<'a, W: Write + Seek> ZipWriter<'a, W> {
             limits,
             budget: Budget::new(),
             cancel,
+            comment: Vec::new(),
         }
+    }
+
+    /// Gives the archive the comment `comment` (the end record has 16 bits for its length: what does not fit is cut).
+    #[must_use]
+    pub fn with_comment(mut self, mut comment: Vec<u8>) -> Self {
+        comment.truncate(usize::from(u16::MAX));
+        self.comment = comment;
+
+        self
     }
 
     pub fn add(&mut self, entry: Entry<'a>) -> io::Result<()> {
@@ -199,10 +191,14 @@ impl<'a, W: Write + Seek> ZipWriter<'a, W> {
         self.local_header(&plan)?;
 
         let done = match body {
-            Some(mut reader) if stat > 0 => self.data(&mut reader, deflate, encrypted)?,
+            // One byte more than declared is read: a file that gives more has grown, and is not cut short.
+            Some(reader) if stat > 0 => self.data(&mut reader.take(stat.saturating_add(1)), deflate, encrypted)?,
             Some(_) => self.data(&mut io::empty(), None, encrypted)?,
             None => Outcome::default(),
         };
+        if done.size > stat {
+            return Err(grew());
+        }
 
         self.patch(start, &plan, &done)?;
 
@@ -303,7 +299,7 @@ impl<'a, W: Write + Seek> ZipWriter<'a, W> {
         let wide = WIDE_32 as u32;
 
         if !plan.slot && (done.size >= self.limits.size || done.compressed >= self.limits.size) {
-            return Err(refusal(io::ErrorKind::Other, "a file grew while it was being packed"));
+            return Err(grew());
         }
 
         let mut fields = Vec::new();
@@ -408,13 +404,19 @@ impl<'a, W: Write + Seek> ZipWriter<'a, W> {
             .le16(entries)
             .le32(size)
             .le32(start)
-            .le16(0);
+            .le16(self.comment.len() as u16)
+            .put(&self.comment);
 
         self.out.write_all(&end)?;
         self.out.flush()?;
 
         Ok(self.out)
     }
+}
+
+/// The error of a file that gave more than the size it was declared with.
+fn grew() -> io::Error {
+    refusal(io::ErrorKind::Other, "a file grew while it was being packed")
 }
 
 /// The flags of an entry.
@@ -473,23 +475,4 @@ fn needed(method: u16, aes: bool, zip64: bool) -> u16 {
     } else {
         VERSION_STORED
     }
-}
-
-/// Copies `reader` into `sink`, deflating it at `deflate` (or as it is), and counts its CRC and size.
-fn deflated(
-    reader: &mut dyn Read,
-    sink: &mut dyn Write,
-    deflate: Option<u32>,
-    cancel: &AtomicBool,
-    crc: &mut Hasher,
-) -> io::Result<u64> {
-    let Some(level) = deflate else {
-        return pump(reader, sink, cancel, |chunk| crc.update(chunk));
-    };
-
-    let mut encoder = DeflateEncoder::new(sink, Compression::new(level));
-    let size = pump(reader, &mut encoder, cancel, |chunk| crc.update(chunk))?;
-    encoder.finish()?;
-
-    Ok(size)
 }

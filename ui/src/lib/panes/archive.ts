@@ -1,5 +1,6 @@
 import type { ArchiveSpot } from '$lib/ipc/bindings/ArchiveSpot';
 import type { Entry } from '$lib/ipc/bindings/Entry';
+import { isWindowsPlatform } from './keys';
 
 export type { ArchiveSpot };
 
@@ -51,6 +52,34 @@ export function joinPath(folder: string, name: string): string {
   }
 
   return folder + (folder.includes('\\') && !folder.includes('/') ? '\\' : '/') + name;
+}
+
+/**
+ * Whether both paths name the same archive file. A path the backend built and one a pane holds can differ in how they
+ * are written: on Windows in the separator, a trailing one and the case; elsewhere only in a trailing `/`.
+ */
+export function sameArchivePath(a: string, b: string): boolean {
+  if (isWindowsPlatform()) {
+    return windowsKey(a) === windowsKey(b);
+  }
+
+  return withoutTrailing(a, '/') === withoutTrailing(b, '/');
+}
+
+/** `path` without trailing `separator`s, unless it is only separators (a root). */
+function withoutTrailing(path: string, separator: string): string {
+  let end = path.length;
+  while (end > 1 && path[end - 1] === separator) {
+    end -= 1;
+  }
+
+  return path.slice(0, end);
+}
+
+/** A Windows path in one form for comparing: `\` separators, no trailing one (a drive root `C:\` keeps it), lower case. */
+function windowsKey(path: string): string {
+  const key = withoutTrailing(path.replaceAll('/', '\\'), '\\').toLowerCase();
+  return /^[a-z]:$/.test(key) ? `${key}\\` : key;
 }
 
 /** The last name of an archive's path. */

@@ -5,8 +5,8 @@ use std::io;
 
 use pretty_assertions::assert_eq;
 
-use crate::archive::testing::{Member, zip_members, zip_of};
-use crate::archive::{Password, PasswordFault, check_password, password_fault};
+use crate::archive::testing::{Member, idle, zip_members, zip_of};
+use crate::archive::{Password, PasswordFault, check_password, confirm_password, password_fault};
 
 use super::testing::{DEFLATE, STORED, aes, failure, index_of, read_entries, read_only, traditional};
 use super::vectors::{self, CONTENT, PASSWORD};
@@ -178,4 +178,56 @@ fn an_encrypted_entry_does_not_stop_the_others() {
 
     let got = read_entries(&bytes, Some("pw"), &[]).expect("a source");
     assert_eq!(got[1].1.as_ref().expect("secret"), TEXT);
+}
+
+fn confirms(bytes: &Vec<u8>, password: &str) -> bool {
+    let index = index_of(bytes).expect("an index");
+
+    confirm_password(&index, bytes, &idle(), &Password::new(password.to_owned())).expect("a verdict")
+}
+
+#[test]
+fn a_wrong_password_that_passes_the_check_byte_is_told_by_the_whole_entry() {
+    let bytes = zip_members(&[
+        traditional("big", &[b'x'; 500], DEFLATE, "right", false),
+        traditional("small", TEXT, DEFLATE, "right", false),
+    ]);
+
+    // The check byte lets one password in 256 through: look for one that it does.
+    let lucky = (0..100_000)
+        .map(|number| format!("guess {number}"))
+        .find(|guess| accepts(&bytes, guess))
+        .expect("a wrong password that the check byte accepts");
+    assert_ne!(lucky, "right");
+
+    assert!(!confirms(&bytes, &lucky));
+    assert!(!confirms(&bytes, "wrong"));
+    assert!(confirms(&bytes, "right"));
+}
+
+#[test]
+fn an_aes_entry_whose_tag_does_not_match_does_not_confirm_a_password_its_verifier_accepts() {
+    let mut member = aes("a", TEXT, DEFLATE, "pw", 3, 2);
+    *member.data.last_mut().expect("a tag") ^= 1;
+    let bytes = zip_members(&[member]);
+
+    assert!(accepts(&bytes, "pw"));
+    assert!(!confirms(&bytes, "pw"));
+
+    let sound = zip_members(&[aes("a", TEXT, DEFLATE, "pw", 3, 2)]);
+    assert!(confirms(&sound, "pw"));
+    assert!(!confirms(&sound, "other"));
+}
+
+#[test]
+fn the_confirmation_reads_the_smallest_entry_with_content_and_accepts_any_password_for_a_zip_with_none_encrypted() {
+    // The folder-like empty entry is skipped: only the entry with content can tell.
+    let bytes = zip_members(&[
+        aes("empty", b"", STORED, "pw", 1, 2),
+        aes("big", &[b'y'; 900], STORED, "pw", 1, 2),
+    ]);
+    assert!(confirms(&bytes, "pw"));
+    assert!(!confirms(&bytes, "other"));
+
+    assert!(confirms(&zip_of(&[("a", b"1")]), "anything"));
 }

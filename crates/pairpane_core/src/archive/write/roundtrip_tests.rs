@@ -8,8 +8,8 @@ use crate::archive::{MAX_INDEX_ENTRIES, Place};
 use crate::model::{ArchiveFormat, PackFormat, PackLevel};
 
 use super::testing::{
-    FORMATS, LEVELS, Raising, assert_bsdtar_reads, bsdtar_has, expected, options, pack, packer, read_back, sample,
-    store,
+    Endless, FORMATS, LEVELS, Raising, assert_bsdtar_reads, bsdtar_has, expected, options, pack, packer, read_back,
+    sample, store,
 };
 use super::{Budget, Entry, Lazy, Packer, deflate_level, lzma_preset, zstd_level};
 
@@ -208,4 +208,20 @@ fn a_lazy_reader_opens_at_its_first_read_and_lets_go_at_its_end() {
     assert_eq!((content.as_slice(), opened.get()), (&b"data"[..], 1));
     assert_eq!(io::Read::read(&mut lazy, &mut [0; 8]).expect("at the end"), 0);
     assert_eq!(opened.get(), 1);
+}
+
+#[test]
+fn a_zip_or_7z_file_that_gives_more_than_its_declared_size_fails_after_one_byte_past_it() {
+    for format in [PackFormat::Zip, PackFormat::SevenZ] {
+        let cancel = AtomicBool::new(false);
+        let given = std::cell::Cell::new(0);
+        let mut packer = packer(format, &cancel);
+
+        // Stat said 10 bytes; the file never ends.
+        let added = packer.add(Entry::file("grew.bin", 0o644, None, 10, Endless { given: &given }));
+        let error = added.and_then(|()| packer.finish().map(|_| ())).expect_err("fails");
+
+        assert_eq!(error.to_string(), "a file grew while it was being packed", "{format:?}");
+        assert_eq!(given.get(), 11, "{format:?}: it is read up to one byte past the size");
+    }
 }

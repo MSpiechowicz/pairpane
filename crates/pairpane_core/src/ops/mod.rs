@@ -147,7 +147,11 @@ pub(crate) fn open_listed(base: &std::path::Path, listed: &str) -> std::io::Resu
 #[cfg(test)]
 mod add_conflict_tests;
 #[cfg(test)]
+mod add_refusal_tests;
+#[cfg(test)]
 mod add_tests;
+#[cfg(all(test, unix))]
+mod add_unix_tests;
 #[cfg(test)]
 mod announce_tests;
 #[cfg(test)]

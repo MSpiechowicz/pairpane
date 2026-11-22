@@ -245,3 +245,17 @@ impl Read for Raising<'_> {
         Ok(count)
     }
 }
+
+/// A reader that never ends, and counts the bytes it gave: a file that keeps growing.
+pub(crate) struct Endless<'a> {
+    pub given: &'a std::cell::Cell<u64>,
+}
+
+impl Read for Endless<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        buffer.fill(7);
+        self.given.set(self.given.get() + buffer.len() as u64);
+
+        Ok(buffer.len())
+    }
+}

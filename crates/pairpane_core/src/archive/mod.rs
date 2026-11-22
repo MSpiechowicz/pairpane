@@ -20,7 +20,8 @@
 //! - [`Password`]: held in memory only, zeroized, `Debug` hides it. A password that an archive needs and lacks (or that is
 //!   wrong) surfaces as an error made by [`password_error`] and recognised by [`password_fault`].
 //! - [`check_password`]: whether a password opens an archive, judged cheaply (a zip by the verifier or check byte of its
-//!   first encrypted entry; [`zip::check_password`]); what `archive_password` answers with.
+//!   first encrypted entry; [`zip::check_password`]); what `archive_password` answers with. [`confirm_password`] is the
+//!   stricter check for a rewrite that seals new content with the password (a zip: a whole entry decrypted and checked).
 //!
 //! # Formats and who reads them
 //!
@@ -82,7 +83,7 @@ pub use index::{ArchiveIndex, Builder, Child, IndexEntry, Selected, Selection};
 pub use kind::{HEAD_BYTES, by_extension, by_magic, detect};
 pub use names::{Unsafe, normalize};
 pub use open::{Input, build_index, open_source, records};
-pub use password::{Password, check_password};
+pub use password::{Password, check_password, confirm_password};
 
 /// The most entries an index holds; an archive with more is indexed up to here and marked truncated (a zip that declares
 /// more is refused).

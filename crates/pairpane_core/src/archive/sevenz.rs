@@ -25,7 +25,7 @@ use crate::view::refusal;
 /// the 64 MiB of `7z -mx9`; an archive that asks for more is refused.
 pub(super) const MEMORY_KB: usize = 512 * 1024;
 
-/// How much of the first encrypted entry [`check_password`] decodes to see whether the password opens it.
+/// How much of the entry [`check_password`] probes it decodes to see whether the password opens it.
 const PROBE: u64 = 64 * 1024;
 
 /// Windows attribute bits of a 7z entry.
@@ -115,9 +115,8 @@ pub(super) fn open(file: &dyn ReadAt, cancel: &AtomicBool, password: Option<&Pas
             // Not needed any more: the second read is without one.
             drop(secret);
 
-            let needs = headers_are_encrypted(file, cancel);
-
-            Err(if needs {
+            // A read that fails here says why: it is not taken for headers that need no password.
+            Err(if headers_are_encrypted(file, cancel)? {
                 password_error(PasswordFault::Wrong)
             } else {
                 failed
@@ -127,14 +126,20 @@ pub(super) fn open(file: &dyn ReadAt, cancel: &AtomicBool, password: Option<&Pas
 }
 
 /// Whether the headers of the 7z archive in `file` are encrypted: they ask for a password when they are read without one.
-pub(super) fn headers_are_encrypted(file: &dyn ReadAt, cancel: &AtomicBool) -> bool {
+///
+/// # Errors
+///
+/// Any other failure of that read (a disk error, a raised `cancel`, headers that cannot be read at all): the answer is not
+/// known then, and a caller must not take it for "no".
+pub(super) fn headers_are_encrypted(file: &dyn ReadAt, cancel: &AtomicBool) -> io::Result<bool> {
     let mut source = Source::new(file, cancel);
     let none = sevenz_rust2::Password::empty();
 
-    matches!(
-        Archive::read_with_memory_limit(&mut source, &none, MEMORY_KB),
-        Err(Error::PasswordRequired)
-    )
+    match Archive::read_with_memory_limit(&mut source, &none, MEMORY_KB) {
+        Ok(_) => Ok(false),
+        Err(Error::PasswordRequired) => Ok(true),
+        Err(error) => Err(failure(error, cancel, false)),
+    }
 }
 
 /// `error` of the 7z code as an error of ours: a raised `cancel` first, then what it says about the password and the
@@ -254,10 +259,22 @@ pub fn walk(
     Ok(Walked::default())
 }
 
-/// Whether `password` opens the archive in `file`: its headers, and when its content is encrypted the start of the
-/// first encrypted entry (at most 64 KiB of it are decoded). `Ok(false)` is a password that does not open it, or a
-/// missing one that is needed; an archive that cannot be read at all is an error. A stored encrypted entry cannot be
-/// told wrong before its end, so it counts as opened.
+/// The encrypted entry that tells most about a password for the least work: of the entries that come first in their block
+/// (so decoding stops at them), the smallest, which is read to its end when it is within [`PROBE`] and so ends in what the
+/// decoder checks there. `None` when no entry is encrypted.
+fn probe_entry(archive: &Archive) -> Option<usize> {
+    let map = &archive.stream_map;
+
+    (0..archive.files.len())
+        .filter(|file| archive.files[*file].has_stream() && archive.is_file_encrypted(*file))
+        .filter(|file| map.file_block_index[*file].is_some_and(|block| map.block_first_file_index[block] == *file))
+        .min_by_key(|file| archive.files[*file].size())
+}
+
+/// Whether `password` opens the archive in `file`: its headers, and when its content is encrypted an entry of it (see
+/// [`probe_entry`]: at most 64 KiB of it are decoded). `Ok(false)` is a password that does not open it, or a missing one
+/// that is needed; an archive that cannot be read at all is an error. A stored (not compressed) encrypted entry longer than
+/// the probe cannot be told wrong before its end, so it counts as opened.
 pub fn check_password(file: &dyn ReadAt, password: &Password) -> io::Result<bool> {
     // Nothing here is long enough to need stopping: the headers and at most 64 KiB of one entry.
     let cancel = &AtomicBool::new(false);
@@ -267,20 +284,14 @@ pub fn check_password(file: &dyn ReadAt, password: &Password) -> io::Result<bool
         Err(error) => return Err(error),
     };
 
-    let Some(first) = opened
-        .archive
-        .files
-        .iter()
-        .enumerate()
-        .find(|(index, entry)| entry.has_stream() && opened.archive.is_file_encrypted(*index))
-        .map(|(index, _)| index)
-    else {
+    let Some(first) = probe_entry(&opened.archive) else {
         return Ok(true);
     };
 
     let mut source = Source::new(file, cancel);
     let probed = decode(&opened, &mut source, cancel, &[first], &mut |_, data| {
-        io::copy(&mut data.take(PROBE), &mut io::sink())?;
+        // One byte more than the probe, so an entry that is as long as it is read to its end.
+        io::copy(&mut data.take(PROBE + 1), &mut io::sink())?;
 
         Ok(Flow::Continue)
     });

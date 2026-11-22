@@ -128,3 +128,88 @@ fn a_compressed_tar_whose_stream_is_damaged_is_not_carried_over() {
 
     assert!(rewrite_with(&old, ArchiveFormat::TarGz, (&[], &added()), None).is_err());
 }
+
+const AFTER_END: &str = "the archive has data after its end, so it can't be changed";
+
+/// A tar with a PAX global header of the records `records`, then an entry.
+fn global_tar(records: &[u8]) -> Vec<u8> {
+    let mut builder = Builder::new(Vec::new());
+
+    let mut global = Header::new_ustar();
+    global.set_entry_type(EntryType::XGlobalHeader);
+    global.set_size(records.len() as u64);
+    global.set_cksum();
+    builder
+        .append_data(&mut global, "pax_global_header", records)
+        .expect("global");
+
+    let mut header = Header::new_ustar();
+    header.set_size(5);
+    header.set_mode(0o644);
+    builder.append_data(&mut header, "one", &b"first"[..]).expect("entry");
+
+    builder.into_inner().expect("a tar")
+}
+
+fn refused_with(bytes: &Vec<u8>, format: ArchiveFormat, text: &str) {
+    let error = rewrite_with(bytes, format, (&[], &added()), None).expect_err("refused");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported, "{format:?}");
+    assert_eq!(error.to_string(), text, "{format:?}");
+}
+
+#[test]
+fn a_tar_that_goes_on_after_its_end_blocks_is_refused_in_every_codec() {
+    let first = sample();
+    let second = [Item::file("other/second.txt", 0o644, b"second tar")];
+
+    for format in TARS {
+        // What `cat a.tar b.tar` makes (and the same of two compressed files): the second tar is not listed, so a rewrite
+        // would drop it.
+        let mut both = archive(format, &first, None, false);
+        both.extend(archive(format, &second, None, false));
+
+        refused_with(&both, format, AFTER_END);
+    }
+}
+
+#[test]
+fn bytes_after_the_end_of_a_plain_tar_or_of_the_first_gzip_member_are_refused() {
+    for format in [ArchiveFormat::Tar, ArchiveFormat::TarGz] {
+        let mut old = archive(format, &sample(), None, false);
+        old.extend(b"anything but zeros, as a footer of some other program");
+
+        refused_with(&old, format, AFTER_END);
+    }
+}
+
+#[test]
+fn zeros_after_the_end_blocks_are_what_a_tar_may_have() {
+    let mut old = archive(ArchiveFormat::Tar, &sample(), None, false);
+    // The padding of a tar to a whole record.
+    old.resize(old.len() + 10_240, 0);
+
+    let new = rewrite_with(&old, ArchiveFormat::Tar, (&[], &added()), None).expect("rewritten");
+
+    assert_eq!(
+        seen(&new, ArchiveFormat::Tar, None),
+        wanted(ArchiveFormat::Tar, &changed(&sample(), &[], &added()))
+    );
+}
+
+#[test]
+fn a_pax_global_header_with_settings_refuses_an_add_but_not_a_delete_and_a_comment_is_no_setting() {
+    let format = ArchiveFormat::Tar;
+    let settings = global_tar(&[pax("mtime", b"0"), pax("comment", b"hi")].concat());
+    refused_with(
+        &settings,
+        format,
+        "this archive has settings that would change the added files, so it can't be changed",
+    );
+    let first = ordinal(&settings, format, "one");
+    assert!(rewrite_with(&settings, format, (&[first], &[]), None).is_ok());
+
+    let notes = global_tar(&[pax("comment", b"hi"), pax("charset", b"BINARY")].concat());
+    let new = rewrite_with(&notes, format, (&[], &added()), None).expect("rewritten");
+    assert_eq!(seen(&new, format, None).len(), 4);
+}

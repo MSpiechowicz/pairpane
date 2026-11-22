@@ -22,6 +22,7 @@ use crate::archive::entries::{Cancellable, Declared, EntrySource, EntryType, Flo
 use crate::archive::error::{PasswordFault, check, password_error, password_fault, unreadable, unsupported};
 use crate::archive::file::{FileReader, ReadAt};
 use crate::archive::index::{ArchiveIndex, IndexEntry};
+use crate::archive::write::pump;
 
 use super::ZipPlace;
 use super::decode::{Checked, Method, buffered, decoder};
@@ -284,6 +285,52 @@ pub fn check_password(index: &ArchiveIndex, file: &dyn ReadAt, password: &Passwo
     match unlock(place, source.raw(place)?, Some(password)) {
         Ok(_) => Ok(true),
         Err(error) if password_fault(&error) == Some(PasswordFault::Wrong) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// Whether `password` opens the zip of `index`, judged by decrypting a whole entry: the smallest encrypted file (one with
+/// content before an empty one, which only has the check byte to tell by), read to its end, so the CRC-32 of a ZipCrypto
+/// entry and the HMAC of a WinZip AES one are checked too. [`check_password`] stops at the check byte (one wrong password
+/// in 256 passes) or the verifier (one in 65,536), which is enough to ask the user again but not to encrypt new entries
+/// with. A zip with nothing encrypted accepts any password.
+///
+/// An entry that fails to decode or check after its check byte or verifier was accepted (a ZipCrypto entry that does not
+/// inflate or whose CRC differs, a WinZip AES entry whose tag does not match) counts as a wrong password: damaged data
+/// cannot be told from a check that let a wrong password through, and either way the password is not one to seal new
+/// entries with.
+///
+/// # Errors
+///
+/// Reading the archive failing, a raised `cancel` (`Interrupted`) included.
+pub fn confirm_password(
+    index: &ArchiveIndex,
+    file: &dyn ReadAt,
+    cancel: &AtomicBool,
+    password: &Password,
+) -> io::Result<bool> {
+    let smallest = index
+        .entries()
+        .iter()
+        .filter(|entry| entry.encrypted && entry.kind == EntryType::File)
+        .filter_map(|entry| match &entry.place {
+            Place::Zip(place) => Some((entry, place)),
+            _ => None,
+        })
+        .min_by_key(|(entry, place)| (entry.size == 0, place.compressed));
+    let Some((entry, place)) = smallest else {
+        return Ok(true);
+    };
+
+    let source = ZipSource::new(index, file, cancel, Some(password))?;
+    let read = source
+        .reader(entry, place)
+        .and_then(|mut reader| pump(&mut reader, &mut io::sink(), cancel, |_| {}));
+
+    match read {
+        Ok(_) => Ok(true),
+        Err(error) if password_fault(&error) == Some(PasswordFault::Wrong) => Ok(false),
+        Err(error) if matches!(error.kind(), io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput) => Ok(false),
         Err(error) => Err(error),
     }
 }

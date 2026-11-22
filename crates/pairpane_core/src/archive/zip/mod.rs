@@ -21,7 +21,7 @@ mod testing;
 #[cfg(test)]
 mod vectors;
 
-pub use source::{ZipSource, check_password};
+pub use source::{ZipSource, check_password, confirm_password};
 
 /// Everything the central directory says about where and how an entry's data is stored.
 #[derive(Debug, Clone, PartialEq, Eq)]

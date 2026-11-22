@@ -2,15 +2,19 @@
 //! archive unchanged), the others are written again, and the encryption of the old archive (content and headers) carries
 //! over to what is written.
 
-use std::io::Cursor;
+use std::io::{self, Cursor};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use pretty_assertions::assert_eq;
 use sevenz_rust2::Archive;
 
+use crate::archive::sevenz::open;
+use crate::archive::testing::idle;
 use crate::archive::write::testing::{Item, sample};
-use crate::archive::{PasswordFault, password_fault};
+use crate::archive::{PasswordFault, ReadAt, password_fault};
 use crate::model::ArchiveFormat;
 
+use super::Old;
 use super::testing::{SECRET, archive, changed, index, ordinal, rewrite_with, secret, seen, sevenz_in_blocks, wanted};
 
 const SEVENZ: ArchiveFormat = ArchiveFormat::SevenZ;
@@ -148,4 +152,60 @@ fn folders_and_empty_files_stay() {
         seen(&new, SEVENZ, None),
         wanted(SEVENZ, &changed(&items, &["src"], &[]))
     );
+}
+
+/// A file in memory of which one read, the `bad`th (from 0), fails with a disk error.
+struct Flaky<'a> {
+    bytes: &'a Vec<u8>,
+    reads: AtomicUsize,
+    bad: usize,
+}
+
+impl ReadAt for Flaky<'_> {
+    fn size(&self) -> io::Result<u64> {
+        self.bytes.size()
+    }
+
+    fn read_at(&self, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+        if self.reads.fetch_add(1, Ordering::Relaxed) == self.bad {
+            return Err(io::Error::from_raw_os_error(5));
+        }
+
+        self.bytes.read_at(buffer, offset)
+    }
+}
+
+#[test]
+fn a_read_that_fails_while_the_headers_are_checked_for_encryption_fails_the_rewrite() {
+    let bytes = archive(SEVENZ, &sample(), Some(SECRET), true);
+    let password = secret();
+    let cancel = idle();
+
+    // The reads that opening the archive takes: the check of the headers does the same ones after them.
+    let counting = Flaky {
+        bytes: &bytes,
+        reads: AtomicUsize::new(0),
+        bad: usize::MAX,
+    };
+    open(&counting, &cancel, Some(&password)).expect("opened");
+    let flaky = Flaky {
+        bytes: &bytes,
+        reads: AtomicUsize::new(0),
+        bad: counting.reads.load(Ordering::Relaxed),
+    };
+
+    let index = index(&bytes, SEVENZ, Some(&password)).expect("an index");
+    let mut progress = |_: u64| Ok(());
+    let old = Old {
+        index: &index,
+        file: &flaky,
+        cancel: &cancel,
+        password: Some(&password),
+        left_out: &[],
+        progress: &mut progress,
+    };
+
+    let error = super::sevenz::rewrite(Cursor::new(Vec::new()), old, Vec::new()).expect_err("a disk error");
+
+    assert_eq!(error.raw_os_error(), Some(5));
 }

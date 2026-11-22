@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { above, archiveFile, crumbKey, isArchiveName, isWritableArchive, joinInner, joinPath } from './archive';
+import { above, archiveFile, crumbKey,
+  isArchiveName,
+  isWritableArchive,
+  joinInner,
+  joinPath,
+  sameArchivePath,
+} from './archive';
 import { entry } from '../../../tests/panes';
 
 describe('isArchiveName', () => {
@@ -76,5 +82,35 @@ describe('archive locations', () => {
     ].map(crumbKey);
 
     expect(new Set(keys).size).toBe(4);
+  });
+});
+
+describe('sameArchivePath', () => {
+  const as = (userAgent: string) => vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(userAgent);
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('matches Windows paths that differ in separator, case and a trailing separator', () => {
+    as('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+
+    expect(sameArchivePath('c:/Users/Me/a.zip', 'C:\\users\\me\\A.ZIP')).toBe(true);
+    expect(sameArchivePath('C:\\Users\\Me\\a.zip\\', 'C:\\Users\\Me\\a.zip')).toBe(true);
+    expect(sameArchivePath('C:/', 'c:\\')).toBe(true);
+  });
+
+  it('tells Windows archives apart', () => {
+    as('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+
+    expect(sameArchivePath('C:\\a\\x.zip', 'C:\\a\\y.zip')).toBe(false);
+    expect(sameArchivePath('C:\\a\\x.zip', 'D:\\a\\x.zip')).toBe(false);
+  });
+
+  it('matches POSIX paths exactly, but for a trailing slash', () => {
+    as('Mozilla/5.0 (X11; Linux x86_64)');
+
+    expect(sameArchivePath('/home/me/a.zip', '/home/me/a.zip')).toBe(true);
+    expect(sameArchivePath('/home/me/a.zip/', '/home/me/a.zip')).toBe(true);
+    expect(sameArchivePath('/home/me/a.zip', '/home/me/A.zip')).toBe(false);
+    expect(sameArchivePath('/home/me/a.zip', '/home/me/b.zip')).toBe(false);
   });
 });

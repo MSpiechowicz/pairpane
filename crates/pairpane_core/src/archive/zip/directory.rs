@@ -90,16 +90,32 @@ pub fn walk<F: ReadAt + ?Sized>(
     Ok(Walked::default())
 }
 
-/// Finds the central directory through the last end record in the file, and checks that it fits in the file.
-fn locate<F: ReadAt + ?Sized>(file: &F) -> io::Result<Directory> {
+/// The end of the file where the last end record is: where the tail starts in the file, the tail, and where the record is
+/// in it (the last signature with a whole record after it).
+fn find_end<F: ReadAt + ?Sized>(file: &F) -> io::Result<(u64, Vec<u8>, usize)> {
     let size = file.size()?;
     let length = size.min(EOCD_SEARCH);
     let base = size - length;
     let tail = file.read_chunk(base, usize::try_from(length).map_err(|_| unreadable())?)?;
 
-    // The last signature with a whole record after it.
     let room = tail.len().checked_sub(EOCD - 4).ok_or_else(unreadable)?;
     let at = memmem::rfind(&tail[..room], b"PK\x05\x06").ok_or_else(unreadable)?;
+
+    Ok((base, tail, at))
+}
+
+/// The comment of the zip in `file`: what follows its end record, as long as the record says (or as is left of the file).
+pub fn comment<F: ReadAt + ?Sized>(file: &F) -> io::Result<Vec<u8>> {
+    let (_, tail, at) = find_end(file)?;
+    let from = at + EOCD;
+    let length = le(&tail, at + 20, 2) as usize;
+
+    Ok(tail[from..tail.len().min(from + length)].to_vec())
+}
+
+/// Finds the central directory through the last end record in the file, and checks that it fits in the file.
+fn locate<F: ReadAt + ?Sized>(file: &F) -> io::Result<Directory> {
+    let (base, tail, at) = find_end(file)?;
     let end_record = &tail[at..at + EOCD];
 
     let mut entries = le(end_record, 10, 2);

@@ -18,6 +18,11 @@ pub fn unsupported(text: &'static str) -> io::Error {
     refusal(io::ErrorKind::Unsupported, text)
 }
 
+/// The error of a tar that has data after its end, which a rewrite would drop: `Unsupported`.
+pub fn data_after_end() -> io::Error {
+    unsupported("the archive has data after its end, so it can't be changed")
+}
+
 /// The error of work that was stopped because its cancel flag was raised: `Interrupted`.
 pub fn cancelled() -> io::Error {
     refusal(io::ErrorKind::Interrupted, "the read was cancelled")

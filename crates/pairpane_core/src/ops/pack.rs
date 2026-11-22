@@ -45,7 +45,11 @@ pub(super) const OUTPUT_BUFFER: usize = 256 * 1024;
 /// What an entry of the archive is made from.
 pub(super) enum Source {
     Folder,
-    File { size: u64, open: Reopen },
+    /// The `Reopen` is boxed: it is large, and the folder variant would take its room.
+    File {
+        size: u64,
+        open: Box<Reopen>,
+    },
 }
 
 /// One entry to write: its name in the archive, its mode and time, and its source.
@@ -158,7 +162,7 @@ impl Visitor for Plan {
             at,
             Source::File {
                 size: at.node.size,
-                open: Reopen::new(&self.root, at),
+                open: Box::new(Reopen::new(&self.root, at)),
             },
         );
 

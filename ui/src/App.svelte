@@ -17,6 +17,7 @@
   import TransfersPanel from '$lib/ops/TransfersPanel.svelte';
   import ToolDialogs from '$lib/ops/ToolDialogs.svelte';
   import { focusActiveList } from '$lib/panes/focus';
+  import { sameArchivePath } from '$lib/panes/archive';
   import { Hotlist } from '$lib/panes/hotlist.svelte';
   import { PaneTabs } from '$lib/panes/tabs.svelte';
   import { Volumes } from '$lib/panes/volumes.svelte';
@@ -69,7 +70,7 @@
   function archiveChanged(archive: string) {
     for (const tabs of [panes.left, panes.right]) {
       const { listing } = tabs.view;
-      if (listing.archive?.archive === archive) {
+      if (listing.archive !== undefined && sameArchivePath(listing.archive.archive, archive)) {
         void listing.reload();
       }
     }

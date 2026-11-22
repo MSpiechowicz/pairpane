@@ -1,12 +1,13 @@
 //! 7z archives: listing from the headers alone, what the attributes make of an entry, extraction of chosen entries (solid
 //! and not) without decoding what is not wanted, cancel, passwords on content and on headers.
 
-use std::io;
+use std::io::{self, Cursor};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pretty_assertions::assert_eq;
 
-use crate::model::ArchiveFormat;
+use crate::archive::write::{Entry, Options, SevenZWriter};
+use crate::model::{ArchiveFormat, PackLevel};
 
 use super::entries::{EntryType, Flow, Record};
 use super::error::{PasswordFault, password_fault};
@@ -412,4 +413,32 @@ fn a_file_that_is_not_a_7z_is_an_unreadable_archive() {
 
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert_eq!(error.to_string(), "the archive cannot be read");
+}
+
+#[test]
+fn a_stored_7z_entry_that_fits_the_probe_is_read_to_its_end_so_a_wrong_password_is_told() {
+    let cancel = idle();
+    let options = Options {
+        level: PackLevel::Store,
+        password: Some(password("sesame")),
+        encrypt_names: false,
+    };
+    let mut writer = SevenZWriter::new(Cursor::new(Vec::new()), &options, &cancel)
+        .expect("a 7z writer")
+        .with_block(1);
+    for (name, content) in [("big.bin", noise(100_000)), ("small.txt", b"top secret".to_vec())] {
+        writer
+            .add(Entry::file(
+                name,
+                0o644,
+                None,
+                content.len() as u64,
+                Cursor::new(content),
+            ))
+            .expect("added");
+    }
+    let bytes = writer.finish().expect("a 7z").into_inner();
+
+    assert!(check_password(&bytes, &password("sesame")).expect("checked"));
+    assert!(!check_password(&bytes, &password("wrong")).expect("checked"));
 }

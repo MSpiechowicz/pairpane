@@ -7,6 +7,9 @@
 //! sizes that the record has there). A record that has it keeps it and gets the new number in it; one that does not gets
 //! the field (or a number added to the one it has) only when the new offset no longer fits 32 bits.
 //!
+//! The comment of the archive is carried over to the new end record. A zip with data before its first entry (a
+//! self-extracting program) is refused: that data would be lost.
+//!
 //! New entries are written by [`ZipWriter`] after the old ones, deflated at the normal level; when the old zip has an
 //! encrypted entry they are encrypted with its password (AES-256, as the writer does for a pack).
 
@@ -16,10 +19,11 @@ use std::ops::Range;
 use crate::archive::error::{PasswordFault, password_error, unreadable};
 use crate::archive::file::FileReader;
 use crate::archive::write::{Entry, Limits, Options, ZipWriter};
-use crate::archive::zip::ZipPlace;
 use crate::archive::zip::local::Layout;
+use crate::archive::zip::{ZipPlace, directory};
 use crate::archive::{ArchiveIndex, Place};
 use crate::model::PackLevel;
+use crate::view::refusal;
 
 use super::{Metered, Old, is_encrypted};
 
@@ -73,6 +77,19 @@ impl Ends {
     }
 }
 
+/// Whether the first local header of the zip of `index` is not at the start of the file.
+fn starts_late(index: &ArchiveIndex) -> bool {
+    index
+        .entries()
+        .iter()
+        .filter_map(|entry| match &entry.place {
+            Place::Zip(place) => Some(place.offset),
+            _ => None,
+        })
+        .min()
+        .is_some_and(|first| first > 0)
+}
+
 /// Writes the zip of `old` without its left-out entries, then `added`, into `out`; `limits` say where a number becomes a
 /// zip64 one (the format's own, except in tests).
 pub(super) fn rewrite<'a, W: Write + Seek>(
@@ -84,6 +101,14 @@ pub(super) fn rewrite<'a, W: Write + Seek>(
     // An archive whose entries overlap is refused whole, as the readers refuse it.
     Layout::new(old.index.entries())?;
 
+    // What comes before the first entry (a self-extracting program) is not copied: refused, not dropped.
+    if starts_late(old.index) {
+        return Err(refusal(
+            io::ErrorKind::Unsupported,
+            "this archive has data before its entries, so it can't be changed",
+        ));
+    }
+
     let encrypted = is_encrypted(old.index);
     if encrypted && old.password.is_none() {
         return Err(password_error(PasswordFault::Needed));
@@ -94,7 +119,8 @@ pub(super) fn rewrite<'a, W: Write + Seek>(
         password: old.password.filter(|_| encrypted).cloned(),
         encrypt_names: false,
     };
-    let mut writer = ZipWriter::with_limits(out, &options, old.cancel, limits);
+    let mut writer =
+        ZipWriter::with_limits(out, &options, old.cancel, limits).with_comment(directory::comment(old.file)?);
     let ends = Ends::of(old.index);
 
     for entry in old.index.entries() {

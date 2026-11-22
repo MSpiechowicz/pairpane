@@ -37,11 +37,14 @@ const CYCLES_POWER: u8 = 19;
 /// The Windows "archive" attribute of a file.
 const ATTRIBUTE_ARCHIVE: u32 = 0x20;
 
-/// A reader that fails with `Interrupted` once `cancel` is raised. The library reads it directly, no `io::copy` between,
-/// so the error ends the block.
+/// A reader that fails with `Interrupted` once `cancel` is raised, and fails when the file gives more than the size it was
+/// declared with (it reads one byte more to know). The library reads it directly, no `io::copy` between, so the error ends
+/// the block.
 struct Checked<'a> {
     inner: Box<dyn Read + 'a>,
     cancel: &'a AtomicBool,
+    /// How many bytes may still be read: the declared size and one more.
+    left: u64,
 }
 
 impl Read for Checked<'_> {
@@ -50,7 +53,15 @@ impl Read for Checked<'_> {
             return Err(cancelled());
         }
 
-        self.inner.read(buffer)
+        let room = usize::try_from(self.left).map_or(buffer.len(), |left| left.min(buffer.len()));
+        let count = self.inner.read(&mut buffer[..room])?;
+        self.left -= count as u64;
+
+        if self.left == 0 {
+            return Err(refusal(io::ErrorKind::Other, "a file grew while it was being packed"));
+        }
+
+        Ok(count)
     }
 }
 
@@ -134,6 +145,7 @@ impl<'a, W: Write + Seek> SevenZWriter<'a, W> {
         self.readers.push(SourceReader::new(Checked {
             inner: reader,
             cancel: self.cancel,
+            left: size.saturating_add(1),
         }));
         self.waiting += size;
 
