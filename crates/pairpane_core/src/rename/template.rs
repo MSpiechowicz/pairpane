@@ -161,10 +161,16 @@ impl Template {
         self.pieces.iter().any(|piece| matches!(piece, Piece::When(_)))
     }
 
-    pub(super) fn render(&self, context: &Context<'_>) -> String {
+    /// The text of the template for `context`. It stops as soon as it is over `limit` bytes, so what it returns is
+    /// longer than `limit` only by a piece (of at most the length of a field or a name), however many pieces there are.
+    pub(super) fn render(&self, context: &Context<'_>, limit: usize) -> String {
         let mut out = String::new();
 
         for piece in &self.pieces {
+            if out.len() > limit {
+                break;
+            }
+
             match piece {
                 Piece::Text(text) => out.push_str(text),
                 Piece::Name(span) => span.take(context.name, &mut out),

@@ -14,7 +14,9 @@ fn render_with(template: &str, name: &str, ext: &str, local: Option<Local>) -> S
         local,
     };
 
-    Template::parse(template).expect("a template").render(&context)
+    Template::parse(template)
+        .expect("a template")
+        .render(&context, usize::MAX)
 }
 
 fn render(template: &str, name: &str, ext: &str) -> String {
@@ -146,4 +148,19 @@ fn the_split_is_the_one_the_panes_show() {
         assert_eq!(split_name(name, false), (stem, ext), "{name}");
     }
     assert_eq!(split_name("v1.2", true), ("v1.2", ""), "a folder has no extension");
+}
+
+#[test]
+fn a_template_stops_once_it_is_over_the_limit() {
+    let context = Context {
+        name: "abcdefgh",
+        ext: "",
+        counter: "1",
+        local: None,
+    };
+    let template = Template::parse(&"[N]".repeat(1_000)).expect("a template");
+
+    let text = template.render(&context, 100);
+
+    assert!(text.len() > 100 && text.len() <= 100 + 8, "{}", text.len());
 }

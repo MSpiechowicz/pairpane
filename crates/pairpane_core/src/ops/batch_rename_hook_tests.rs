@@ -10,12 +10,12 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 
-use crate::model::{ControlAction, Outcome};
+use crate::model::{ControlAction, JobId, JobPhase, OpsEvent, Outcome};
 
 use super::batch_rename_tests::renaming;
 use super::partial::run_token;
 use super::testing::{Rig, put, read, temp, tree};
-use super::{RenameLog, hooks::Hooks};
+use super::{Engine, RenameLog, hooks::Hooks};
 
 fn folder_with(names: &[&str]) -> tempfile::TempDir {
     let root = temp();
@@ -207,4 +207,62 @@ fn the_log_is_finished_when_the_job_stops_unexpectedly() {
 
     assert!(matches!(ended.outcome, Outcome::Failed { .. }), "{:?}", ended.outcome);
     assert!(log.finished());
+}
+
+#[test]
+fn a_rename_cancelled_after_some_items_reports_exactly_those_in_its_last_progress() {
+    let root = folder_with(&["a", "b", "c", "d"]);
+    let src = root.path().join("src");
+    // The hook cancels the job when the second item is over; the job is known once it was started and is held at the
+    // start of its renaming until then.
+    let target: Arc<Mutex<Option<(Engine, JobId)>>> = Arc::default();
+    let items = AtomicUsize::new(0);
+    let mut hooks = Hooks::default();
+    let found = Arc::clone(&target);
+    hooks.after_item = Some(Arc::new(move |_| {
+        if items.fetch_add(1, Ordering::SeqCst) + 1 == 2
+            && let Some((engine, job)) = &*found.lock().expect("lock")
+        {
+            engine.control(*job, ControlAction::Cancel).expect("known job");
+        }
+    }));
+    let mut rig = Rig::with(hooks, |engine, event| {
+        if let OpsEvent::Phase {
+            id,
+            phase: JobPhase::Renaming,
+        } = event
+        {
+            engine.control(*id, ControlAction::Pause).expect("known job");
+        }
+    });
+    let log = RenameLog::default();
+    let job = rig.start(renaming(
+        &src,
+        &[("a", "1"), ("b", "2"), ("c", "3"), ("d", "4")],
+        false,
+        &log,
+    ));
+
+    rig.wait(|event| matches!(event, OpsEvent::Paused { paused: true, .. }));
+    *target.lock().expect("lock") = Some((rig.engine.clone(), job));
+    rig.engine.control(job, ControlAction::Resume).expect("known job");
+    let ended = rig.wait_ended(job);
+
+    assert_eq!(ended.outcome, Outcome::Cancelled);
+    assert_eq!(tree(&src), ["1", "2", "c", "d"]);
+    assert_eq!(log.done().len(), 2);
+    let last = rig.seen.iter().rev().find_map(|event| match event {
+        OpsEvent::Progress {
+            id,
+            done_files,
+            total_files,
+            ..
+        } if *id == job => Some((*done_files, *total_files)),
+        _ => None,
+    });
+    assert_eq!(
+        last,
+        Some((2, 4)),
+        "the last progress before the end counts the items done"
+    );
 }

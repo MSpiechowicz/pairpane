@@ -8,6 +8,9 @@ use super::testing::rule;
 use super::transform::{Search, apply_case, change_case};
 use crate::model::{CaseChange, CasePart, RenameRule, RuleField};
 
+/// More than any test name.
+const LIMIT: usize = 1_024;
+
 fn searching(search: &str, replace: &str, change: impl FnOnce(&mut RenameRule)) -> Search {
     let mut rule = rule();
     rule.search = search.to_owned();
@@ -21,14 +24,14 @@ fn searching(search: &str, replace: &str, change: impl FnOnce(&mut RenameRule)) 
 fn a_literal_search_finds_the_text_and_not_a_pattern() {
     let search = searching("a.b", "-", |_| {});
 
-    assert_eq!(search.apply("a.b axb a.b"), "- axb -");
+    assert_eq!(search.apply("a.b axb a.b", LIMIT), "- axb -");
 }
 
 #[test]
 fn a_literal_replacement_is_not_expanded() {
     let search = searching("x", "$1 ${y} $$", |_| {});
 
-    assert_eq!(search.apply("axa"), "a$1 ${y} $$a");
+    assert_eq!(search.apply("axa", LIMIT), "a$1 ${y} $$a");
 }
 
 #[test]
@@ -36,8 +39,8 @@ fn a_regular_expression_can_use_numbered_and_named_groups_in_the_replacement() {
     let numbered = searching(r"(\w+)-(\d+)", "${2}_$1", |rule| rule.regex = true);
     let named = searching(r"(?P<word>[a-z]+)", "${word}!", |rule| rule.regex = true);
 
-    assert_eq!(numbered.apply("name-12.txt"), "12_name.txt");
-    assert_eq!(named.apply("ab 1"), "ab! 1");
+    assert_eq!(numbered.apply("name-12.txt", LIMIT), "12_name.txt");
+    assert_eq!(named.apply("ab 1", LIMIT), "ab! 1");
 }
 
 #[test]
@@ -45,8 +48,29 @@ fn the_first_match_only_or_every_one_is_replaced() {
     let all = searching("a", "b", |_| {});
     let first = searching("a", "b", |rule| rule.first_only = true);
 
-    assert_eq!(all.apply("a.a.a"), "b.b.b");
-    assert_eq!(first.apply("a.a.a"), "b.a.a");
+    assert_eq!(all.apply("a.a.a", LIMIT), "b.b.b");
+    assert_eq!(first.apply("a.a.a", LIMIT), "b.a.a");
+}
+
+#[test]
+fn a_replacement_stops_once_the_result_is_over_the_limit() {
+    // A pattern that matches the empty text at every position, with a long replacement.
+    let every = searching("x?", &"z".repeat(100), |rule| rule.regex = true);
+    let long = "a".repeat(500);
+
+    let result = every.apply(&long, 300);
+
+    assert!(result.len() > 300, "{}", result.len());
+    assert!(result.len() <= 300 + 100 + 1, "{}", result.len());
+    assert_eq!(every.apply("ab", LIMIT).len(), 3 * 100 + 2);
+}
+
+#[test]
+fn the_text_after_the_last_match_is_kept_when_the_result_stays_within_the_limit() {
+    let search = searching("a", "bb", |_| {});
+
+    assert_eq!(search.apply("a-a-a", 100), "bb-bb-bb");
+    assert_eq!(search.apply("a-a-a", 3), "bb-bb");
 }
 
 #[test]
@@ -54,8 +78,8 @@ fn the_case_of_the_search_matters_only_when_asked() {
     let exact = searching("abc", "-", |_| {});
     let loose = searching("abc", "-", |rule| rule.match_case = false);
 
-    assert_eq!(exact.apply("ABC abc"), "ABC -");
-    assert_eq!(loose.apply("ABC abc"), "- -");
+    assert_eq!(exact.apply("ABC abc", LIMIT), "ABC -");
+    assert_eq!(loose.apply("ABC abc", LIMIT), "- -");
 }
 
 #[test]

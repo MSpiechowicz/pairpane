@@ -104,6 +104,21 @@ impl Run<'_> {
     }
 }
 
+impl super::held::Held {
+    /// The identity of the folder this holds open (on Windows, of the path it is held by); `None` when it cannot be read.
+    #[cfg(unix)]
+    pub(super) fn identity(&self) -> Option<FileId> {
+        let meta = self.dir.metadata().ok()?;
+
+        crate::listing::platform::identity(&meta).map(FileId::of_ids)
+    }
+
+    #[cfg(windows)]
+    pub(super) fn identity(&self) -> Option<FileId> {
+        FileId::of_path(&self.path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;

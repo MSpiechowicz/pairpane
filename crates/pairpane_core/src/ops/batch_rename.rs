@@ -44,6 +44,7 @@ impl Run<'_> {
         let job = self.job;
         let folder = self.open_folders(&[job.request.from.as_path()])?;
         let held = Held::root(&folder)?;
+        Self::check_folder_identity(&held, undo, log)?;
 
         self.phase(JobPhase::Renaming);
         self.expect_items(job.request.names.len());
@@ -86,6 +87,24 @@ impl Run<'_> {
         }
 
         Ok(())
+    }
+
+    /// A rename keeps the identity of the folder it opened in `log`. An undo goes on only in that same folder, so it never
+    /// renames in whatever the remembered path leads to now (a link to another folder, say), and is refused when the
+    /// identity of either cannot be read.
+    fn check_folder_identity(held: &Held, undo: bool, log: &RenameLog) -> Result<(), Stop> {
+        let here = held.identity();
+
+        if !undo {
+            log.set_folder(here);
+
+            return Ok(());
+        }
+
+        match (log.folder(), here) {
+            (Some(was), Some(now)) if *was == now => Ok(()),
+            _ => Err(refusal(io::ErrorKind::Other, "The folder changed; nothing was undone.").into()),
+        }
     }
 
     /// Looks up the items; one that is gone is left out (and reported, or skipped by an undo).
@@ -205,5 +224,9 @@ impl Run<'_> {
     fn item_done(&mut self, name: &str) {
         self.begin_file(name, 0);
         self.end_file();
+
+        if let Some(hook) = &self.inner.hooks.after_item {
+            hook(name);
+        }
     }
 }

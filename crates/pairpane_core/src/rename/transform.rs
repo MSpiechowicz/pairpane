@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use regex::{NoExpand, Regex};
+use regex::Regex;
 
 use crate::find::bounded_regex;
 use crate::model::{CaseChange, CasePart, RenameRule, RuleError, RuleField};
@@ -49,18 +49,35 @@ impl Search {
         }))
     }
 
-    /// `name` with the first match replaced, or every one.
-    pub(super) fn apply(&self, name: &str) -> String {
-        // A limit of 0 replaces every match.
-        let limit = usize::from(self.first_only);
+    /// `name` with the first match replaced, or every one. It stops as soon as the result is over `limit` bytes (what
+    /// is returned is then longer than that by the rest of a replacement at most, and cut short of the rest of the
+    /// name), so a replacement that is long or matches at every position cannot make a result of any size.
+    pub(super) fn apply(&self, name: &str, limit: usize) -> String {
+        let mut out = String::with_capacity(name.len());
+        let mut tail = 0;
 
-        let replaced = if self.literal {
-            self.regex.replacen(name, limit, NoExpand(self.replace.as_str()))
-        } else {
-            self.regex.replacen(name, limit, self.replace.as_str())
-        };
+        for captures in self.regex.captures_iter(name) {
+            let Some(found) = captures.get(0) else {
+                break;
+            };
 
-        replaced.into_owned()
+            out.push_str(&name[tail..found.start()]);
+            if self.literal {
+                out.push_str(&self.replace);
+            } else {
+                captures.expand(&self.replace, &mut out);
+            }
+            tail = found.end();
+
+            if self.first_only || out.len() > limit {
+                break;
+            }
+        }
+        if out.len() <= limit {
+            out.push_str(&name[tail..]);
+        }
+
+        out
     }
 }
 

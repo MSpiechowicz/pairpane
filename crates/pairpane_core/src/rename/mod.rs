@@ -19,12 +19,15 @@
 //! - The counter of the item at position `i` of the list is `start + i * step`, padded with zeros to `digits`.
 //! - Nothing is ever replaced: a new name that an item of the folder has is a problem, unless that item is renamed away
 //!   too, so a swap, a cycle and a chain are fine (see `check`).
-//! - A name over 1 KiB is cut to that (it is too long anyway), so a replacement cannot make a preview of any size.
+//! - A name over 1 KiB is cut to that (it is too long anyway), so a rule cannot make a preview of any size: a template
+//!   or a replacement stops as soon as the name is over it, and a name that is over it before the search is not searched.
 
 mod check;
 mod template;
 mod transform;
 
+#[cfg(test)]
+mod bomb_tests;
 #[cfg(test)]
 mod check_tests;
 #[cfg(test)]
@@ -161,20 +164,32 @@ impl Compiled {
             local,
         };
 
-        let mut name = self.name.render(&context);
-        let extension = self.ext.render(&context);
-        if !extension.is_empty() {
-            name.push('.');
-            name.push_str(&extension);
+        // Nothing past the limit is made: such a name is too long whatever follows, so it is cut where it is.
+        let mut name = self.name.render(&context, MAX_NAME_BYTES);
+        if name.len() <= MAX_NAME_BYTES {
+            let extension = self.ext.render(&context, MAX_NAME_BYTES);
+            if !extension.is_empty() {
+                name.push('.');
+                name.push_str(&extension);
+            }
         }
 
-        if let Some(search) = &self.search {
-            name = search.apply(&name);
+        if name.len() <= MAX_NAME_BYTES {
+            name = self.change(name, item.folder);
         }
-        let mut name = apply_case(&name, item.folder, self.case, self.case_part);
         cut(&mut name);
 
         Ok(name)
+    }
+
+    /// `name` (of at most [`MAX_NAME_BYTES`]) after the search and replace and the change of case.
+    fn change(&self, mut name: String, folder: bool) -> String {
+        if let Some(search) = &self.search {
+            name = search.apply(&name, MAX_NAME_BYTES);
+            cut(&mut name);
+        }
+
+        apply_case(&name, folder, self.case, self.case_part)
     }
 
     /// The counter of the item at `index`, with its leading zeros.

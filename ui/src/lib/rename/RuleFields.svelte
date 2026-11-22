@@ -3,11 +3,12 @@
 
   import type { CaseChange } from '$lib/ipc/bindings/CaseChange';
   import type { CasePart } from '$lib/ipc/bindings/CasePart';
+  import type { RenameCounter } from '$lib/ipc/bindings/RenameCounter';
   import type { RuleField } from '$lib/ipc/bindings/RuleField';
   import { displayName } from '$lib/panes/format';
 
   import type { Renamer } from './renamer.svelte';
-  import { CASE_PARTS, CASES, COUNTER_FIELDS, insertToken, PLACEHOLDERS, wholeNumber } from './rule';
+  import { CASE_PARTS, CASES, COUNTER_FIELDS, insertToken, PLACEHOLDERS } from './rule';
   import '../ops/fields.css';
 
   let { renamer }: { renamer: Renamer } = $props();
@@ -26,6 +27,9 @@
 
   const invalid = (field: RuleField) => (fault([field]) === undefined ? undefined : true);
 
+  /** A counter field is faulty when its text is not a number the rule can hold, or the backend faults the counter. */
+  const counterInvalid = (key: keyof RenameCounter) => (renamer.counterFault?.key === key || fault(['counter']) !== undefined ? true : undefined);
+
   function insert(token: string) {
     const input = inputs[target];
     if (input === undefined) {
@@ -43,12 +47,6 @@
     });
   }
 
-  function count(key: (typeof COUNTER_FIELDS)[number]['key'], max: number, text: string) {
-    const value = wholeNumber(text, max);
-    if (value !== undefined) {
-      renamer.rule.counter[key] = value;
-    }
-  }
 </script>
 
 {#snippet message(fields: RuleField[])}
@@ -105,14 +103,17 @@
           min="0"
           {max}
           autocomplete="off"
-          aria-invalid={invalid('counter')}
-          value={renamer.rule.counter[key]}
-          oninput={(event) => count(key, max, event.currentTarget.value)}
+          aria-invalid={counterInvalid(key)}
+          value={renamer.counterText[key] ?? renamer.rule.counter[key]}
+          oninput={(event) => renamer.setCounter(key, max, event.currentTarget.value)}
         />
       </label>
     {/each}
   </div>
   {@render message(['counter'])}
+  {#if renamer.counterFault !== undefined}
+    <p class="failure" role="alert">{displayName(renamer.counterFault.message)}</p>
+  {/if}
 
   <div class="templates">
     <label class="labelled">

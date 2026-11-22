@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/svelte';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { RenamePreview } from '$lib/ipc/bindings/RenamePreview';
 import type { RenameProblem } from '$lib/ipc/bindings/RenameProblem';
@@ -9,6 +9,7 @@ import { IpcFailure } from '$lib/ipc/transport';
 
 import { opsBackend } from '../../../tests/ops';
 import RenameDialog from './RenameDialog.svelte';
+import { BUSY_RETRY_MS, PREVIEW_DELAY_MS } from './renamer.svelte';
 import { blankRule } from './rule';
 import { SavedRenames } from './saved.svelte';
 
@@ -167,6 +168,41 @@ describe('RenameDialog rule fields', () => {
     expect(calls('rename_preview').at(-1)).toMatchObject({ rule: { counter: { start: 7, step: 1, digits: 1 } } });
   });
 
+  it('a counter field that holds no number is faulty and nothing can be renamed until it does', async () => {
+    const { calls } = open({ rename_preview: () => rowsOf([row('a.txt', 'x.txt')]) }, ['a.txt']);
+    await vi.waitFor(() => expect(apply()).toBeEnabled());
+    const step = screen.getByRole('spinbutton', { name: 'Step' });
+
+    await type(step, '');
+
+    expect(step).toHaveAttribute('aria-invalid', 'true');
+    expect(step).toHaveValue(null);
+    expect(screen.getByRole('alert')).toHaveTextContent('Step must be a whole number from 0 to 4,294,967,295.');
+    expect(screen.getByRole('spinbutton', { name: 'Start' })).not.toHaveAttribute('aria-invalid');
+    expect(apply()).toBeDisabled();
+
+    await type(step, '3');
+
+    expect(step).not.toHaveAttribute('aria-invalid');
+    expect(screen.queryByRole('alert')).toBeNull();
+    await vi.waitFor(() => expect(apply()).toBeEnabled());
+    expect(calls('rename_preview').at(-1)).toMatchObject({ rule: { counter: { step: 3 } } });
+  });
+
+  it('a preset that is loaded replaces what was typed in a counter field', async () => {
+    const renames = new SavedRenames();
+    renames.restore([{ name: 'Ones', rule: blankRule() }]);
+    open({}, ['a.txt'], renames);
+    await settled();
+    await type(screen.getByRole('spinbutton', { name: 'Step' }), '');
+
+    await fireEvent.change(screen.getByRole('combobox', { name: 'Saved preset' }), { target: { value: 'Ones' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Load' }));
+
+    expect(screen.getByRole('spinbutton', { name: 'Step' })).toHaveValue(1);
+    expect(screen.getByRole('spinbutton', { name: 'Step' })).not.toHaveAttribute('aria-invalid');
+  });
+
   it('the case selects are sent, and the part is off while the case is kept', async () => {
     const { calls } = open();
     await settled();
@@ -308,5 +344,117 @@ describe('RenameDialog presets', () => {
 
     expect(renames.list.map((preset) => preset.name)).toEqual(['Mine']);
     expect(calls('ops_task')).toEqual([]);
+  });
+});
+
+describe('RenameDialog when the backend is busy', () => {
+  const busy = () => new IpcFailure({ code: 'busy', message: 'Too many previews are running.' });
+  const status = () => screen.getByRole('status');
+
+  afterEach(() => vi.useRealTimers());
+
+  it('asks again by itself and shows the names when the answer comes, with no failure in between', async () => {
+    vi.useFakeTimers();
+    let asked = 0;
+    const { calls } = open({
+      rename_preview: async () => {
+        asked += 1;
+        if (asked < 3) {
+          throw busy();
+        }
+
+        return rowsOf([row('a.txt', 'x.txt')]);
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(status()).toHaveTextContent('Checking the names…');
+    expect(apply()).toBeDisabled();
+
+    await vi.advanceTimersByTimeAsync(BUSY_RETRY_MS[0] + BUSY_RETRY_MS[1]);
+
+    expect(calls('rename_preview')).toHaveLength(3);
+    expect(shown()).toEqual([['a.txt', 'x.txt', '']]);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(apply()).toBeEnabled();
+  });
+
+  it('drops the new try of a question that was replaced while it waited', async () => {
+    vi.useFakeTimers();
+    const { calls } = open({
+      rename_preview: async ({ rule }: { rule: RenameRule }) => {
+        if (rule.search === '') {
+          throw busy();
+        }
+
+        return rowsOf([row('a.txt', 'new.txt')]);
+      },
+    } as Answers);
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS); // busy: a new try is waiting
+
+    await type(field('Search'), 'a');
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(calls('rename_preview').map((call) => (call as { rule: RenameRule }).rule.search)).toEqual(['', 'a']);
+    expect(shown()).toEqual([['a.txt', 'new.txt', '']]);
+  });
+
+  it('drops a busy answer that arrives after a newer rule was asked about', async () => {
+    vi.useFakeTimers();
+    const waiting: { resolve: (preview: RenamePreview) => void; reject: (error: unknown) => void }[] = [];
+    const { calls } = open({
+      rename_preview: () => new Promise((resolve, reject) => waiting.push({ resolve, reject })),
+    });
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS);
+
+    await type(field('Search'), 'a');
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS);
+    waiting[1].resolve(rowsOf([row('a.txt', 'new.txt')]));
+    waiting[0].reject(busy());
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(calls('rename_preview')).toHaveLength(2);
+    expect(shown()).toEqual([['a.txt', 'new.txt', '']]);
+    expect(apply()).toBeEnabled();
+  });
+
+  it('gives up after the tries with a message that is not an alert, and Retry asks again', async () => {
+    vi.useFakeTimers();
+    let answer: () => RenamePreview = () => {
+      throw busy();
+    };
+    const { calls } = open({ rename_preview: async () => answer() });
+
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS + BUSY_RETRY_MS.reduce((sum, wait) => sum + wait, 0));
+
+    expect(calls('rename_preview')).toHaveLength(1 + BUSY_RETRY_MS.length);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(status()).toHaveTextContent('the program is busy');
+    expect(apply()).toBeDisabled();
+
+    answer = () => rowsOf([row('a.txt', 'x.txt')]);
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS);
+
+    expect(shown()).toEqual([['a.txt', 'x.txt', '']]);
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(apply()).toBeEnabled();
+  });
+
+  it('other failures are still told at once and do not wait', async () => {
+    vi.useFakeTimers();
+    const { calls } = open({
+      rename_preview: async () => {
+        throw new IpcFailure({ code: 'io', message: 'The folder is gone.' });
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('The folder is gone.');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls('rename_preview')).toHaveLength(1);
   });
 });

@@ -29,8 +29,23 @@ describe('renamed', () => {
     expect(renamed(rename(4, 1), ended({ errors: [error('a')] }))).toMatchObject({ text: 'Renamed 0 items. 1 item could not be renamed.', undo: null });
   });
 
-  it('a cancelled rename may have renamed some: it can be undone', () => {
-    expect(renamed(rename(4), ended({ outcome: { kind: 'cancelled' } }))).toEqual({ text: 'The rename was cancelled.', error: false, undo: 4 });
+  it('a cancelled rename tells how far it got and offers the undo of that', () => {
+    const cancelled = ended({ outcome: { kind: 'cancelled' } });
+
+    expect(renamed(job(4, { kind: 'rename', items: 5, doneFiles: 2 }), cancelled)).toEqual({
+      text: 'The rename was cancelled after 2 items.',
+      error: false,
+      undo: 4,
+    });
+    expect(renamed(job(4, { kind: 'rename', items: 5, doneFiles: 1 }), cancelled)).toMatchObject({ text: 'The rename was cancelled after 1 item.', undo: 4 });
+  });
+
+  it('a cancelled rename leaves out the items that failed before it, and offers no undo when none was renamed', () => {
+    const cancelled = ended({ outcome: { kind: 'cancelled' }, errors: [error('a')] });
+
+    expect(renamed(job(4, { kind: 'rename', items: 5, doneFiles: 3 }), cancelled)).toMatchObject({ text: 'The rename was cancelled after 2 items.', undo: 4 });
+    expect(renamed(job(4, { kind: 'rename', items: 5, doneFiles: 1 }), cancelled)).toEqual({ text: 'The rename was cancelled.', error: false, undo: null });
+    expect(renamed(rename(4, 5), ended({ outcome: { kind: 'cancelled' } }))).toEqual({ text: 'The rename was cancelled.', error: false, undo: null });
   });
 
   it('a failed job tells its message and offers no undo', () => {
@@ -44,6 +59,16 @@ describe('restored', () => {
   it('tells what was put back and what was left, with no undo of an undo', () => {
     expect(restored(rename(9, 3), ended({ skipped: 1 }))).toEqual({ text: 'Restored 2, skipped 1.', error: false, undo: null });
     expect(restored(rename(9, 3), ended())).toEqual({ text: 'Restored 3 items.', error: false, undo: null });
+  });
+
+  it('a cancelled undo counts only what it got to', () => {
+    const cancelled = ended({ outcome: { kind: 'cancelled' } });
+
+    expect(restored(job(9, { kind: 'rename', items: 5, doneFiles: 2 }), cancelled)).toEqual({
+      text: 'The undo was cancelled. Restored 2 items.',
+      error: false,
+      undo: null,
+    });
   });
 
   it('tells what could not be restored', () => {

@@ -1,6 +1,10 @@
 //! Renaming an item of a folder held open, without replacing anything: on Unix by the handle of the folder (`renameat`),
 //! so the names are looked up in that folder whatever happens to the path it was opened by; on Windows by path, as the
 //! other Windows jobs go.
+//!
+//! Races that remain, as in the other jobs of this crate: where the filesystem cannot refuse a replacing rename itself,
+//! the check for something at the new name and the rename are two steps, and someone who can write to the folder in between
+//! can win; and on Windows the folder is a path, so a folder swapped for a link between two renames is followed.
 
 use std::io;
 
@@ -33,8 +37,9 @@ fn system_noreplace(dir: &std::fs::File, from: &str, to: &str) -> io::Result<()>
     use rustix::io::Errno;
 
     match renameat_with(dir, from, dir, to, RenameFlags::NOREPLACE) {
-        // The system or the filesystem does not know the flag.
-        Err(errno) if [Errno::INVAL, Errno::NOSYS, Errno::OPNOTSUPP].contains(&errno) => {
+        // The system or the filesystem does not know the flag (macOS answers `ENOTSUP` for a filesystem without `EXCL`;
+        // on Linux the two codes are one).
+        Err(errno) if [Errno::INVAL, Errno::NOSYS, Errno::OPNOTSUPP, Errno::NOTSUP].contains(&errno) => {
             check_then_rename(dir, from, to)
         }
         result => result.map_err(io::Error::from),

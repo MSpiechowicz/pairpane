@@ -12,8 +12,15 @@ export interface RenameReport {
 
 const items = (n: number) => (n === 1 ? '1 item' : `${n} items`);
 
-/** How many of the job's items were done: all but the ones that failed or were skipped (what is left undone by a cancel is not told). */
-const doneOf = (job: JobView, result: JobResult) => Math.max(0, job.items - result.errors.length - result.moreErrors - result.skipped);
+/**
+ * How many of the job's items were done: the ones that were gone over, less those that failed or were skipped. A job
+ * that ended got to all its items; a cancelled one got as far as its last progress report (`doneFiles`, which counts
+ * an item however it came out). That report can lag a little behind a cancel, so the count is at least this many.
+ */
+function doneOf(job: JobView, result: JobResult): number {
+  const reached = result.outcome.kind === 'cancelled' ? job.doneFiles : job.items;
+  return Math.max(0, reached - result.errors.length - result.moreErrors - result.skipped);
+}
 
 /** The failures of a job, as a sentence's end: ` 2 items could not be renamed.` */
 function failed(result: JobResult, what: string): string {
@@ -21,7 +28,7 @@ function failed(result: JobResult, what: string): string {
   return count === 0 ? '' : ` ${items(count)} could not be ${what}.`;
 }
 
-/** A rename that ended: what was renamed, and the job to undo it with (not when nothing was). */
+/** A rename that ended: what was renamed, and the job to undo it with (not when nothing was, also after a cancel). */
 export function renamed(job: JobView, result: JobResult): RenameReport {
   const { outcome } = result;
   if (outcome.kind === 'failed') {
@@ -31,7 +38,8 @@ export function renamed(job: JobView, result: JobResult): RenameReport {
   const done = doneOf(job, result);
   const undo = done > 0 ? job.id : null;
   if (outcome.kind === 'cancelled') {
-    return { text: 'The rename was cancelled.', error: false, undo };
+    const text = done > 0 ? `The rename was cancelled after ${items(done)}.` : 'The rename was cancelled.';
+    return { text, error: false, undo };
   }
 
   const failures = failed(result, 'renamed');

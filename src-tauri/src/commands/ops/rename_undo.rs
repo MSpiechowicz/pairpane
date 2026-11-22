@@ -4,7 +4,7 @@
 //! worked in and its log (see [`RenameLog`]). It lives in memory only, so nothing outlives the app, and it is the same on
 //! every system. The page gets the token of an undo (the job's id) from the job it started and asks for the undo once
 //! the job has ended; the undo is a job of its own that renames each pair back, skipping what changed since (see
-//! `pairpane_core::ops::Task::Rename`). The slot is cleared when that job is queued, and an undo has no undo of its own.
+//! `pairpane_core::ops::Task::Rename`, which refuses when the folder it opens is not the one the rename opened). The slot is cleared when that job is queued, and an undo has no undo of its own.
 
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -80,7 +80,7 @@ impl RenameUndo {
             Task::Rename {
                 targets,
                 undo: true,
-                log: RenameLog::default(),
+                log: pending.log.undoing(),
             },
         );
         let undone = engine.submit(back).map_err(failed)?;

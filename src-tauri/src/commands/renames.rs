@@ -49,6 +49,14 @@ impl Renames {
             let actual = platform::local_path(&folder)
                 .map_err(|error| failed(folder_error(&error, "read this folder", "Cannot read this folder")))?;
 
+            // The same answer on every system for a folder that is gone (a read of it is not what tells on Linux).
+            let is_folder = std::fs::metadata(&actual)
+                .map(|metadata| metadata.is_dir())
+                .map_err(|error| failed(folder_error(&error, "read this folder", "Cannot read this folder")))?;
+            if !is_folder {
+                return Err(CommandError::new(IpcErrorCode::InvalidInput, "This is not a folder."));
+            }
+
             Ok(preview_in(&actual, &names, &rule))
         })
         .await;
@@ -205,7 +213,9 @@ mod tests {
         let (folder, path) = folder_with(&[]);
         drop(folder);
 
-        assert_eq!(preview(path, &["a"], rule()).map(drop).expect("rows, all missing"), ());
+        let refused = preview(path, &["a"], rule()).expect_err("not found");
+
+        assert_eq!(refused.code(), IpcErrorCode::NotFound);
     }
 
     #[test]

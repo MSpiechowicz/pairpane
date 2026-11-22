@@ -228,7 +228,7 @@ fn an_undo_job_restores_names_and_skips_what_changed_since() {
     let src = root.path().join("src");
     // `a` was taken since, `z` is gone.
     put(root.path(), "src/a", b"someone else's");
-    let log = RenameLog::default();
+    let log = RenameLog::expecting(&src);
 
     let ended = Rig::new().run(renaming(&src, &[("x", "a"), ("y", "b"), ("z", "c")], true, &log));
 
@@ -249,13 +249,57 @@ fn undoing_a_swap_swaps_back() {
     let reversed: Vec<(String, String)> = log.done().into_iter().map(|(from, to)| (to, from)).collect();
     let reversed: Vec<(&str, &str)> = reversed.iter().map(|(from, to)| (from.as_str(), to.as_str())).collect();
 
-    let ended = Rig::new().run(renaming(&src, &reversed, true, &RenameLog::default()));
+    let ended = Rig::new().run(renaming(&src, &reversed, true, &log.undoing()));
 
     assert_eq!((ended.skipped, ended.errors.len()), (0, 0));
     assert_eq!(
         (read(&src.join("a")), read(&src.join("b"))),
         (b"a".to_vec(), b"b".to_vec())
     );
+}
+
+#[test]
+fn an_undo_without_the_identity_of_the_folder_it_belongs_to_is_refused() {
+    let root = folder_with(&["y"]);
+    let src = root.path().join("src");
+
+    let ended = Rig::new().run(renaming(&src, &[("y", "b")], true, &RenameLog::default()));
+
+    assert!(matches!(ended.outcome, Outcome::Failed { .. }), "{:?}", ended.outcome);
+    assert_eq!(tree(&src), ["y"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_undo_is_refused_in_a_folder_that_replaced_the_one_it_belongs_to() {
+    let root = folder_with(&["x"]);
+    let src = root.path().join("src");
+    let (ended, log) = run_rename(&src, &[("x", "y")]);
+    assert!(ended.errors.is_empty(), "{:?}", ended.errors);
+    // The folder is moved away and a link to another folder, which holds an item `y` too, takes its place.
+    let other = root.path().join("other");
+    put(root.path(), "other/y", b"not ours");
+    std::fs::rename(&src, root.path().join("moved")).expect("moved");
+    std::os::unix::fs::symlink(&other, &src).expect("link");
+
+    let ended = Rig::new().run(renaming(&src, &[("y", "x")], true, &log.undoing()));
+
+    assert!(matches!(ended.outcome, Outcome::Failed { .. }), "{:?}", ended.outcome);
+    assert_eq!(tree(&other), ["y"]);
+    assert_eq!(read(&other.join("y")), b"not ours");
+    assert_eq!(tree(&root.path().join("moved")), ["y"]);
+}
+
+#[test]
+fn an_undo_in_the_same_folder_puts_the_names_back() {
+    let root = folder_with(&["x"]);
+    let src = root.path().join("src");
+    let (_, log) = run_rename(&src, &[("x", "y")]);
+
+    let ended = Rig::new().run(renaming(&src, &[("y", "x")], true, &log.undoing()));
+
+    assert_eq!((ended.skipped, ended.errors.len()), (0, 0));
+    assert_eq!(tree(&src), ["x"]);
 }
 
 /// What `submit` says to a rename of `pairs`.

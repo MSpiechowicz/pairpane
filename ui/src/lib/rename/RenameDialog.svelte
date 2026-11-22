@@ -48,6 +48,14 @@
       return { text: renamer.failure, alert: true };
     }
 
+    if (renamer.counterFault !== undefined) {
+      return { text: 'Fix the counter: the names shown are not of it.', alert: false };
+    }
+
+    if (renamer.busy) {
+      return { text: 'The names could not be checked just now: the program is busy.', alert: false };
+    }
+
     if (renamer.pending) {
       return { text: 'Checking the names…', alert: false };
     }
@@ -85,11 +93,16 @@
   <div class="body" {@attach enterSubmits(submit)}>
     <SavedBar saved={renames} current={savable} onLoad={(rule) => renamer.load(rule)} />
     <RuleFields {renamer} />
-    <PreviewTable rows={renamer.rows} stale={renamer.pending} />
+    <PreviewTable rows={renamer.rows} stale={!renamer.current} />
     {#if status.alert}
       <p class="status failure" role="alert">{displayName(status.text)}</p>
     {:else}
-      <p class="status" role="status">{status.text}</p>
+      <p class="status" role="status">
+        {status.text}
+        {#if renamer.busy}
+          <button class="btn" type="button" onclick={() => renamer.retry()}>Retry</button>
+        {/if}
+      </p>
     {/if}
   </div>
   <DialogFooter failure={submission.failure} busy={submission.busy} disabled={!renamer.canApply} confirm="Rename" onConfirm={submit} onCancel={submission.close} />
