@@ -4,6 +4,7 @@
 use std::fs::{File, FileTimes, Metadata};
 use std::io;
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use super::open;
 
@@ -47,6 +48,56 @@ pub(super) fn apply_file(file: &File, source: &Metadata) -> io::Result<()> {
 
 /// The Unix permission bits a copied file keeps: no setuid, setgid or sticky bit (unused on Windows).
 const FILE_MODE: u32 = 0o0777;
+
+/// Gives the open file or folder `file` what an archive entry states: its modification time (milliseconds since the
+/// Unix epoch; one that cannot be set is left out) and, when `mode` is given, its Unix permission bits without setuid,
+/// setgid and sticky. On Windows only the read-only attribute follows from `mode` (no owner write bit), and a folder
+/// gets none. Call it after the last write.
+pub(super) fn apply_entry(file: &File, mode: Option<u32>, modified: Option<i64>) -> io::Result<()> {
+    let time = modified.and_then(|millis| {
+        let span = Duration::from_millis(millis.unsigned_abs());
+
+        if millis >= 0 {
+            SystemTime::UNIX_EPOCH.checked_add(span)
+        } else {
+            SystemTime::UNIX_EPOCH.checked_sub(span)
+        }
+    });
+
+    if let Some(time) = time {
+        file.set_times(FileTimes::new().set_modified(time))?;
+    }
+
+    match mode {
+        Some(mode) => entry_permissions(file, mode & FILE_MODE),
+        None => Ok(()),
+    }
+}
+
+#[cfg(unix)]
+fn entry_permissions(file: &File, mode: u32) -> io::Result<()> {
+    use std::fs::Permissions;
+    use std::os::unix::fs::PermissionsExt;
+
+    file.set_permissions(Permissions::from_mode(mode))
+}
+
+#[cfg(windows)]
+fn entry_permissions(file: &File, mode: u32) -> io::Result<()> {
+    if mode & 0o200 != 0 || file.metadata()?.is_dir() {
+        return Ok(());
+    }
+
+    let mut permissions = file.metadata()?.permissions();
+    permissions.set_readonly(true);
+
+    file.set_permissions(permissions)
+}
+
+/// Gives the folder at `path` what an archive entry states (see [`apply_entry`]), once its contents are in.
+pub(super) fn apply_entry_folder(path: &Path, mode: Option<u32>, modified: Option<i64>) -> io::Result<()> {
+    apply_entry(&open::folder(path)?, mode, modified)
+}
 
 /// The Unix permission bits a copied folder keeps: the sticky bit stays (a shared folder like `/tmp` needs it), setuid
 /// and setgid do not.

@@ -29,3 +29,18 @@ impl fmt::Debug for Password {
         out.write_str("Password(..)")
     }
 }
+
+/// Whether `password` opens the archive of `index` in `file`, judged cheaply (nothing is decoded): a zip by the check
+/// byte or verifier of its first encrypted entry, a 7z by its headers and the start of its first encrypted entry. A format with nothing to check ahead accepts any password; its later
+/// failure asks again. A zip without an encrypted entry accepts too. Errors are those of reading the archive.
+pub fn check_password(
+    index: &super::index::ArchiveIndex,
+    file: &dyn super::file::ReadAt,
+    password: &Password,
+) -> std::io::Result<bool> {
+    match index.format() {
+        crate::model::ArchiveFormat::Zip => super::zip::check_password(index, file, password),
+        crate::model::ArchiveFormat::SevenZ => super::sevenz::check_password(file, password),
+        _ => Ok(true),
+    }
+}

@@ -289,6 +289,7 @@ fn lock(listener: &Listener) -> MutexGuard<'_, Option<Channel<OpsEvent>>> {
     listener.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+pub mod extract;
 pub mod tasks;
 
 #[cfg(test)]

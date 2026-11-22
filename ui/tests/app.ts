@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { expect, type Mock, vi } from 'vitest';
 
+import type { ArchiveSpot } from '$lib/ipc/bindings/ArchiveSpot';
 import type { Entry } from '$lib/ipc/bindings/Entry';
 import type { ListEvent } from '$lib/ipc/bindings/ListEvent';
 import type { OpsEvent } from '$lib/ipc/bindings/OpsEvent';
@@ -17,7 +18,7 @@ export function appWorld(invoke: Mock, answers: Answers = {}) {
   const opens: { pane: string; emit: (event: ListEvent) => void }[] = [];
   let ops: (event: OpsEvent) => void = () => {};
   invoke.mockImplementation(async (name: string, args: { pane?: string; onEvent?: never }) => {
-    if (name === 'pane_open') {
+    if (name === 'pane_open' || name === 'archive_open') {
       opens.push({ pane: args.pane as string, emit: args.onEvent as never });
     } else if (name === 'ops_subscribe') {
       ops = args.onEvent as never;
@@ -43,11 +44,31 @@ export function appWorld(invoke: Mock, answers: Answers = {}) {
     channel.emit({ kind: 'done', dirs: 0, files: entries.length, bytes: 0, free: null });
   };
 
+  /** Lists a folder of an archive in `/<side>` in a pane (the one whose listing was asked last). */
+  const listIn = (side: 'left' | 'right', spot: ArchiveSpot, entries: Entry[]) => {
+    const channel = opens.filter((open) => open.pane === side).at(-1)!;
+    channel.emit({
+      kind: 'start',
+      path: `/${side}`,
+      parent: '/',
+      crumbs: [
+        { name: '/', path: '/' },
+        { name: side, path: `/${side}` },
+        { name: spot.archive.split('/').pop() ?? '', path: spot.archive, inside: '' },
+      ],
+      total: entries.length,
+      archive: spot,
+    });
+    channel.emit({ kind: 'batch', offset: 0, entries });
+    channel.emit({ kind: 'done', dirs: 0, files: entries.length, bytes: 0, free: null });
+  };
+
   const sent = (name: string) => invoke.mock.calls.filter(([command]) => command === name).map(([, args]) => args);
 
   return {
     sent,
     list,
+    listIn,
     ops: (...events: OpsEvent[]) => events.forEach((event) => ops(event)),
     ready: async () => {
       await vi.waitFor(() => expect(opens.length).toBeGreaterThanOrEqual(2));

@@ -12,6 +12,7 @@ use std::time::{Instant, UNIX_EPOCH};
 use crate::model::{Answer, ConflictInfo, FileFacts, JobPhase, OpsEvent};
 
 use super::MAX_NAME_UNITS;
+use super::Task;
 use super::identity::same_place;
 use super::report::refusal;
 use super::transfer::{Run, Stop};
@@ -41,6 +42,13 @@ impl Place {
     }
 }
 
+/// What is put at the target: a file or a link on the disk, or an entry of an archive (which only has its facts: it
+/// cannot be hashed for a compare, and is never the same file as the target).
+pub(super) enum Origin<'a> {
+    Disk { meta: &'a Metadata, path: &'a Path },
+    Entry(&'a FileFacts),
+}
+
 /// What the dialog shows about one side.
 fn facts(meta: &Metadata) -> FileFacts {
     let modified = meta
@@ -55,6 +63,16 @@ fn facts(meta: &Metadata) -> FileFacts {
         size: if meta.is_dir() { 0 } else { meta.len() },
         modified,
         dir: meta.is_dir(),
+    }
+}
+
+/// Whether the existing `target` is older than what replaces it. Without both times it is not.
+fn older(existing: &Metadata, source: &Origin<'_>) -> bool {
+    match source {
+        Origin::Disk { meta, .. } => matches!((existing.modified(), meta.modified()), (Ok(old), Ok(new)) if old < new),
+        Origin::Entry(entry) => {
+            matches!((facts(existing).modified, entry.modified), (Some(old), Some(new)) if old < new)
+        }
     }
 }
 
@@ -143,6 +161,23 @@ impl Run<'_> {
         source_path: &Path,
         target: &Path,
     ) -> Result<Place, Stop> {
+        self.place_origin(
+            rel,
+            &Origin::Disk {
+                meta: source,
+                path: source_path,
+            },
+            target,
+        )
+    }
+
+    /// Like [`Run::place`] for an entry of an archive that has the `source` facts: the question it may ask has no
+    /// compare, and an older target is told from it by the entry's time.
+    pub(super) fn place_entry(&mut self, rel: &str, source: &FileFacts, target: &Path) -> Result<Place, Stop> {
+        self.place_origin(rel, &Origin::Entry(source), target)
+    }
+
+    fn place_origin(&mut self, rel: &str, source: &Origin<'_>, target: &Path) -> Result<Place, Stop> {
         let existing = match fs::symlink_metadata(target) {
             Ok(existing) => existing,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Place::New(target.to_owned())),
@@ -155,36 +190,38 @@ impl Run<'_> {
 
         let answer = match self.policy {
             Some(answer) => answer,
-            None => self.ask(rel, source, source_path, &existing, target)?,
+            None => self.ask(rel, source, &existing, target)?,
         };
 
         let replace = match answer {
             Answer::Overwrite => true,
-            Answer::OverwriteOlder => {
-                matches!((existing.modified(), source.modified()), (Ok(old), Ok(new)) if old < new)
-            }
+            Answer::OverwriteOlder => older(&existing, source),
             Answer::Rename => return Ok(Place::New(free_name(target)?)),
             Answer::Skip | Answer::Compare => false,
         };
 
         // Replacing a file with itself would lose it.
-        if !replace || self.same_file(source, source_path, &existing, target) {
+        let itself = matches!(source, Origin::Disk { meta, path } if self.same_file(meta, path, &existing, target));
+
+        if !replace || itself {
             return Ok(Place::Skip);
         }
 
         Ok(Place::Replace(target.to_owned()))
     }
 
+    /// The phase the job is in while it works, which it returns to after a question.
+    fn working_phase(&self) -> JobPhase {
+        if matches!(self.job.request.task, Task::Extract { .. }) {
+            JobPhase::Extracting
+        } else {
+            JobPhase::Copying
+        }
+    }
+
     /// Sends the question and waits for its final answer. `compare` is answered on the way, and the question
     /// stays open.
-    fn ask(
-        &mut self,
-        rel: &str,
-        source: &Metadata,
-        source_path: &Path,
-        existing: &Metadata,
-        target: &Path,
-    ) -> Result<Answer, Stop> {
+    fn ask(&mut self, rel: &str, source: &Origin<'_>, existing: &Metadata, target: &Path) -> Result<Answer, Stop> {
         let suggested = free_name(target)?
             .file_name()
             .unwrap_or_default()
@@ -194,10 +231,13 @@ impl Run<'_> {
             job: self.job.id,
             question: 0,
             name: rel.to_owned(),
-            source: facts(source),
+            source: match source {
+                Origin::Disk { meta, .. } => facts(meta),
+                Origin::Entry(entry) => (*entry).clone(),
+            },
             target: facts(existing),
             suggested,
-            comparable: true,
+            comparable: matches!(source, Origin::Disk { .. }),
         });
 
         self.phase(JobPhase::Waiting);
@@ -220,13 +260,16 @@ impl Run<'_> {
                 if reply.all {
                     self.policy = Some(reply.answer);
                 }
-                self.phase(JobPhase::Copying);
+                self.phase(self.working_phase());
 
                 return Ok(reply.answer);
             }
 
+            // A source that is not a file on the disk offers no compare: a stale one is not answered.
+            let Origin::Disk { meta, path } = source else { continue };
+
             let started = Instant::now();
-            let identical = self.same_content(source_path, source, target)?;
+            let identical = self.same_content(path, meta, target)?;
             self.exclude(started.elapsed());
 
             self.inner.emit(OpsEvent::Compared {

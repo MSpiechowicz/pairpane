@@ -24,6 +24,8 @@ export class ViewSession {
   readonly ipc: Transport;
   /** What the user should know about why this file is shown (it was too large to edit). */
   readonly notice: string | undefined;
+  /** For an entry of an archive: the folder it is in, inside the archive (`path` is then the archive file). */
+  readonly inside: string | undefined;
 
   status = $state<'opening' | 'ready' | 'failed'>('opening');
   /** Why the file could not be opened; the backend's own words (it never names a path). */
@@ -38,17 +40,18 @@ export class ViewSession {
 
   #closed = false;
 
-  constructor(ipc: Transport, path: string, name: string, notice?: string) {
+  constructor(ipc: Transport, path: string, name: string, notice?: string, inside?: string) {
     this.ipc = ipc;
     this.path = path;
     this.name = name;
     this.notice = notice;
+    this.inside = inside;
     void this.#open();
   }
 
   async #open() {
     try {
-      const opened = await this.ipc.invoke('view_open', { path: this.path, name: this.name });
+      const opened = await this.#request();
       if (this.#closed) {
         this.#release(opened.session);
         return;
@@ -63,6 +66,15 @@ export class ViewSession {
         this.status = 'failed';
       }
     }
+  }
+
+  /** Opens the file, or the archive's entry (the backend reads it out of the archive for the session). */
+  #request(): Promise<ViewOpened> {
+    if (this.inside === undefined) {
+      return this.ipc.invoke('view_open', { path: this.path, name: this.name });
+    }
+
+    return this.ipc.invoke('archive_view_open', { archive: this.path, dir: this.inside, name: this.name });
   }
 
   #release(session: number) {

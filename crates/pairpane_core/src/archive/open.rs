@@ -11,13 +11,14 @@ use crate::model::ArchiveFormat;
 
 use super::MAX_INDEX_SCAN;
 use super::entries::{EntrySource, Flow, Record};
-use super::error::unsupported;
 use super::file::ReadAt;
 use super::gz::{self, GzSource};
 use super::index::{ArchiveIndex, Builder};
 use super::password::Password;
+use super::rar;
+use super::sevenz::{self, SevenZSource};
 use super::tar::{self, TarSource, stream};
-use super::zip::directory;
+use super::zip::{ZipSource, directory};
 
 /// An opened archive file.
 #[derive(Clone, Copy)]
@@ -39,7 +40,7 @@ pub fn records(
     input: &Input<'_>,
     cancel: &AtomicBool,
     scan: u64,
-    _password: Option<&Password>,
+    password: Option<&Password>,
     visit: &mut dyn FnMut(Record) -> Flow,
 ) -> io::Result<bool> {
     match format {
@@ -55,7 +56,8 @@ pub fn records(
 
             Ok(tar::walk(&mut source, Some(&reached), cancel, |record, _| Ok(visit(record)))?.cut)
         }
-        ArchiveFormat::SevenZ | ArchiveFormat::Rar => Err(unsupported("this kind of archive cannot be read yet")),
+        ArchiveFormat::SevenZ => Ok(sevenz::walk(input.file, cancel, password, visit)?.cut),
+        ArchiveFormat::Rar => rar::records(input, cancel, visit),
     }
 }
 
@@ -83,7 +85,7 @@ pub fn open_source<'a>(
     index: &'a ArchiveIndex,
     input: &Input<'a>,
     cancel: &'a AtomicBool,
-    _password: Option<&'a Password>,
+    password: Option<&'a Password>,
 ) -> io::Result<Box<dyn EntrySource + 'a>> {
     match index.format() {
         ArchiveFormat::Tar
@@ -92,8 +94,8 @@ pub fn open_source<'a>(
         | ArchiveFormat::TarZst
         | ArchiveFormat::TarBz2 => Ok(Box::new(TarSource::new(index, input.file, cancel, MAX_INDEX_SCAN))),
         ArchiveFormat::Gz => Ok(Box::new(GzSource::new(index, input.file, cancel, MAX_INDEX_SCAN))),
-        ArchiveFormat::Zip | ArchiveFormat::SevenZ | ArchiveFormat::Rar => {
-            Err(unsupported("this kind of archive cannot be read yet"))
-        }
+        ArchiveFormat::Zip => Ok(Box::new(ZipSource::new(index, input.file, cancel, password)?)),
+        ArchiveFormat::SevenZ => Ok(Box::new(SevenZSource::new(index, input.file, cancel, password))),
+        ArchiveFormat::Rar => rar::open_source(index, input, cancel),
     }
 }

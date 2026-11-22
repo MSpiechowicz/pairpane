@@ -6,7 +6,7 @@ use pretty_assertions::assert_eq;
 
 use crate::model::{ArchiveEntry, ArchiveFormat, ArchiveListing};
 
-pub(super) use crate::archive::testing::{MOMENT, gzip, tar_of, zip_of};
+pub(super) use crate::archive::testing::{MOMENT, SevenZ, bzip2, gzip, tar_of, xz, zip_of, zstd};
 
 use super::testing::{file_of, idle, opened};
 use super::{MAX_ARCHIVE_ENTRIES, ViewFile, archive};
@@ -315,4 +315,56 @@ fn the_kind_found_on_opening_matches_what_is_listed() {
         }
     );
     assert_eq!(listing.entries.len(), 1);
+}
+
+#[test]
+fn lists_the_tars_inside_xz_zstd_and_bzip2_and_a_7z_found_by_their_bytes() {
+    let files: [(&str, &[u8]); 3] = [("a.txt", b"hello"), ("b/", b""), ("b/c.bin", &[0; 4000])];
+    let tar = tar_of(&files);
+
+    // A 7z names its folders without the slash.
+    for (name, bytes, format, folder) in [
+        ("pack.tar.xz", xz(&tar), ArchiveFormat::TarXz, "b/"),
+        ("pack.tar.zst", zstd(&tar), ArchiveFormat::TarZst, "b/"),
+        ("pack.tar.bz2", bzip2(&tar), ArchiveFormat::TarBz2, "b/"),
+        ("pack.7z", SevenZ::default().of(&files), ArchiveFormat::SevenZ, "b"),
+    ] {
+        let (_folder, opened) = opened(name, &bytes);
+        assert_eq!(opened.kind, crate::model::ViewKind::Archive { format }, "{name}");
+
+        let listing = archive(&opened.file, format, &idle()).expect("a listing");
+
+        assert_eq!(listing.format, format, "{name}");
+        assert!(!listing.truncated, "{name}");
+        assert_eq!(
+            listing.entries,
+            [
+                entry("a.txt", 5, false, Some(MOMENT)),
+                entry(folder, 0, true, Some(MOMENT)),
+                entry("b/c.bin", 4000, false, Some(MOMENT)),
+            ],
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_7z_with_encrypted_headers_is_refused_with_a_fixed_text_and_a_broken_one_too() {
+    let sealed = SevenZ {
+        password: Some("sesame"),
+        encrypted_headers: true,
+        ..SevenZ::default()
+    }
+    .of(&[("a.txt", b"hello")]);
+    let (_folder, file) = file_of(&sealed);
+    assert_eq!(
+        failure(&file, ArchiveFormat::SevenZ),
+        (ErrorKind::PermissionDenied, "needs a password".to_owned())
+    );
+
+    let (_folder, file) = file_of(&[0x37; 80]);
+    assert_eq!(
+        failure(&file, ArchiveFormat::SevenZ),
+        (ErrorKind::InvalidData, "the archive cannot be read".to_owned())
+    );
 }

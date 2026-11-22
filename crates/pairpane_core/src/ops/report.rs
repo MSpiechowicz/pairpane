@@ -2,6 +2,7 @@
 
 use std::io::{self, ErrorKind};
 
+use crate::archive::{PasswordFault, password_fault};
 use crate::model::{IpcError, IpcErrorCode};
 
 /// Windows `ERROR_PRIVILEGE_NOT_HELD`: creating a symbolic link without the privilege (or Developer Mode).
@@ -16,6 +17,16 @@ pub(super) fn ipc_error(error: &io::Error) -> IpcError {
         return IpcError::new(
             IpcErrorCode::Forbidden,
             "this system does not let this user create links (it needs Developer Mode or administrator rights)",
+        );
+    }
+
+    if let Some(fault) = password_fault(error) {
+        return IpcError::new(
+            IpcErrorCode::PasswordRequired,
+            match fault {
+                PasswordFault::Needed => "needs a password",
+                PasswordFault::Wrong => "the password is wrong",
+            },
         );
     }
 
@@ -61,6 +72,8 @@ pub(super) fn refusal(kind: ErrorKind, text: &'static str) -> io::Error {
 mod tests {
     use pretty_assertions::assert_eq;
 
+    use crate::archive::password_error;
+
     use super::*;
 
     #[test]
@@ -77,6 +90,17 @@ mod tests {
 
         assert_eq!(error.code, IpcErrorCode::InvalidInput);
         assert_eq!(error.message, "the path must be absolute");
+    }
+
+    #[test]
+    fn a_missing_or_wrong_password_is_told_as_a_password_error() {
+        let needed = ipc_error(&password_error(PasswordFault::Needed));
+        let wrong = ipc_error(&password_error(PasswordFault::Wrong));
+
+        assert_eq!(needed.code, IpcErrorCode::PasswordRequired);
+        assert_eq!(needed.message, "needs a password");
+        assert_eq!(wrong.code, IpcErrorCode::PasswordRequired);
+        assert_eq!(wrong.message, "the password is wrong");
     }
 
     #[test]

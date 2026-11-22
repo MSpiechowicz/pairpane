@@ -1,8 +1,8 @@
-//! Indexing and extracting through the two doors of the module: end to end for a plain tar, a tar.gz and a stored zip,
-//! what a listing reads, what a source yields, the formats not read yet, and the password marker.
+//! Indexing and extracting through the two doors of the module: end to end for a plain tar, a tar.gz, xz, zstd and bzip2, and a stored zip,
+//! what a listing reads, what a source yields, and the password marker.
 
 use std::io::{self, Read};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use pretty_assertions::assert_eq;
 
@@ -11,90 +11,21 @@ use crate::model::ArchiveFormat;
 use super::entries::{Declared, Flow};
 use super::error::{PasswordFault, password_error, password_fault};
 use super::file::ReadAt;
-use super::testing::{gzip, tar_of, zip_of};
-use super::{ArchiveIndex, Input, Password, build_index, open_source};
-
-/// A file in memory that counts the bytes read from it.
-struct Counting {
-    bytes: Vec<u8>,
-    read: AtomicU64,
-}
-
-impl Counting {
-    fn new(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes,
-            read: AtomicU64::new(0),
-        }
-    }
-
-    fn read(&self) -> u64 {
-        self.read.load(Ordering::Relaxed)
-    }
-}
-
-impl ReadAt for Counting {
-    fn size(&self) -> io::Result<u64> {
-        self.bytes.size()
-    }
-
-    fn read_at(&self, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
-        let count = self.bytes.read_at(buffer, offset)?;
-        self.read.fetch_add(count as u64, Ordering::Relaxed);
-
-        Ok(count)
-    }
-}
-
-fn idle() -> AtomicBool {
-    AtomicBool::new(false)
-}
-
-fn index_of(file: &dyn ReadAt, format: ArchiveFormat) -> io::Result<ArchiveIndex> {
-    build_index(format, &Input { file, path: None }, &idle(), None)
-}
-
-fn root(index: &ArchiveIndex) -> Vec<(String, bool)> {
-    index
-        .list("")
-        .expect("root")
-        .iter()
-        .map(|child| (child.name.to_owned(), child.dir))
-        .collect()
-}
-
-/// What the source gives for the entries `wanted`: name and content.
-fn extract(index: &ArchiveIndex, file: &dyn ReadAt, wanted: &[u32]) -> io::Result<Vec<(String, Vec<u8>)>> {
-    let cancel = idle();
-    let mut got = Vec::new();
-
-    open_source(index, &Input { file, path: None }, &cancel, None)?.extract(wanted, &mut |entry, data| {
-        let mut content = Vec::new();
-        data.read_to_end(&mut content)?;
-        got.push((entry.path.clone(), content));
-
-        Ok(Flow::Continue)
-    })?;
-
-    Ok(got)
-}
-
-fn project() -> Vec<(&'static str, &'static [u8])> {
-    vec![
-        ("src/", b""),
-        ("src/main.rs", b"fn main() {}\n"),
-        ("src/lib/util.rs", b"pub fn util() {}\n"),
-        ("README", b"read me"),
-    ]
-}
+use super::testing::{
+    Counting, assert_stop_and_failure, bzip2, extract, gzip, index_of, project, root, tar_of, xz, zip_of, zstd,
+};
+use super::{Input, Password, build_index, open_source};
 
 #[test]
-fn a_plain_tar_a_tar_gz_and_a_stored_zip_are_indexed_end_to_end() {
+fn a_plain_tar_a_compressed_tar_and_a_stored_zip_are_indexed_end_to_end() {
     let tar = tar_of(&project());
 
     for (bytes, format) in [
         (tar.clone(), ArchiveFormat::Tar),
         (gzip(&tar), ArchiveFormat::TarGz),
+        (xz(&tar), ArchiveFormat::TarXz),
+        (zstd(&tar), ArchiveFormat::TarZst),
+        (bzip2(&tar), ArchiveFormat::TarBz2),
         (zip_of(&project()), ArchiveFormat::Zip),
     ] {
         let index = index_of(&bytes, format).expect("an index");
@@ -182,38 +113,32 @@ fn a_tar_extraction_yields_the_wanted_entries_in_order_and_stops_after_the_last(
 
 #[test]
 fn a_compressed_tar_extraction_decodes_through_to_the_wanted_entries() {
-    let bytes = gzip(&tar_of(&project()));
-    let index = index_of(&bytes, ArchiveFormat::TarGz).expect("an index");
-    let selection = index.select("src", &["lib".to_owned()]).expect("selected");
+    let tar = tar_of(&project());
 
-    let got = extract(&index, &bytes, &selection.ordinals()).expect("extracted");
+    for (bytes, format) in [
+        (gzip(&tar), ArchiveFormat::TarGz),
+        (xz(&tar), ArchiveFormat::TarXz),
+        (zstd(&tar), ArchiveFormat::TarZst),
+        (bzip2(&tar), ArchiveFormat::TarBz2),
+    ] {
+        let index = index_of(&bytes, format).expect("an index");
+        let selection = index.select("src", &["lib".to_owned()]).expect("selected");
 
-    assert_eq!(got, [("src/lib/util.rs".to_owned(), b"pub fn util() {}\n".to_vec())]);
+        let got = extract(&index, &bytes, &selection.ordinals()).expect("extracted");
+
+        assert_eq!(
+            got,
+            [("src/lib/util.rs".to_owned(), b"pub fn util() {}\n".to_vec())],
+            "{format:?}"
+        );
+    }
 }
 
 #[test]
 fn a_visitor_that_stops_ends_the_extraction_and_one_that_fails_ends_it_with_its_error() {
     let tar = tar_of(&[("a", b"1"), ("b", b"2"), ("c", b"3")]);
-    let index = index_of(&tar, ArchiveFormat::Tar).expect("an index");
-    let cancel = idle();
-    let input = Input { file: &tar, path: None };
-    let mut seen = Vec::new();
 
-    open_source(&index, &input, &cancel, None)
-        .expect("a source")
-        .extract(&[0, 1, 2], &mut |entry, _| {
-            seen.push(entry.path.clone());
-
-            Ok(Flow::Stop)
-        })
-        .expect("stopped");
-    assert_eq!(seen, ["a"]);
-
-    let error = open_source(&index, &input, &cancel, None)
-        .expect("a source")
-        .extract(&[1], &mut |_, _| Err(io::Error::other("no space")))
-        .expect_err("failed");
-    assert_eq!(error.to_string(), "no space");
+    assert_stop_and_failure(&index_of(&tar, ArchiveFormat::Tar).expect("an index"), &tar);
 }
 
 #[test]
@@ -267,29 +192,6 @@ fn a_cut_tar_gz_gives_an_index_marked_cut() {
 
     assert_eq!(index.entries().len(), 2);
     assert!(index.truncated());
-}
-
-#[test]
-fn formats_that_are_read_elsewhere_say_unsupported_until_they_are_wired_in() {
-    let tar = tar_of(&[("a", b"1")]);
-    let zip_index = index_of(&zip_of(&[("a", b"1")]), ArchiveFormat::Zip).expect("an index");
-
-    for format in [
-        ArchiveFormat::TarXz,
-        ArchiveFormat::TarZst,
-        ArchiveFormat::TarBz2,
-        ArchiveFormat::SevenZ,
-        ArchiveFormat::Rar,
-    ] {
-        let error = index_of(&tar, format).expect_err("not read yet");
-
-        assert_eq!(error.kind(), io::ErrorKind::Unsupported, "{format:?}");
-    }
-
-    let error = open_source(&zip_index, &Input { file: &tar, path: None }, &idle(), None)
-        .err()
-        .expect("not read yet");
-    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
 }
 
 #[test]

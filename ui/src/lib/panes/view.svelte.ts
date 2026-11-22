@@ -2,9 +2,11 @@ import type { Entry } from '$lib/ipc/bindings/Entry';
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import type { Transport } from '$lib/ipc/transport';
 
+import { archiveFile, above } from './archive';
 import { Listing } from './listing.svelte';
 import { parseMask } from './mask';
 import { type SortColumn, viewOrder } from './order';
+import { Selection, summarize } from './selection.svelte';
 import { FolderSizes } from './sizes.svelte';
 
 /** The name the `..` row goes by (no real entry can have it). */
@@ -46,9 +48,7 @@ export class PaneView {
   /** The entry to put the cursor on once a listing has it (a renamed one, which the watch has not listed yet). */
   #pointTo: string | undefined;
 
-  /** Plain set (not proxied); readers track `#selection`, bumped on every change. */
-  readonly #selected = new Set<string>();
-  #selection = $state(0);
+  readonly #selected = new Selection();
 
   maskMode = $state<MaskMode | undefined>();
   maskText = $state('*');
@@ -73,20 +73,7 @@ export class PaneView {
       return undefined;
     }
 
-    let dirs = 0;
-    let files = 0;
-    let bytes = 0;
-    for (const entry of shown) {
-      if (entry.kind === 'dir') {
-        dirs += 1;
-        bytes += this.sizes.sizeOf(entry.name) ?? 0;
-      } else {
-        files += 1;
-        bytes += entry.size;
-      }
-    }
-
-    return { dirs, files, bytes };
+    return summarize(shown, (name) => this.sizes.sizeOf(name));
   });
 
   constructor(ipc: Transport, pane: PaneId, hooks: ViewHooks = {}) {
@@ -100,9 +87,10 @@ export class PaneView {
         if (!reload) {
           this.#reset();
         }
-        // A reload too: an open of the folder already shown (a tab on the same folder) lists as one.
-        if (this.listing.path !== undefined) {
-          hooks.onListed?.(this.listing.path);
+        // A reload too: an open of the folder already shown (a tab on the same folder) lists as one. Inside an
+        // archive the pane is where its folder is.
+        if (this.listing.folder !== undefined) {
+          hooks.onListed?.(this.listing.folder);
         }
       },
       onDone: () => {
@@ -116,9 +104,9 @@ export class PaneView {
 
   // Rows
 
-  /** The `..` row leads to the parent folder; it comes first and is not an entry. */
+  /** The `..` row leads to the parent folder (the root of an archive: to its folder); it comes first and is not an entry. */
   get up(): boolean {
-    return this.listing.parent !== null && this.listing.status !== 'error';
+    return (this.listing.archive !== undefined || this.listing.parent !== null) && this.listing.status !== 'error';
   }
 
   get count(): number {
@@ -279,25 +267,49 @@ export class PaneView {
 
   // Opening
 
-  /** Opens the folder in `row` (or the parent for `..`); a file does nothing. */
+  /** The archive file in `row`, when it can be opened here (an archive inside an archive cannot). */
+  #archiveAt(row: number): string | undefined {
+    const { folder, readonly } = this.listing;
+    return folder === undefined || readonly ? undefined : archiveFile(folder, this.entryAt(row));
+  }
+
+  /** Whether Enter on `row` opens something: `..`, a folder or an archive file. */
+  opens(row: number): boolean {
+    return this.isUp(row) || this.entryAt(row)?.kind === 'dir' || this.#archiveAt(row) !== undefined;
+  }
+
+  /** Opens the folder in `row` (or the parent for `..`) or the archive; any other file does nothing. */
   open(row: number): Promise<void> {
     if (this.isUp(row)) {
       return this.goUp();
     }
 
     const entry = this.entryAt(row);
-    return entry?.kind === 'dir' ? this.listing.enter(entry.name) : Promise.resolve();
-  }
-
-  /** Opens the parent folder, with the cursor on the folder we come from once it is listed. */
-  goUp(): Promise<void> {
-    const parent = this.listing.parent;
-    if (parent === null) {
-      return Promise.resolve();
+    if (entry?.kind === 'dir') {
+      return this.listing.enter(entry.name);
     }
 
-    const from = this.listing.crumbs.at(-1)?.name;
-    const opened = this.listing.open(parent);
+    const archive = this.#archiveAt(row);
+    return archive === undefined ? Promise.resolve() : this.listing.openArchive({ archive, dir: '' });
+  }
+
+  /**
+   * Opens the parent folder, with the cursor on the folder we come from once it is listed. Inside an archive that
+   * is the folder above in it; from its root, the folder that holds it, with the cursor on the archive.
+   */
+  goUp(): Promise<void> {
+    const { archive, folder, parent, crumbs } = this.listing;
+    if (archive !== undefined && folder !== undefined) {
+      const to = above(archive, folder);
+      const opened = 'spot' in to ? this.listing.openArchive(to.spot) : this.listing.open(to.folder);
+      return this.#leaving(to.left, opened);
+    }
+
+    return parent === null ? Promise.resolve() : this.#leaving(crumbs.at(-1)?.name, this.listing.open(parent));
+  }
+
+  /** `opened` is an open just made: the cursor goes to `from` in what it lists. */
+  #leaving(from: string | undefined, opened: Promise<void>): Promise<void> {
     this.#cameFrom = from; // set after `open`, which forgets the previous one; the first event comes later
     return opened;
   }
@@ -305,16 +317,7 @@ export class PaneView {
   // Selection
 
   isSelected(name: string): boolean {
-    void this.#selection;
     return this.#selected.has(name);
-  }
-
-  #toggle(name: string) {
-    if (!this.#selected.delete(name)) {
-      this.#selected.add(name);
-    }
-
-    this.#selection += 1;
   }
 
   /** Visits the visible entries (those passing the filter) in backend order. */
@@ -333,8 +336,6 @@ export class PaneView {
 
   /** The selected entries that pass the filter, in backend order: what the footer counts and a job acts on. */
   selectedShown(): Entry[] {
-    void this.#selection;
-
     const shown: Entry[] = [];
     if (this.#selected.size > 0) {
       this.#eachVisible((entry) => {
@@ -349,16 +350,14 @@ export class PaneView {
 
   /** Deselects the names a job took over (selected entries the quick filter hid stay selected). */
   deselect(names: readonly string[]) {
-    if (names.filter((name) => this.#selected.delete(name)).length > 0) {
-      this.#selection += 1;
-    }
+    this.#selected.remove(names);
   }
 
   /** Toggles the cursor's entry (never `..`) and returns it. */
   #toggleCursor(): Entry | undefined {
     const entry = this.entryAt(this.cursor);
     if (entry !== undefined) {
-      this.#toggle(entry.name);
+      this.#selected.toggle(entry.name);
     }
 
     return entry;
@@ -384,15 +383,16 @@ export class PaneView {
   invert() {
     this.#eachVisible((entry) => {
       if (entry.kind !== 'dir') {
-        this.#toggle(entry.name);
+        this.#selected.toggle(entry.name);
       }
     });
   }
 
   /** Ctrl/Cmd+A: selects every visible entry, folders included. */
   selectAll() {
-    this.#eachVisible((entry) => this.#selected.add(entry.name));
-    this.#selection += 1;
+    const names: string[] = [];
+    this.#eachVisible((entry) => names.push(entry.name));
+    this.#selected.add(names);
   }
 
   /** A mouse click on `row`: the cursor, a toggle (Ctrl/Cmd) or the range from the cursor (Shift). */
@@ -400,14 +400,15 @@ export class PaneView {
     if (how === 'range') {
       const from = Math.min(this.cursor, row);
       const to = Math.max(this.cursor, row);
+      const names: string[] = [];
       for (let r = from; r <= to; r += 1) {
         const name = this.entryAt(r)?.name;
         if (name !== undefined) {
-          this.#selected.add(name);
+          names.push(name);
         }
       }
 
-      this.#selection += 1;
+      this.#selected.add(names);
     }
 
     this.setCursor(row);
@@ -415,7 +416,7 @@ export class PaneView {
     if (how === 'toggle') {
       const name = this.entryAt(row)?.name;
       if (name !== undefined) {
-        this.#toggle(name);
+        this.#selected.toggle(name);
       }
     }
   }
@@ -439,19 +440,19 @@ export class PaneView {
     }
 
     const matches = parseMask(this.maskText);
+    const names: string[] = [];
     this.#eachVisible((entry) => {
-      if (entry.kind === 'dir' || !matches(entry.name)) {
-        return;
-      }
-
-      if (mode === 'select') {
-        this.#selected.add(entry.name);
-      } else {
-        this.#selected.delete(entry.name);
+      if (entry.kind !== 'dir' && matches(entry.name)) {
+        names.push(entry.name);
       }
     });
 
-    this.#selection += 1;
+    if (mode === 'select') {
+      this.#selected.add(names);
+    } else {
+      this.#selected.remove(names);
+    }
+
     this.maskMode = undefined;
   }
 
@@ -460,7 +461,6 @@ export class PaneView {
   /** Another folder: selection, filter, sizes and the mask prompt belong to the old one. */
   #reset() {
     this.#selected.clear();
-    this.#selection += 1;
     this.#filter = '';
     this.maskMode = undefined;
 
@@ -485,13 +485,7 @@ export class PaneView {
       }
     }
 
-    for (const name of [...this.#selected]) {
-      if (!present.has(name)) {
-        this.#selected.delete(name);
-      }
-    }
-
-    this.#selection += 1;
+    this.#selected.retain(present);
     this.sizes.prune(present);
   }
 }

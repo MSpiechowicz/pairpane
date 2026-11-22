@@ -79,6 +79,13 @@ describe('ConflictDialog', () => {
     expect(button('Overwrite')).toBeEnabled();
   });
 
+  it('has no Compare when the source is an entry of an archive, which cannot be hashed', async () => {
+    await asked(conflict(5, 3, { comparable: false }));
+
+    expect(screen.queryByRole('button', { name: 'Compare' })).not.toBeInTheDocument();
+    expect(button('Overwrite older')).toBeInTheDocument();
+  });
+
   it('Escape skips this one file, even with Apply to all ticked', async () => {
     const { calls } = await asked(conflict(5, 3));
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Apply to all' }));

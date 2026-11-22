@@ -32,6 +32,11 @@ impl Run<'_> {
     pub(super) fn run_task(&mut self, task: &Task) -> Result<(), Stop> {
         self.checkpoint()?;
         self.phase(JobPhase::Preparing);
+
+        if let Task::Extract { inner, entries, source } = task {
+            return self.extract(inner, entries, source);
+        }
+
         let scene = self.prepare_task(task)?;
 
         match task {
@@ -40,7 +45,7 @@ impl Run<'_> {
             Task::Split { part_size } => self.split_file(&scene, *part_size),
             Task::Combine => self.combine_parts(&scene),
             Task::Attributes(change) => self.change_attributes(&scene, change),
-            Task::Transfer => {
+            Task::Transfer | Task::Extract { .. } => {
                 Err(refusal(io::ErrorKind::InvalidInput, "this job cannot start with these items").into())
             }
         }
@@ -73,7 +78,7 @@ impl Run<'_> {
     }
 
     /// The folder `target`, made (with the folders above it) when it is missing.
-    fn target_folder(&mut self, target: &Path) -> Result<PathBuf, Stop> {
+    pub(super) fn target_folder(&mut self, target: &Path) -> Result<PathBuf, Stop> {
         let (existing, missing) = volume::existing_part(target)?
             .ok_or_else(|| refusal(io::ErrorKind::NotFound, "the target folder cannot be reached"))?;
         let to = existing.join(&missing);
@@ -91,7 +96,7 @@ impl Run<'_> {
     /// `from`.
     pub(super) fn pump(
         &mut self,
-        from: &mut File,
+        from: &mut (impl Read + ?Sized),
         to: &mut File,
         limit: u64,
         crc: &mut crc32fast::Hasher,

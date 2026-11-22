@@ -2,10 +2,13 @@
 //! read forward only and can step over bytes (`skip`): a plain file by a seek, a decoder by decoding into a sink.
 
 use std::cell::Cell;
-use std::io::{self, BufReader, Read, Seek};
+use std::io::{self, BufRead, BufReader, Read, Seek};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use bzip2::read::MultiBzDecoder;
 use flate2::read::GzDecoder;
+use lzma_rust2::XzReader;
+use ruzstd::decoding::{FrameDecoder, StreamingDecoder};
 
 use crate::archive::entries::read_within;
 use crate::archive::error::{check, unreadable, unsupported};
@@ -82,10 +85,60 @@ impl<F: ReadAt + ?Sized> Stream for BufReader<FileReader<'_, F>> {
     }
 }
 
+/// The most memory, in KiB, the LZMA2 decoder of one XZ block may take (its dictionary and model): 512 MiB, past the
+/// 64 MiB of `xz -9` and its 192 MiB with `-e` by a wide margin. A tar that needs more cannot be read.
+const XZ_MEMORY_KB: u32 = 512 * 1024;
+
+/// A Zstandard stream of one or more frames back to back (what `cat a.zst b.zst` makes), read as one: the decoder of
+/// `ruzstd` stops at the end of a frame, so the next frame is started when the file has more. A frame's window is held to
+/// the decoder's own default of 128 MiB.
+struct ZstdFrames<R: BufRead> {
+    /// `None` once the last frame is read.
+    frame: Option<StreamingDecoder<R, FrameDecoder>>,
+}
+
+impl<R: BufRead> ZstdFrames<R> {
+    fn new(source: R) -> io::Result<Self> {
+        let frame = StreamingDecoder::new(source).map_err(|_| unreadable())?;
+
+        Ok(Self { frame: Some(frame) })
+    }
+}
+
+impl<R: BufRead> Read for ZstdFrames<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
+            let Some(frame) = self.frame.as_mut() else {
+                return Ok(0);
+            };
+
+            let count = frame.read(buffer)?;
+
+            if count > 0 || buffer.is_empty() {
+                return Ok(count);
+            }
+
+            // The frame is done: another one follows when the file has bytes left.
+            let (mut source, decoder) = self
+                .frame
+                .take()
+                .map(StreamingDecoder::into_parts)
+                .ok_or_else(unreadable)?;
+
+            if source.fill_buf()?.is_empty() {
+                return Ok(0);
+            }
+
+            self.frame = Some(StreamingDecoder::new_with_decoder(source, decoder).map_err(|_| unreadable())?);
+        }
+    }
+}
+
 /// The stream of the tar in `file`, in the compression `format` names. A decoded stream ends after `scan` bytes and
-/// then sets `reached`, so a walk can tell a limit from the end of the data.
+/// then sets `reached`, so a walk can tell a limit from the end of the data. An XZ, Zstandard or bzip2 file of several
+/// streams in a row is read through all of them (a gzip file is read to the end of its first member).
 ///
-/// Every format that is a tar inside a compression is opened here; those that are not yet decoded say `Unsupported`.
+/// Every format that is a tar inside a compression is opened here; any other format is an error.
 pub fn open<'a>(
     format: ArchiveFormat,
     file: &'a dyn ReadAt,
@@ -101,7 +154,27 @@ pub fn open<'a>(
             reached,
             cancel,
         )),
-        _ => Err(unsupported("this kind of archive cannot be read yet")),
+        ArchiveFormat::TarXz => Ok(capped(
+            XzReader::new_mem_limit(BufReader::new(FileReader::new(file)), true, XZ_MEMORY_KB),
+            scan,
+            reached,
+            cancel,
+        )),
+        ArchiveFormat::TarZst => Ok(capped(
+            ZstdFrames::new(BufReader::new(FileReader::new(file)))?,
+            scan,
+            reached,
+            cancel,
+        )),
+        ArchiveFormat::TarBz2 => Ok(capped(
+            MultiBzDecoder::new(BufReader::new(FileReader::new(file))),
+            scan,
+            reached,
+            cancel,
+        )),
+        ArchiveFormat::Zip | ArchiveFormat::Gz | ArchiveFormat::SevenZ | ArchiveFormat::Rar => {
+            Err(unsupported("this is not a tar"))
+        }
     }
 }
 

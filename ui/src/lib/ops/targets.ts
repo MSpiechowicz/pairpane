@@ -1,9 +1,12 @@
 import type { Entry } from '$lib/ipc/bindings/Entry';
+import { type ArchiveSpot, archiveFile } from '$lib/panes/archive';
 import type { PaneView } from '$lib/panes/view.svelte';
+
+import type { FileAction } from './dialogs';
 
 /**
  * What a dialog is opened for: items to copy or move into a folder, one item to rename or link to, a new item, or
- * the first part of a split file to join in a folder.
+ * the first part of a split file to join in a folder, or archives (or items of one) to extract.
  */
 export type OpRequest =
   | { kind: 'copy' | 'move'; from: string; names: string[]; to: string }
@@ -12,7 +15,12 @@ export type OpRequest =
   | { kind: 'rename'; path: string; name: string; dir: boolean }
   | { kind: 'mkdir' | 'mkfile'; path: string }
   /** A link to `name` in `path`, made in the folder `to`. */
-  | { kind: 'symlink' | 'hardlink'; path: string; name: string; dir: boolean; to: string };
+  | { kind: 'symlink' | 'hardlink'; path: string; name: string; dir: boolean; to: string }
+  /**
+   * Each of `archives` is extracted into the folder `to`: the `names` in the folder it names (the selection of an
+   * archive pane), or, with no names, the whole archive (archives picked in a folder).
+   */
+  | { kind: 'extract'; archives: ArchiveSpot[]; names: string[]; to: string };
 
 /** The kinds of dialog a request can be for. */
 export type DialogKind = OpRequest['kind'];
@@ -37,6 +45,27 @@ export function chosen(view: PaneView): Entry[] {
   return under === undefined ? [] : [under];
 }
 
+/** What the card says when an action would change an archive's contents. */
+export const READ_ONLY_NOTICE = 'Archives are read-only here — extract first (F5).';
+
+/** What the card says when an action would write into a pane that shows an archive. */
+export const INTO_ARCHIVE_NOTICE = 'Can’t copy into an archive.';
+
+/** The actions that write into the other pane's folder. */
+const WRITES_TO_OTHER: ReadonlySet<FileAction> = new Set(['copy', 'move', 'symlink', 'hardlink', 'split', 'combine', 'extract']);
+
+/**
+ * Why `action` cannot run between these panes, or `undefined` when it can: nothing changes an archive (copying out
+ * of one is extracting), and nothing is written into one.
+ */
+export function refusal(action: FileAction, source: PaneView, other: PaneView): string | undefined {
+  if (source.listing.readonly && action !== 'copy' && action !== 'extract') {
+    return READ_ONLY_NOTICE;
+  }
+
+  return other.listing.readonly && WRITES_TO_OTHER.has(action) ? INTO_ARCHIVE_NOTICE : undefined;
+}
+
 /** The first part of a split file: the one the parts are joined from. */
 export const isFirstPart = (name: string) => name.endsWith('.001');
 
@@ -44,9 +73,14 @@ export const isFirstPart = (name: string) => name.endsWith('.001');
  * The dialog for a key in `source`'s pane, or `undefined` when there is nothing to act on. Copy and move offer the
  * folder of the other pane; rename and the links act on the entry under the cursor, a link goes to the other pane's
  * folder; so does combining, which acts on a first part (`.001`) only; a new folder or file is made in the pane's
- * folder.
+ * folder. In an archive pane copying is extracting the selection, as it is for Extract in any pane (which takes the
+ * archives that are selected in a folder).
  */
 export function requestFor(kind: DialogKind, source: PaneView, other: PaneView): OpRequest | undefined {
+  if (kind === 'extract' || (kind === 'copy' && source.listing.readonly)) {
+    return extractRequest(source, other.listing.path ?? '');
+  }
+
   const path = source.listing.path;
   if (path === undefined) {
     return undefined;
@@ -75,6 +109,18 @@ export function requestFor(kind: DialogKind, source: PaneView, other: PaneView):
 
   const names = targets(source);
   return names.length > 0 ? { kind, from: path, names, to: other.listing.path ?? '' } : undefined;
+}
+
+/** The archives to extract from `source`: the open archive's selection, or the archives chosen in its folder. */
+function extractRequest(source: PaneView, to: string): OpRequest | undefined {
+  const { archive, path } = source.listing;
+  if (archive !== undefined) {
+    const names = targets(source);
+    return names.length > 0 ? { kind: 'extract', archives: [archive], names, to } : undefined;
+  }
+
+  const archives = path === undefined ? [] : chosen(source).flatMap((entry) => archiveFile(path, entry) ?? []);
+  return archives.length > 0 ? { kind: 'extract', archives: archives.map((archive) => ({ archive, dir: '' })), names: [], to } : undefined;
 }
 
 /** How much of a name to select for renaming: all of it but the extension (a folder or `.bashrc` has none). */

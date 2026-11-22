@@ -13,6 +13,7 @@ pub mod edit;
 pub mod listing;
 pub mod model;
 pub mod ops;
+pub mod process;
 pub mod settings;
 pub mod state;
 pub mod update;

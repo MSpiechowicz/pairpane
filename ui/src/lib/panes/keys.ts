@@ -62,12 +62,12 @@ function onNamed(view: PaneView, key: string, pageSize: number): boolean {
       view.setCursor(view.count - 1);
       return true;
     case 'Enter': {
-      const folder = view.isUp(view.cursor) || view.entryAt(view.cursor)?.kind === 'dir';
-      if (folder) {
+      const opens = view.opens(view.cursor);
+      if (opens) {
         void view.open(view.cursor);
       }
 
-      return folder;
+      return opens;
     }
     case 'Insert':
       view.insert();

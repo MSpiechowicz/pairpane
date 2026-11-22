@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { PaneView } from '$lib/panes/view.svelte';
 
 import { deliver, entry, fakeBackend } from '../../../tests/panes';
-import { chosen, isFirstPart, requestFor, stemLength, targets } from './targets';
+import { chosen, INTO_ARCHIVE_NOTICE, isFirstPart, READ_ONLY_NOTICE, refusal, requestFor, stemLength, targets } from './targets';
 
 /** A pane that has listed `path` (rows: `..`, docs, a.txt, b.md, c.txt). */
 async function shown(path = '/work') {
@@ -202,6 +202,101 @@ describe('requestFor', () => {
     expect(requestFor('symlink', source, source)).toBeUndefined();
     source.setCursor(2);
     expect(requestFor('symlink', source, empty)).toBeUndefined();
+  });
+});
+
+/** A pane in the archive `/work/a.zip` (rows: `..`, docs, readme, notes). */
+async function insideZip() {
+  const backend = fakeBackend();
+  const view = new PaneView(backend.ipc, 'left');
+  const spot = { archive: '/work/a.zip', dir: '' };
+  await view.listing.openArchive(spot);
+  const entries = [entry('docs', 'dir'), entry('readme', 'file'), entry('notes', 'file')];
+  backend.last().emit({ kind: 'start', path: '/work', parent: '/', crumbs: [], total: 3, archive: spot });
+  backend.last().emit({ kind: 'batch', offset: 0, entries });
+  backend.last().emit({ kind: 'done', dirs: 1, files: 2, bytes: 0, free: null });
+  return view;
+}
+
+/** A pane that has listed `/work` with archives and other files (rows: `..`, a.zip, b.txt, c.TAR.GZ, d). */
+async function withArchives() {
+  const backend = fakeBackend();
+  const view = new PaneView(backend.ipc, 'left');
+  await deliver(backend, () => view.listing.open('/work'), '/work', [
+    entry('a.zip'),
+    entry('b.txt'),
+    entry('c.TAR.GZ'),
+    entry('d', 'dir', {}),
+  ]);
+  return view;
+}
+
+describe('requestFor extract', () => {
+  it('in an archive pane, copy and extract are the selection (or the cursor entry) of the folder shown, to the other pane', async () => {
+    const source = await insideZip();
+    const other = await shown('/out');
+    const spot = { archive: '/work/a.zip', dir: '' };
+    source.pick(3, 'toggle');
+    source.pick(1, 'toggle');
+
+    expect(requestFor('extract', source, other)).toEqual({ kind: 'extract', archives: [spot], names: ['docs', 'notes'], to: '/out' });
+    expect(requestFor('copy', source, other)).toEqual(requestFor('extract', source, other));
+  });
+
+  it('in an archive pane, nothing is asked for on the `..` row', async () => {
+    const source = await insideZip();
+
+    expect(requestFor('extract', source, await shown('/out'))).toBeUndefined();
+  });
+
+  it('in a folder, the archives that are selected (or under the cursor) are extracted whole, other files left out', async () => {
+    const source = await withArchives();
+    const other = await shown('/out');
+    source.selectAll();
+
+    expect(requestFor('extract', source, other)).toEqual({
+      kind: 'extract',
+      archives: [
+        { archive: '/work/a.zip', dir: '' },
+        { archive: '/work/c.TAR.GZ', dir: '' },
+      ],
+      names: [],
+      to: '/out',
+    });
+  });
+
+  it('in a folder, a selection without an archive asks for nothing', async () => {
+    const source = await withArchives();
+    source.setCursor(2); // b.txt
+
+    expect(requestFor('extract', source, await shown('/out'))).toBeUndefined();
+    source.setCursor(4); // d, a folder
+    expect(requestFor('extract', source, await shown('/out'))).toBeUndefined();
+  });
+});
+
+describe('refusal', () => {
+  it('refuses everything but copy and extract in an archive pane, as read-only', async () => {
+    const archive = await insideZip();
+    const folder = await shown('/out');
+
+    expect(refusal('move', archive, folder)).toBe(READ_ONLY_NOTICE);
+    expect(refusal('trash', archive, folder)).toBe(READ_ONLY_NOTICE);
+    expect(refusal('properties', archive, folder)).toBe(READ_ONLY_NOTICE);
+    expect(refusal('copy', archive, folder)).toBeUndefined();
+    expect(refusal('extract', archive, folder)).toBeUndefined();
+  });
+
+  it('refuses what writes into the other pane when that one is an archive', async () => {
+    const archive = await insideZip();
+    const folder = await shown('/out');
+
+    for (const action of ['copy', 'move', 'symlink', 'hardlink', 'split', 'combine', 'extract'] as const) {
+      expect(refusal(action, folder, archive)).toBe(INTO_ARCHIVE_NOTICE);
+    }
+
+    expect(refusal('trash', folder, archive)).toBeUndefined();
+    expect(refusal('newFolder', folder, archive)).toBeUndefined();
   });
 });
 

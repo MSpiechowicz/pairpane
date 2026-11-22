@@ -235,7 +235,7 @@ mod isolation {
 
     use super::{HEADER, TINY, is_refusal};
     use crate::view::heic::decode_isolated;
-    use crate::view::heic::process::{join_within, run};
+    use crate::view::heic::process::run;
     use crate::view::testing::{file_of, idle};
 
     /// The answer `[0, 1, 0, 0, 0, 1, 0, 0, 0, a, b, c, d]` as the argument of `printf`: a picture of one pixel.
@@ -340,22 +340,6 @@ mod isolation {
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(is_refusal(&error));
         assert!(started.elapsed() < Duration::from_secs(10), "killed, not waited for");
-    }
-
-    #[test]
-    fn a_thread_that_does_not_end_is_left_behind_and_one_that_ends_is_joined() {
-        let (stop, wait) = std::sync::mpsc::channel::<()>();
-        let stuck = std::thread::spawn(move || {
-            let _ = wait.recv();
-            5
-        });
-        let started = Instant::now();
-
-        assert_eq!(join_within(stuck, Duration::from_millis(100)), None);
-        assert!(started.elapsed() < Duration::from_secs(5), "not waited for");
-        drop(stop);
-
-        assert_eq!(join_within(std::thread::spawn(|| 7), Duration::from_secs(5)), Some(7));
     }
 
     #[test]

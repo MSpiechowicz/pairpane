@@ -16,12 +16,15 @@
 //!   ordinals) as bounded readers ([`Declared`] keeps each to the size it declares).
 //! - [`Password`]: held in memory only, zeroized, `Debug` hides it. A password that an archive needs and lacks (or that is
 //!   wrong) surfaces as an error made by [`password_error`] and recognised by [`password_fault`].
+//! - [`check_password`]: whether a password opens an archive, judged cheaply (a zip by the verifier or check byte of its
+//!   first encrypted entry; [`zip::check_password`]); what `archive_password` answers with.
 //!
 //! # Formats and who reads them
 //!
-//! Zip's central directory ([`zip::directory`]), tar and `.tar.gz` ([`tar`]) and gzip ([`gz`]) are read here. A format
+//! Zip's central directory ([`zip::directory`]) and entry data ([`zip::ZipSource`]: stored, deflate, bzip2, zstd and LZMA,
+//! ZipCrypto and WinZip AES, entries that overlap refused), tar and `.tar.gz` ([`tar`]) and gzip ([`gz`]) are read here. A format
 //! that is not read yet fails with `Unsupported` in [`records`] / [`open_source`]; those two functions (in `open.rs`) and
-//! [`tar::stream::open`] are where a new reader is wired in. Zip entry data, the `.tar.xz`/`.zst`/`.bz2` decoders, 7z and
+//! [`tar::stream::open`] are where a new reader is wired in. The `.tar.xz`/`.zst`/`.bz2` decoders, 7z and
 //! RAR are added there.
 //!
 //! # Rules
@@ -40,11 +43,15 @@ pub mod kind;
 pub mod names;
 mod open;
 pub mod password;
+pub mod rar;
+pub mod sevenz;
 pub mod tar;
 pub mod zip;
 
 #[cfg(test)]
 mod cache_tests;
+#[cfg(test)]
+mod compressed_tests;
 #[cfg(test)]
 mod gz_tests;
 #[cfg(test)]
@@ -55,6 +62,8 @@ mod kind_tests;
 mod names_tests;
 #[cfg(test)]
 mod open_tests;
+#[cfg(test)]
+mod sevenz_tests;
 #[cfg(test)]
 pub(crate) mod testing;
 #[cfg(test)]
@@ -68,7 +77,7 @@ pub use index::{ArchiveIndex, Builder, Child, IndexEntry, Selected, Selection};
 pub use kind::{HEAD_BYTES, by_extension, by_magic, detect};
 pub use names::{Unsafe, normalize};
 pub use open::{Input, build_index, open_source, records};
-pub use password::Password;
+pub use password::{Password, check_password};
 
 /// The most entries an index holds; an archive with more is indexed up to here and marked truncated (a zip that declares
 /// more is refused).

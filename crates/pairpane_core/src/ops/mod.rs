@@ -77,6 +77,9 @@
 //! (existing targets and their questions), `verify` (BLAKE3), `rename` (no-replace rename), `progress` and `rate`
 //! (counters, speed), `report` (error texts), `hooks` (test switches).
 //!
+//! Extracting an archive: `extract` (the job: open, select, walk the source) and `extract_write` (folders, files, the
+//! disk reserve, modes and times). The archive formats themselves are in [`crate::archive`].
+//!
 //! The file tools: `task` (the start of each and what they share), `digest` (checksums and the checksum-file
 //! format), `checksum`, `checksum_verify` and `listed` (opening the files it lists), `split`, `combine`, `held` (walking a tree by
 //! handle), `attrs` and `attrs_apply`, `partial` (temporary files that clean up after themselves) and `props` (the
@@ -98,6 +101,8 @@ mod copy;
 mod delete;
 mod digest;
 mod engine;
+mod extract;
+mod extract_write;
 mod fast;
 mod held;
 mod hooks;
@@ -154,6 +159,10 @@ mod digest_tests;
 #[cfg(test)]
 mod engine_tests;
 #[cfg(test)]
+mod extract_scripted_tests;
+#[cfg(test)]
+mod extract_tests;
+#[cfg(test)]
 mod failure_tests;
 #[cfg(all(test, unix))]
 mod held_tests;
@@ -175,6 +184,7 @@ mod transfer_tests;
 mod trash_tests;
 
 pub use engine::Engine;
+pub use extract::ArchiveJob;
 pub use items::{ItemFailure, MAX_FOLDER_DEPTH};
 #[cfg(windows)]
 pub(crate) use open::OPEN_REPARSE_POINT;
@@ -231,6 +241,13 @@ pub enum Task {
     Combine,
     /// Changes permissions and times of the items in place.
     Attributes(AttributeChange),
+    /// Extracts entries of the archive (the one item, a file of `from`) into `to`: the `entries` (plain names; none means
+    /// everything) of the archive's folder `inner` (`""` is its root, `a/b` a folder), folders with all that is below.
+    Extract {
+        inner: String,
+        entries: Vec<String>,
+        source: ArchiveJob,
+    },
 }
 
 impl Task {
@@ -244,6 +261,7 @@ impl Task {
             Self::Split { .. } => Some(OpKind::Split),
             Self::Combine => Some(OpKind::Combine),
             Self::Attributes(_) => Some(OpKind::Attributes),
+            Self::Extract { .. } => Some(OpKind::Extract),
         }
     }
 }

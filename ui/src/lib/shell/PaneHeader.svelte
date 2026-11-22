@@ -1,5 +1,7 @@
 <script lang="ts">
+  import type { Crumb } from '$lib/ipc/bindings/Crumb';
   import type { Volume } from '$lib/ipc/bindings/Volume';
+  import { crumbKey } from '$lib/panes/archive';
   import { anchored, tabLabel } from '$lib/panes/crumbs';
   import type { PaneTabs } from '$lib/panes/tabs.svelte';
 
@@ -24,6 +26,15 @@
     const scroll = () => (node.scrollLeft = node.scrollWidth);
     scroll();
     return { update: scroll };
+  }
+
+  /** A step of the path bar: a real folder, or a folder inside an archive (the crumb then has `inside`). */
+  function goTo(crumb: Crumb) {
+    if (crumb.inside === undefined) {
+      void listing.open(crumb.path);
+    } else {
+      void listing.openArchive({ archive: crumb.path, dir: crumb.inside });
+    }
   }
 
   /** The middle button closes a tab, as in a browser. */
@@ -55,13 +66,13 @@
     {#each tabs.tabs as tab, index (tab.id)}
       {#if index === tabs.active}
         <div class="tab on">
-          <nav class="crumbs" aria-label="Path" use:showEnd={listing.path}>
-            {#each crumbs as crumb, position (crumb.path)}
+          <nav class="crumbs" aria-label="Path" use:showEnd={listing.location}>
+            {#each crumbs as crumb, position (crumbKey(crumb))}
               {#if position > 0}<i>/</i>{/if}
               <button
                 type="button"
                 class:last={position === crumbs.length - 1}
-                onclick={() => void listing.open(crumb.path)}>{crumb.name}</button
+                onclick={() => goTo(crumb)}>{crumb.name}</button
               >
             {/each}
           </nav>

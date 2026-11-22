@@ -1,9 +1,27 @@
 //! Zip archives. [`directory`] reads the central directory (and nothing else of the file) into [`Record`]s; the data of
-//! an entry is read through the [`ZipPlace`] each record carries.
+//! an entry is read through the [`ZipPlace`] each record carries, by [`ZipSource`]: [`local`] finds it and refuses
+//! entries that overlap, [`decode`] decompresses it, [`zipcrypto`] and [`winzip_aes`] decrypt it. [`check_password`] is
+//! the cheap test of a password against the first encrypted entry.
 //!
 //! [`Record`]: super::entries::Record
 
+pub mod decode;
 pub mod directory;
+pub mod local;
+pub mod source;
+pub mod winzip_aes;
+pub mod zipcrypto;
+
+#[cfg(test)]
+mod crypto_tests;
+#[cfg(test)]
+mod source_tests;
+#[cfg(test)]
+mod testing;
+#[cfg(test)]
+mod vectors;
+
+pub use source::{ZipSource, check_password};
 
 /// Everything the central directory says about where and how an entry's data is stored.
 #[derive(Debug, Clone, PartialEq, Eq)]

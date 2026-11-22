@@ -1,13 +1,19 @@
+import type { ArchiveSpot } from '$lib/ipc/bindings/ArchiveSpot';
 import type { Crumb } from '$lib/ipc/bindings/Crumb';
 import type { Entry } from '$lib/ipc/bindings/Entry';
 import type { ListEvent } from '$lib/ipc/bindings/ListEvent';
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
 
+import { joinInner, sameSpot } from './archive';
+
 /** A listing slower than this shows a spinner in its pane; a faster one never flashes it. */
 export const SPINNER_DELAY_MS = 150;
 
 export type ListingStatus = 'loading' | 'ready' | 'error';
+
+/** What an open asks for: a real folder (`null`: home) and one of its folders, or a place inside an archive. */
+type Target = { folder: string | null; child: string | null } | { spot: ArchiveSpot };
 
 /** What a pane's view needs to hear about a listing besides its (reactive) state. */
 export interface ListingHooks {
@@ -25,10 +31,14 @@ export interface ListingHooks {
 
 /**
  * One pane's folder as the backend streams it: `start` sizes the list, batches fill it in order, `done` adds the
- * summary. Only the latest `open` of a pane may change its state; events of an earlier one are dropped.
+ * summary. Only the latest `open` of a pane may change its state; events of an earlier one are dropped. A folder
+ * inside an archive is listed the same way (`openArchive`); the archive is then read-only and has no `path`.
  */
 export class Listing {
-  path = $state<string | undefined>();
+  /** The real folder listed, or the folder that holds the archive shown. */
+  #folder = $state<string | undefined>();
+  /** Set while the pane shows a folder inside an archive. */
+  archive = $state.raw<ArchiveSpot | undefined>();
   parent = $state<string | null>(null);
   crumbs = $state.raw<Crumb[]>([]);
   /**
@@ -59,6 +69,26 @@ export class Listing {
   /** Whether the latest open has delivered its `start`. */
   #started = false;
 
+  /** The real folder shown; `undefined` before the first listing and inside an archive (nothing there is a path). */
+  get path(): string | undefined {
+    return this.archive === undefined ? this.#folder : undefined;
+  }
+
+  /** The real folder shown, or inside an archive the folder that holds it. */
+  get folder(): string | undefined {
+    return this.#folder;
+  }
+
+  /** What is listed cannot be changed: it is inside an archive. */
+  get readonly(): boolean {
+    return this.archive !== undefined;
+  }
+
+  /** Tells one listed place from another: a folder, or a folder inside an archive. */
+  get location(): string {
+    return this.archive === undefined ? (this.#folder ?? '') : `${this.archive.archive}\0${this.archive.dir}`;
+  }
+
   get entries(): readonly (Entry | undefined)[] {
     void this.#revision;
     return this.#rows;
@@ -77,18 +107,61 @@ export class Listing {
 
   /** Opens `path` (`null`: the home folder), or its folder `child`. */
   open(path: string | null, child: string | null = null): Promise<void> {
-    return this.#open(path, child, false);
+    return this.#open({ folder: path, child }, false);
+  }
+
+  /** Opens the folder of an archive `spot`, or its folder `child`. */
+  openArchive(spot: ArchiveSpot, child: string | null = null): Promise<void> {
+    const dir = child === null ? spot.dir : joinInner(spot.dir, child);
+    return this.#open({ spot: { archive: spot.archive, dir } }, false);
+  }
+
+  /** What is shown now, as an open that lists it again. */
+  #here(): Target {
+    return this.archive === undefined ? { folder: this.#folder ?? null, child: null } : { spot: this.archive };
+  }
+
+  /** Whether `target` is the place shown (a reload), not another one. */
+  #isHere(target: Target): boolean {
+    if ('spot' in target) {
+      return sameSpot(target.spot, this.archive);
+    }
+
+    return this.archive === undefined && target.child === null && target.folder === (this.#folder ?? null);
+  }
+
+  #request(target: Target, onEvent: (event: ListEvent) => void) {
+    const showHidden = this.#showHidden;
+    if ('spot' in target) {
+      const { archive, dir } = target.spot;
+      return this.#ipc.invoke('archive_open', {
+        pane: this.#pane,
+        archive,
+        dir,
+        showHidden,
+        onEvent,
+      });
+    }
+
+    const { folder, child } = target;
+    return this.#ipc.invoke('pane_open', {
+      pane: this.#pane,
+      path: folder,
+      child,
+      showHidden,
+      onEvent,
+    });
   }
 
   /**
    * `quiet`: lists the shown folder again behind a failed open, only so the backend watches it once more; the
    * notice stays and the pane does not show itself as loading.
    */
-  #open(path: string | null, child: string | null, quiet: boolean): Promise<void> {
+  #open(target: Target, quiet: boolean): Promise<void> {
     const generation = ++this.#generation;
     const started = performance.now();
     // Listing the shown folder again (a live update, hidden toggled) must not be answered by one more reload.
-    const reload = child === null && path === (this.path ?? null);
+    const reload = this.#isHere(target);
 
     this.#hooks.onOpen?.();
     this.#stale = false;
@@ -112,8 +185,7 @@ export class Listing {
       }
     };
 
-    return this.#ipc
-      .invoke('pane_open', { pane: this.#pane, path, child, showHidden: this.#showHidden, onEvent })
+    return this.#request(target, onEvent)
       .then(() => undefined)
       .catch((error: unknown) => {
         if (generation === this.#generation) {
@@ -124,7 +196,7 @@ export class Listing {
 
   /** Lists the current folder again (after a change on disk, or with hidden entries toggled). */
   reload(): Promise<void> {
-    return this.open(this.path ?? null);
+    return this.#open(this.#here(), false);
   }
 
   setShowHidden(show: boolean): Promise<void> {
@@ -132,9 +204,9 @@ export class Listing {
     return this.reload();
   }
 
-  /** Opens the folder named `name` inside the current one. */
+  /** Opens the folder named `name` inside the current one (inside an archive too). */
   enter(name: string): Promise<void> {
-    return this.open(this.path ?? null, name);
+    return this.archive === undefined ? this.open(this.#folder ?? null, name) : this.openArchive(this.archive, name);
   }
 
   #apply(event: ListEvent, started: number, wasReload: boolean) {
@@ -142,7 +214,7 @@ export class Listing {
       case 'start': {
         // A reload of the same folder keeps showing the previous rows (and summary) until the new ones replace
         // them, so a live update does not flash empty rows.
-        const reload = event.path === this.path && this.error === undefined;
+        const reload = event.path === this.#folder && sameSpot(event.archive, this.archive) && this.error === undefined;
         const next = new Array<Entry | undefined>(event.total);
         if (reload) {
           this.#rows.slice(0, event.total).forEach((entry, index) => (next[index] = entry));
@@ -151,7 +223,8 @@ export class Listing {
         }
         this.#started = true;
         this.error = undefined;
-        this.path = event.path;
+        this.#folder = event.path;
+        this.archive = event.archive;
         this.parent = event.parent;
         this.crumbs = event.crumbs;
         this.#setRows(next);
@@ -169,7 +242,12 @@ export class Listing {
         break;
       }
       case 'done':
-        this.summary = { dirs: event.dirs, files: event.files, bytes: event.bytes, free: event.free };
+        this.summary = {
+          dirs: event.dirs,
+          files: event.files,
+          bytes: event.bytes,
+          free: event.free,
+        };
         this.#settle('ready');
         this.#hooks.onDone?.();
         if (this.#stale) {
@@ -193,7 +271,7 @@ export class Listing {
   #fail(message: string, wasReload: boolean) {
     // Another folder could not be opened: stay in the current one and say why. The failed open made the backend
     // stop watching the shown folder, so it is listed again quietly to bring the watch back.
-    if (!this.#started && this.path !== undefined && this.error === undefined) {
+    if (!this.#started && this.#folder !== undefined && this.error === undefined) {
       this.notice = message;
       this.#settle('ready');
 
@@ -201,7 +279,7 @@ export class Listing {
       const generation = this.#generation;
       this.#hooks.onNotice?.();
       if (!wasReload && generation === this.#generation) {
-        void this.#open(this.path, null, true);
+        void this.#open(this.#here(), true);
       }
 
       return;

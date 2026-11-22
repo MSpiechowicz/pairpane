@@ -17,7 +17,7 @@ export interface TabSort {
 
 export interface Tab {
   readonly id: number;
-  /** Where the tab was last left; `null`: the home folder. For the active tab the live folder is `view.listing.path`. */
+  /** Where the tab was last left; `null`: the home folder. For the active tab the live folder is `view.listing.folder`. */
   path: string | null;
   sort: TabSort;
   back: string[];
@@ -115,7 +115,7 @@ export class PaneTabs {
   /** The active tab as shown now. Its folder counts once it is listed: until then the tab's own path is the truth. */
   #live(tab: Tab): TabState {
     return {
-      path: this.#entering ? tab.path : (this.view.listing.path ?? tab.path),
+      path: this.#entering ? tab.path : (this.view.listing.folder ?? tab.path),
       sort: { column: this.view.column, desc: this.view.desc },
     };
   }

@@ -16,7 +16,7 @@ use std::process::ExitCode;
 
 use tauri::{Manager, RunEvent};
 
-/// Builds and runs the app until the last window closes; the transfers still running are cancelled, and given up to two seconds to clean up, as it exits, and the viewer's sessions are ended (which stops the HEIC helper that runs).
+/// Builds and runs the app until the last window closes; the transfers still running are cancelled, and given up to two seconds to clean up, as it exits, and the viewer's sessions are ended (which stops the HEIC helper that runs) and its temporary archive files are swept.
 pub fn run() -> ExitCode {
     let builder = tauri::Builder::default()
         // Must be registered first so a second launch exits before anything else starts.
@@ -49,6 +49,9 @@ pub fn run() -> ExitCode {
             app.manage(commands::ops::Ops::default());
             app.manage(commands::items::Items::default());
             app.manage(commands::view::Viewer::default());
+            app.manage(commands::archives::Archives::default());
+            // Files an earlier run left in the temporary folder (an entry opened in the viewer is deleted at once).
+            tauri::async_runtime::spawn_blocking(commands::view::archive_entry::sweep);
             app.manage(close::CloseGuard::default());
             // Next to the window-state plugin's file. Without a config folder nothing is saved.
             let state_file = app
@@ -83,12 +86,15 @@ pub fn run() -> ExitCode {
             commands::updates::app_relaunch,
             menu::menu_subscribe,
             commands::panes::pane_open,
+            commands::panes::archive::archive_open,
+            commands::archives::archive_password,
             commands::sizes::pane_folder_size,
             commands::volumes::volumes_list,
             commands::state::state_load,
             commands::state::state_save,
             commands::ops::ops_subscribe,
             commands::ops::ops_start,
+            commands::ops::extract::ops_extract,
             commands::ops::ops_control,
             commands::ops::ops_answer,
             commands::ops::ops_rename,
@@ -101,6 +107,7 @@ pub fn run() -> ExitCode {
             commands::items::ops_link,
             commands::items::props::ops_properties,
             commands::view::view_open,
+            commands::view::archive_entry::archive_view_open,
             commands::view::view_close,
             commands::view::read::view_bytes,
             commands::view::read::view_text,
@@ -133,6 +140,7 @@ pub fn run() -> ExitCode {
                     if let Some(viewer) = app.try_state::<commands::view::Viewer>() {
                         viewer.close_all();
                     }
+                    commands::view::archive_entry::sweep();
                 }
             });
         });

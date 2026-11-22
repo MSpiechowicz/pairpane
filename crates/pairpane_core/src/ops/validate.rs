@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 
+use crate::archive;
 use crate::listing::platform;
 use crate::model::{AttributeChange, ModeChange, OpKind};
 
@@ -34,14 +35,26 @@ pub fn name_fits(name: &str) -> bool {
 /// name, one that is too long, names that together take more than [`MAX_NAMES_BYTES`], or a task that does not
 /// fit the request (see [`validate_task`]).
 pub(super) fn validate(request: &Request) -> Result<(), Refused> {
-    if request.names.is_empty() || request.names.len() > MAX_NAMES {
+    if request.names.is_empty() {
         return Err(Refused::InvalidNames);
     }
 
-    let mut seen = HashSet::with_capacity(request.names.len());
+    check_names(&request.names)?;
+
+    validate_task(request)
+}
+
+/// Refuses more than [`MAX_NAMES`] names, a name twice, one that is not a plain file name, one that is too long, and
+/// names that together take more than [`MAX_NAMES_BYTES`].
+fn check_names(names: &[String]) -> Result<(), Refused> {
+    if names.len() > MAX_NAMES {
+        return Err(Refused::InvalidNames);
+    }
+
+    let mut seen = HashSet::with_capacity(names.len());
     let mut bytes = 0_usize;
 
-    for name in &request.names {
+    for name in names {
         if !platform::is_plain_name(name) || !seen.insert(name.as_str()) {
             return Err(Refused::InvalidNames);
         }
@@ -52,10 +65,22 @@ pub(super) fn validate(request: &Request) -> Result<(), Refused> {
         }
     }
 
-    validate_task(request)
+    Ok(())
 }
 
-/// Refuses a kind that is not the task's, a verify, split or combine that has other than one name, an output that
+/// Refuses an extraction whose archive folder is not a normalized archive path (see [`archive::normalize`]: no `..`,
+/// no drive, no backslash, no control character) or whose entries are not names of the kind [`check_names`] accepts.
+fn check_extraction(inner: &str, entries: &[String]) -> Result<(), Refused> {
+    match archive::normalize(inner) {
+        Ok(Some(path)) if path == inner => {}
+        Ok(None) if inner.is_empty() => {}
+        _ => return Err(Refused::InvalidTask),
+    }
+
+    check_names(entries)
+}
+
+/// Refuses a kind that is not the task's, a verify, split, combine or extraction that has other than one name, an output that
 /// is not a plain name, a part shorter than [`MIN_PART_SIZE`], and an attribute change that changes nothing, uses
 /// bits beyond `0o7777`, sets permissions on Windows or the Windows attributes elsewhere.
 fn validate_task(request: &Request) -> Result<(), Refused> {
@@ -71,6 +96,11 @@ fn validate_task(request: &Request) -> Result<(), Refused> {
         Task::Transfer => true,
         Task::Checksum { output, .. } => platform::is_plain_name(output) && name_fits(output),
         Task::VerifyChecksum | Task::Combine => request.names.len() == 1,
+        Task::Extract { inner, entries, .. } => {
+            check_extraction(inner, entries)?;
+
+            request.names.len() == 1
+        }
         Task::Split { part_size } => request.names.len() == 1 && *part_size >= MIN_PART_SIZE,
         Task::Attributes(change) => attributes_acceptable(change),
     };

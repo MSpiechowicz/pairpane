@@ -16,6 +16,7 @@
     { action: 'verifyChecksum', label: 'Verify checksum file' },
     { action: 'split', label: 'Split file…' },
     { action: 'combine', label: 'Combine files…' },
+    { action: 'extract', label: 'Extract…', keys: 'Alt+F9' },
   ];
 
   let { onChoose }: { onChoose: (action: FilesChoice) => void } = $props();

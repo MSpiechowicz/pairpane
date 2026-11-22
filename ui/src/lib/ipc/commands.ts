@@ -47,10 +47,16 @@ export const commands = {
     },
     null
   >(),
+  archive_open: cmd<
+    { pane: PaneId; archive: string; dir: string; showHidden: boolean; onEvent: EventSink<ListEvent> },
+    null
+  >(),
+  archive_password: cmd<{ archive: string; password: string }, boolean>(),
   pane_folder_size: cmd<{ pane: PaneId; path: string; name: string; onEvent: EventSink<SizeEvent> }, null>(),
   volumes_list: cmd<{ onEvent: EventSink<VolumeEvent> }, null>(),
   ops_subscribe: cmd<{ onEvent: EventSink<OpsEvent> }, null>(),
   ops_start: cmd<{ kind: OpKind; from: string; names: string[]; to: string; verify: boolean }, JobId>(),
+  ops_extract: cmd<{ archive: string; dir: string; names: string[]; to: string }, JobId>(),
   ops_task: cmd<{ from: string; names: string[]; task: JobTask }, JobId>(),
   ops_control: cmd<{ job: JobId; action: ControlAction }, null>(),
   ops_answer: cmd<{ job: JobId; question: number; answer: Answer; all: boolean }, null>(),
@@ -63,6 +69,7 @@ export const commands = {
   ops_properties: cmd<{ path: string; name: string }, ItemProperties>(),
   ops_link: cmd<{ kind: LinkKind; path: string; name: string; to: string; linkName: string }, null>(),
   view_open: cmd<{ path: string; name: string }, ViewOpened>(),
+  archive_view_open: cmd<{ archive: string; dir: string; name: string }, ViewOpened>(),
   view_close: cmd<{ session: number }, null>(),
   view_bytes: cmd<{ session: number; offset: number; length: number }, ArrayBuffer>(),
   view_image_decode: cmd<{ session: number }, ArrayBuffer>(),

@@ -10,10 +10,11 @@ import { ViewSession } from './session.svelte';
 /** How long the cursor rests on a file before the quick view opens it (holding an arrow key opens nothing). */
 export const FOLLOW_DELAY_MS = 150;
 
-/** A file under a pane's cursor. */
+/** A file under a pane's cursor, or an entry of an archive (then `path` is the archive and `inside` its folder). */
 export interface Target {
   path: string;
   name: string;
+  inside?: string;
 }
 
 /** What the active pane's cursor is on: a file, a folder (`..` too) or nothing that can be shown yet. */
@@ -23,7 +24,7 @@ export type Under = Target | 'folder' | undefined;
 export type QuickShown = ViewSession | 'folder' | undefined;
 
 const sameTarget = (a: Under, b: Under) =>
-  a === b || (typeof a === 'object' && typeof b === 'object' && a.path === b.path && a.name === b.name);
+  a === b || (typeof a === 'object' && typeof b === 'object' && a.path === b.path && a.name === b.name && a.inside === b.inside);
 
 /**
  * The viewer of the window: the full overlay F3 opens for the file under the active cursor, and the quick view
@@ -36,8 +37,14 @@ export class Viewer {
   quick = $state(false);
   quickShown = $state.raw<QuickShown>();
 
-  /** What the active pane's cursor is on. */
-  readonly under: Under = $derived.by(() => this.#under());
+  /**
+   * What the active pane's cursor is on, for what shows or edits a file in place: an entry of an archive is neither
+   * (the quick view has its placeholder for it, F4 is refused), so it is nothing here.
+   */
+  readonly under: Under = $derived.by(() => {
+    const target = this.#look();
+    return typeof target === 'object' && target.inside !== undefined ? undefined : target;
+  });
 
   readonly #ipc: Transport;
   readonly #panes: Record<PaneId, PaneTabs>;
@@ -57,10 +64,11 @@ export class Viewer {
     return this.overlay !== undefined;
   }
 
-  #under(): Under {
+  /** What the cursor is on: a file, an entry of an archive, a folder (`..` too) or nothing that can be shown yet. */
+  #look(): Under {
     const view = this.#panes[this.#active()].view;
-    const path = view.listing.path;
-    if (path === undefined) {
+    const { archive, path } = view.listing;
+    if (path === undefined && archive === undefined) {
       return undefined;
     }
 
@@ -69,12 +77,16 @@ export class Viewer {
       return view.isUp(view.cursor) ? 'folder' : undefined;
     }
 
-    return entry.kind === 'dir' ? 'folder' : { path, name: entry.name };
+    if (entry.kind === 'dir') {
+      return 'folder';
+    }
+
+    return archive === undefined ? { path: path!, name: entry.name } : { path: archive.archive, name: entry.name, inside: archive.dir };
   }
 
-  /** F3: the overlay for the file under the cursor. A folder, `..` and an empty pane have nothing to view. */
+  /** F3: the overlay for the file (or archive entry) under the cursor. A folder, `..` and an empty pane have nothing to view. */
   open() {
-    const target = this.under;
+    const target = this.#look();
     if (typeof target === 'object') {
       this.openAt(target);
     }
@@ -83,7 +95,7 @@ export class Viewer {
   /** The overlay for `target`, with a word on why it is shown when it was not asked for (the editor sent it). */
   openAt(target: Target, notice?: string) {
     if (this.overlay === undefined) {
-      this.overlay = new ViewSession(this.#ipc, target.path, target.name, notice);
+      this.overlay = new ViewSession(this.#ipc, target.path, target.name, notice, target.inside);
     }
   }
 

@@ -27,7 +27,9 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use crate::process::{self, GRACE, Wait};
 
 use super::{HEADER, MAX_IMAGE_BYTES, cancelled, check_size, no_decoder, too_big, undecodable};
 
@@ -36,37 +38,15 @@ const STATUS_NO_DECODER: u8 = 1;
 const STATUS_UNDECODABLE: u8 = 2;
 const STATUS_TOO_BIG: u8 = 3;
 
-/// How often the parent looks at the cancel flag and at the child while it waits.
-const POLL: Duration = Duration::from_millis(25);
-
 /// How long the child may take, from its start to its end. The biggest picture decodes in seconds; a child that is
 /// still at it after this is hung, and is killed.
 pub(super) const DEADLINE: Duration = Duration::from_secs(60);
 
-/// How long the parent waits for one of the two ends of an answer (the child ending, its output ending) once the other
-/// has come, and for the reading thread to end after the child is killed.
-const GRACE: Duration = Duration::from_secs(2);
-
-/// The environment variables the helper is given; it starts with no others. The loader and libheif need these to find the
-/// libraries and the plugins the app was started with (an AppImage sets `LD_LIBRARY_PATH` for the libraries it bundles; the
-/// executable itself needs nothing else to start), and a Windows process needs its system directory and its temporary
-/// folder (the Imaging Component reads them).
-const KEPT_ENV: &[&str] = &[
-    "LIBHEIF_PLUGIN_PATH",
-    "LD_LIBRARY_PATH",
-    #[cfg(windows)]
-    "SystemRoot",
-    #[cfg(windows)]
-    "WINDIR",
-    #[cfg(windows)]
-    "TEMP",
-    #[cfg(windows)]
-    "TMP",
-];
-
-/// `CREATE_NO_WINDOW`: the child of a program without a console gets none either.
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// The environment variables the helper is given on top of the ones every child gets ([`process::command`]: a Windows
+/// process needs its system directory and its temporary folder, the Imaging Component reads them); it starts with no
+/// others. The loader and libheif need these to find the libraries and the plugins the app was started with (an AppImage
+/// sets `LD_LIBRARY_PATH` for the libraries it bundles; the executable itself needs nothing else to start).
+const KEPT_ENV: &[&str] = &["LIBHEIF_PLUGIN_PATH", "LD_LIBRARY_PATH"];
 
 /// The entry of the child: reads the file from the standard input, decodes it and writes the answer to the standard
 /// output. Returns the exit code of the process (0 when an answer was written, which a failed decoding is too).
@@ -219,27 +199,8 @@ pub(super) fn read_answer(mut input: impl Read) -> io::Result<Vec<u8>> {
 /// out), the standard error goes nowhere, and the environment is cleared but for [`KEPT_ENV`], so nothing of the app's
 /// own (tokens, proxy settings, a session) reaches the codecs.
 pub(super) fn command(program: &Path, args: &[&str]) -> Command {
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .env_clear()
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    for name in KEPT_ENV {
-        if let Some(value) = std::env::var_os(name) {
-            command.env(name, value);
-        }
-    }
-    // A relative or empty entry of a kept search path must not resolve against wherever the app happens to be.
-    #[cfg(unix)]
-    command.current_dir("/");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    let mut command = process::command(program, args, KEPT_ENV);
+    command.stdin(Stdio::piped());
 
     command
 }
@@ -274,8 +235,7 @@ pub(super) fn run(
         Ok(job) => job,
         Err(error) => {
             tracing::debug!(%error, "the heic helper cannot be contained");
-            let _ = child.kill();
-            let _ = child.wait();
+            process::stop(&mut child);
 
             return Err(io::Error::other("the heic helper cannot be contained"));
         }
@@ -283,9 +243,8 @@ pub(super) fn run(
 
     let answer = supervise(&mut child, bytes, cancel, deadline);
 
-    // Whatever happened above, the child is stopped and reaped here; both calls are harmless for one that has ended.
-    let _ = child.kill();
-    let _ = child.wait();
+    // Whatever happened above, the child is stopped and reaped here; harmless for one that has ended.
+    process::stop(&mut child);
 
     answer
 }
@@ -315,9 +274,8 @@ fn supervise(child: &mut Child, bytes: Vec<u8>, cancel: &AtomicBool, deadline: D
 
     // The child is stopped in every case, and its output closes with it, which ends the reader. If it does not end (the
     // pipe is held open by something else) it is left behind.
-    let _ = child.kill();
-    let _ = child.wait();
-    let answer = join_within(reader, GRACE);
+    process::stop(child);
+    let answer = process::join_within(reader, GRACE);
 
     waited?;
 
@@ -333,56 +291,14 @@ fn wait_for_answer(
     cancel: &AtomicBool,
     deadline: Duration,
 ) -> io::Result<()> {
-    let started = Instant::now();
-    let mut exited = None;
-    let mut read = None;
-
-    loop {
-        let now = Instant::now();
-        if cancel.load(Ordering::Relaxed) {
-            return Err(cancelled());
-        }
-        if now.duration_since(started) >= deadline {
+    match process::wait_for(child, cancel, deadline, || reader.is_finished()) {
+        Ok(status) if status.success() => Ok(()),
+        Err(Wait::Cancelled) => Err(cancelled()),
+        Err(Wait::Deadline) => {
             tracing::debug!("the heic helper took too long");
 
-            return Err(undecodable());
+            Err(undecodable())
         }
-
-        if exited.is_none() {
-            match child.try_wait() {
-                Ok(Some(status)) if status.success() => exited = Some(now),
-                Ok(Some(_)) | Err(_) => return Err(undecodable()),
-                Ok(None) => {}
-            }
-        }
-        if read.is_none() && reader.is_finished() {
-            read = Some(now);
-        }
-
-        match (exited, read) {
-            (Some(_), Some(_)) => return Ok(()),
-            (Some(first), None) | (None, Some(first)) if now.duration_since(first) >= GRACE => {
-                return Err(undecodable());
-            }
-            _ => {}
-        }
-
-        thread::sleep(POLL);
+        Ok(_) | Err(Wait::Stalled | Wait::Lost) => Err(undecodable()),
     }
-}
-
-/// The result of `thread` when it ends within `bound`; `None` when it does not (it is then left to run alone) or when
-/// it panicked.
-pub(super) fn join_within<T>(thread: JoinHandle<T>, bound: Duration) -> Option<T> {
-    let until = Instant::now() + bound;
-
-    while !thread.is_finished() {
-        if Instant::now() >= until {
-            return None;
-        }
-
-        thread::sleep(Duration::from_millis(5));
-    }
-
-    thread.join().ok()
 }
