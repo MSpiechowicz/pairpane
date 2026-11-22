@@ -72,6 +72,7 @@ pub fn clean(state: SavedState) -> SavedState {
         right: clean_pane(state.right),
         hotlist,
         searches: searches::clean_searches(state.searches),
+        renames: state.renames,
     }
 }
 
@@ -170,7 +171,11 @@ pub fn save(file: &Path, state: SavedState) -> io::Result<()> {
 /// Like [`save`] for a state the webview sent: when it has no `searches` the ones stored in `file` are kept (none when
 /// the file cannot be used), when it has them, even none, they replace the stored ones. Otherwise as [`save_changed`].
 pub fn save_update(file: &Path, update: SavedUpdate, last: &mut Option<Vec<u8>>) -> io::Result<bool> {
-    let state = update.resolve(|| load(file).map(|stored| stored.searches).unwrap_or_default());
+    let state = update.resolve(|| {
+        load(file)
+            .map(|stored| (stored.searches, stored.renames))
+            .unwrap_or_default()
+    });
 
     save_changed(file, state, last)
 }
@@ -224,3 +229,6 @@ mod tests;
 
 #[cfg(test)]
 mod searches_tests;
+
+#[cfg(test)]
+mod renames_tests;

@@ -73,6 +73,7 @@ pub(super) fn task_request(from: String, names: Vec<String>, task: JobTask) -> C
 
             (from.clone(), Task::Attributes(change))
         }
+        JobTask::Rename { .. } => return Err(unsupported("Multi-rename is not ready")),
     };
 
     Ok(Request::task(from, names, to, task))

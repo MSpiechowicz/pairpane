@@ -6,4 +6,4 @@ import type { HashAlgorithm } from "./HashAlgorithm";
  * A job other than a copy or a move, as the `ops_task` command takes it. The folder the items are in and their
  * names come with the command.
  */
-export type JobTask = { "kind": "checksum", algorithm: HashAlgorithm, output: string, } | { "kind": "verifyChecksum" } | { "kind": "split", to: string, partSize: number, } | { "kind": "combine", to: string, } | { "kind": "attributes", change: AttributeChange, };
+export type JobTask = { "kind": "checksum", algorithm: HashAlgorithm, output: string, } | { "kind": "verifyChecksum" } | { "kind": "split", to: string, partSize: number, } | { "kind": "combine", to: string, } | { "kind": "attributes", change: AttributeChange, } | { "kind": "rename", targets: Array<string>, };

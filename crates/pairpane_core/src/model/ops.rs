@@ -32,6 +32,8 @@ pub enum OpKind {
     Pack,
     /// Writes the items into an archive that exists, by writing a new one beside it and replacing the old.
     AddToArchive,
+    /// Renames items of one folder, each to a new name.
+    Rename,
 }
 
 /// Where a running job is. Runs in this order; `waiting` and `cancelling` can interrupt the later steps.

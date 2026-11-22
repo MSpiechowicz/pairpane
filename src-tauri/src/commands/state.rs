@@ -159,6 +159,7 @@ mod tests {
             right: pane(),
             hotlist: Vec::new(),
             searches: Some(Vec::new()),
+            renames: None,
         }
     }
 

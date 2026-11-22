@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use serde::Deserialize;
 
 use crate::find;
-use crate::model::{FindQuery, PaneId, SavedPane, SavedSearch, SavedState};
+use crate::model::{FindQuery, PaneId, SavedPane, SavedRename, SavedSearch, SavedState};
 
 /// Saved searches kept.
 pub const MAX_SEARCHES: usize = 50;
@@ -58,9 +58,9 @@ fn can_run(search: &SavedSearch) -> bool {
     find::compile(&query).is_ok()
 }
 
-/// A state as the webview sends it to be saved: a [`SavedState`] whose `searches` may be absent.
+/// A state as the webview sends it to be saved: a [`SavedState`] whose `searches` and `renames` may be absent.
 ///
-/// Absent (a page from before saved searches, or one that forgot them) is not the same as empty: absent leaves the
+/// Absent (a page from before saved searches or rename rules, or one that forgot them) is not the same as empty: absent leaves the
 /// stored searches as they are, so such a page cannot wipe them, while an explicit empty list clears them.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,17 +72,31 @@ pub struct SavedUpdate {
     /// `None` when the page sent none (or `null`): the stored searches are kept.
     #[serde(default)]
     pub searches: Option<Vec<SavedSearch>>,
+    /// `None` when the page sent none (or `null`): the stored rename rules are kept.
+    #[serde(default)]
+    pub renames: Option<Vec<SavedRename>>,
 }
 
 impl SavedUpdate {
-    /// The state to save: the searches sent, else those `stored` (called only when the page sent none).
-    pub(super) fn resolve(self, stored: impl FnOnce() -> Vec<SavedSearch>) -> SavedState {
+    /// The state to save: the searches and rename rules sent, else those `stored` (called only when the page left out
+    /// either, and then once).
+    pub(super) fn resolve(self, stored: impl FnOnce() -> (Vec<SavedSearch>, Vec<SavedRename>)) -> SavedState {
+        let (searches, renames) = match (self.searches, self.renames) {
+            (Some(searches), Some(renames)) => (searches, renames),
+            (searches, renames) => {
+                let (stored_searches, stored_renames) = stored();
+
+                (searches.unwrap_or(stored_searches), renames.unwrap_or(stored_renames))
+            }
+        };
+
         SavedState {
             active: self.active,
             left: self.left,
             right: self.right,
             hotlist: self.hotlist,
-            searches: self.searches.unwrap_or_else(stored),
+            searches,
+            renames,
         }
     }
 }
@@ -96,6 +110,7 @@ impl From<SavedState> for SavedUpdate {
             right: state.right,
             hotlist: state.hotlist,
             searches: Some(state.searches),
+            renames: Some(state.renames),
         }
     }
 }
