@@ -1,5 +1,7 @@
 import { EditorView } from '@codemirror/view';
-import { goToNextChunk, goToPreviousChunk, MergeView } from '@codemirror/merge';
+import { Change, diff, goToNextChunk, goToPreviousChunk, MergeView } from '@codemirror/merge';
+
+import { diffText, type CharDiff } from '../diff/lineDiff';
 
 import { sideSetup } from './cmSetup';
 import type { MergeOptions, MergeSide, MergeSurface } from './surface';
@@ -8,12 +10,13 @@ import type { MergeOptions, MergeSide, MergeSurface } from './surface';
 const COLLAPSE = { margin: 3, minSize: 4 };
 
 /**
- * Two long files that differ everywhere give up the fine diff (and show whole lines changed) rather than freeze the
- * window. The merge view halves the scan limit; above about 4000 a repetitive text (one letter, a data file of
- * equal records) takes minutes, as the fallback for a large changed region never looks at the timeout. At 1000 the
- * worst such pairs of 100 KiB to 2 MiB build in tens of milliseconds.
+ * The merge view's own diff is quadratic on some long texts and gives up all at once on others: a long stretch with
+ * edits spread through it (a 40 KiB source file with a dozen edits) becomes one change, and two unrelated one-line
+ * files of a few MiB freeze the window for seconds. So the lines are diffed first, by our own bounded algorithm (see
+ * `diffText`), and only a changed block that is small enough is refined to characters, by the view's diff.
  */
-const DIFF = { scanLimit: 1000, timeout: 500 };
+const REFINE: CharDiff = (a, b) => diff(a, b, { scanLimit: 1000, timeout: 100 });
+export const MERGE_DIFF = { override: (a: string, b: string) => diffText(a, b, REFINE).map((span) => new Change(span.fromA, span.toA, span.fromB, span.toB)) };
 
 /** A comparison of texts this long (a side), or one that took this long to build, starts with the unchanged lines folded: every edit diffs again at about that cost. */
 const SLOW = { chars: 2 * 1024 * 1024, buildMs: 300 };
@@ -59,7 +62,7 @@ export function createMergeSurface(options: MergeOptions): MergeSurface {
     b: { doc: options.right.text, extensions: [...setups.right.extensions(), marks, watch('right')] },
     highlightChanges: true,
     gutter: true,
-    diffConfig: DIFF,
+    diffConfig: MERGE_DIFF,
   });
   const slow = Math.max(options.left.text.length, options.right.text.length) > SLOW.chars || performance.now() - started > SLOW.buildMs;
   merge = view;
