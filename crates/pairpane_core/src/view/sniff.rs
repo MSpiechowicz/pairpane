@@ -3,6 +3,8 @@
 
 use crate::model::{ArchiveFormat, ViewKind};
 
+use crate::archive::kind;
+
 use super::encoding;
 
 /// How much of the start is looked at for a NUL byte.
@@ -69,20 +71,8 @@ fn by_magic(head: &[u8], name: &str) -> Option<ViewKind> {
         return Some(ViewKind::Pdf);
     }
 
-    if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") {
-        return Some(ViewKind::Archive {
-            format: ArchiveFormat::Zip,
-        });
-    }
-
-    if head.starts_with(&[0x1F, 0x8B]) {
-        return Some(gzip(name));
-    }
-
-    if head.len() >= 262 && &head[257..262] == b"ustar" {
-        return Some(ViewKind::Archive {
-            format: ArchiveFormat::Tar,
-        });
+    if let Some(kind) = archive(head, name) {
+        return Some(kind);
     }
 
     riff(head)
@@ -90,15 +80,15 @@ fn by_magic(head: &[u8], name: &str) -> Option<ViewKind> {
         .or_else(|| sound_or_video(head, name))
 }
 
-/// A gzip file is listed only when its name says it holds a tar; any other one is bytes.
-fn gzip(name: &str) -> ViewKind {
-    if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
-        return ViewKind::Archive {
-            format: ArchiveFormat::TarGz,
-        };
+/// An archive the viewer lists: a zip, a tar, a 7z, and a tar inside gzip, XZ, Zstandard or bzip2 when the name says it holds
+/// a tar. Any other gzip file (and a RAR, which is read by a program of the system and so only a pane opens) is bytes.
+fn archive(head: &[u8], name: &str) -> Option<ViewKind> {
+    match kind::by_magic(head, name) {
+        Some(ArchiveFormat::Gz | ArchiveFormat::Rar) => Some(ViewKind::Binary),
+        Some(format) => Some(ViewKind::Archive { format }),
+        None if head.starts_with(&[0x1F, 0x8B]) => Some(ViewKind::Binary),
+        None => None,
     }
-
-    ViewKind::Binary
 }
 
 /// `BM`, then the file header and the size of the info header that follows it (the sizes the versions of the

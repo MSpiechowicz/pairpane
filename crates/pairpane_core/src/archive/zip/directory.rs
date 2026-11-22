@@ -1,25 +1,27 @@
-//! Listing a zip from its central directory, with a reader of our own. A zip library sizes its tables from the entry
-//! count it finds in the end records (and falls back to earlier end records when one looks wrong), so a crafted file
-//! can make it ask for gigabytes before it reads anything. Here the sizes are checked against the file first, the
-//! directory is read record by record through a window of exactly its declared size, and nothing is allocated from a
-//! declared count.
+//! Reading a zip's central directory, with a reader of our own. A zip library sizes its tables from the entry count it
+//! finds in the end records (and falls back to earlier end records when one looks wrong), so a crafted file can make it
+//! ask for gigabytes before it reads anything. Here the sizes are checked against the file first, the directory is
+//! read record by record through a window of exactly its declared size, and nothing is allocated from a declared count.
+//! Nothing but the end records and the directory is read.
 
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use memchr::memmem;
 
-use crate::model::ArchiveEntry;
+use crate::archive::entries::{EntryType, Flow, Place, Record, Walked};
+use crate::archive::error::{cancelled, unreadable};
+use crate::archive::file::{FileReader, ReadAt};
+use crate::archive::{MAX_INDEX_ENTRIES, MAX_NAME_BYTES};
+use crate::view::refusal;
 
-use super::archive::{MAX_NAME, clean_name, unreadable};
-use super::file::ViewFile;
-use super::{MAX_ARCHIVE_ENTRIES, cancelled, refusal};
+use super::{AesExtra, ZipPlace};
 
-/// The largest central directory of a zip that is listed.
+/// The largest central directory of a zip that is read.
 const MAX_ZIP_DIRECTORY: u64 = 64 * 1024 * 1024;
 
-/// The most entries a zip may declare to be listed at all (the first [`MAX_ARCHIVE_ENTRIES`] are shown).
-const MAX_ZIP_ENTRIES: u64 = 200_000;
+/// The most entries a zip may declare to be read at all.
+const MAX_ZIP_ENTRIES: u64 = MAX_INDEX_ENTRIES as u64;
 
 /// The smallest record of a central directory, in bytes.
 const RECORD: usize = 46;
@@ -33,27 +35,39 @@ const ZIP64_EOCD: usize = 56;
 const LOCATOR: usize = 20;
 
 /// The bytes of a name that are looked at: the longest name kept, and room for the character it may cut in two.
-const NAME_READ: usize = MAX_NAME + 4;
+const NAME_READ: usize = MAX_NAME_BYTES + 4;
 
 /// The flag of an entry that says its name is UTF-8.
 const UTF8_NAME: u16 = 1 << 11;
+
+/// The flag of an entry that says its content is encrypted.
+const ENCRYPTED: u16 = 1;
+
+/// The method that says the entry is a WinZip AES one (the real method is in the extra field).
+const AES_METHOD: u16 = 99;
 
 /// Where the central directory is, and what the end records declare of it.
 struct Directory {
     entries: u64,
     size: u64,
     start: u64,
+    /// The length of the data before the zip (a self-extracting program): what the stored offsets lack.
+    base: u64,
 }
 
-/// The entries of the zip `file`, at most [`MAX_ARCHIVE_ENTRIES`], and whether the list is cut.
-pub(super) fn list(file: &ViewFile, cancel: &AtomicBool) -> io::Result<(Vec<ArchiveEntry>, bool)> {
+/// Calls `visit` with the entry of each record of the central directory of the zip in `file`, in directory order, until
+/// the directory ends or `visit` says [`Flow::Stop`]. A zip whose directory cannot be trusted is an error: nothing is
+/// visited. A raised `cancel` ends the walk with an `Interrupted` error.
+pub fn walk<F: ReadAt + ?Sized>(
+    file: &F,
+    cancel: &AtomicBool,
+    mut visit: impl FnMut(Record) -> Flow,
+) -> io::Result<Walked> {
     let directory = locate(file)?;
 
-    let mut reader = file.reader();
+    let mut reader = FileReader::new(file);
     reader.seek(SeekFrom::Start(directory.start))?;
     let mut reader = BufReader::new(reader.take(directory.size));
-
-    let mut listed = Vec::new();
     let mut variable = Vec::new();
 
     for _ in 0..directory.entries {
@@ -61,22 +75,25 @@ pub(super) fn list(file: &ViewFile, cancel: &AtomicBool) -> io::Result<(Vec<Arch
             return Err(cancelled());
         }
 
-        if listed.len() == MAX_ARCHIVE_ENTRIES {
-            return Ok((listed, true));
-        }
+        let entry = record(&mut reader, &mut variable, directory.base)?;
 
-        listed.push(record(&mut reader, &mut variable)?);
+        if visit(entry) == Flow::Stop {
+            return Ok(Walked {
+                stopped: true,
+                cut: false,
+            });
+        }
     }
 
-    Ok((listed, false))
+    Ok(Walked::default())
 }
 
 /// Finds the central directory through the last end record in the file, and checks that it fits in the file.
-fn locate(file: &ViewFile) -> io::Result<Directory> {
+fn locate<F: ReadAt + ?Sized>(file: &F) -> io::Result<Directory> {
     let size = file.size()?;
     let length = size.min(EOCD_SEARCH);
     let base = size - length;
-    let tail = file.read_at(base, usize::try_from(length).map_err(|_| unreadable())?)?;
+    let tail = file.read_chunk(base, usize::try_from(length).map_err(|_| unreadable())?)?;
 
     // The last signature with a whole record after it.
     let room = tail.len().checked_sub(EOCD - 4).ok_or_else(unreadable)?;
@@ -131,17 +148,20 @@ fn locate(file: &ViewFile) -> io::Result<Directory> {
         return Err(unreadable());
     }
 
+    let start = end - bytes;
+
     Ok(Directory {
         entries,
         size: bytes,
-        start: end - bytes,
+        start,
+        base: start - offset,
     })
 }
 
 /// The zip64 end record that the `locator` (which is at `locator_at`) points to, and where it is. The offset in a
 /// locator counts from the start of the zip, so when data precedes the zip the record is looked for just before the
 /// locator too.
-fn zip64_record(file: &ViewFile, locator_at: u64, locator: &[u8]) -> io::Result<(u64, Vec<u8>)> {
+fn zip64_record<F: ReadAt + ?Sized>(file: &F, locator_at: u64, locator: &[u8]) -> io::Result<(u64, Vec<u8>)> {
     let before = locator_at.saturating_sub(ZIP64_EOCD as u64);
 
     for at in [le(locator, 8, 8), before] {
@@ -149,7 +169,7 @@ fn zip64_record(file: &ViewFile, locator_at: u64, locator: &[u8]) -> io::Result<
             continue;
         }
 
-        let record = file.read_at(at, ZIP64_EOCD)?;
+        let record = file.read_chunk(at, ZIP64_EOCD)?;
         if record.len() == ZIP64_EOCD && record.starts_with(b"PK\x06\x06") {
             return Ok((at, record));
         }
@@ -158,8 +178,9 @@ fn zip64_record(file: &ViewFile, locator_at: u64, locator: &[u8]) -> io::Result<
     Err(unreadable())
 }
 
-/// The next record of the central directory; `variable` is a buffer for its name, extra data and comment.
-fn record<R: Read>(reader: &mut R, variable: &mut Vec<u8>) -> io::Result<ArchiveEntry> {
+/// The next record of the central directory, with `base` added to the offset of its local header; `variable` is a
+/// buffer for its name, extra data and comment.
+fn record<R: Read>(reader: &mut R, variable: &mut Vec<u8>, base: u64) -> io::Result<Record> {
     let mut head = [0; RECORD];
     read_exact(reader, &mut head)?;
 
@@ -167,10 +188,13 @@ fn record<R: Read>(reader: &mut R, variable: &mut Vec<u8>) -> io::Result<Archive
         return Err(unreadable());
     }
 
+    let made_by = le(&head, 4, 2) as u16;
     let flags = le(&head, 8, 2) as u16;
+    let method = le(&head, 10, 2) as u16;
     let name_length = le(&head, 28, 2) as usize;
     let extra_length = le(&head, 30, 2) as usize;
     let comment_length = le(&head, 32, 2) as usize;
+    let external = le(&head, 38, 4) as u32;
 
     variable.clear();
     variable.resize(name_length + extra_length + comment_length, 0);
@@ -179,19 +203,78 @@ fn record<R: Read>(reader: &mut R, variable: &mut Vec<u8>) -> io::Result<Archive
     let name = &variable[..name_length];
     let extra = &variable[name_length..name_length + extra_length];
 
+    // The fields of the record that do not fit in 32 bits say so with all ones, and their real values are in the zip64
+    // field of the extra data, in this order and only for those fields.
     let mut size = le(&head, 24, 4);
-    if size == u64::from(u32::MAX)
-        && let Some(wide) = extra_field(extra, 0x0001)
-    {
-        size = le(wide, 0, 8);
+    let mut compressed = le(&head, 20, 4);
+    let mut offset = le(&head, 42, 4);
+
+    if let Some(mut wide) = extra_field(extra, 0x0001) {
+        for value in [&mut size, &mut compressed, &mut offset] {
+            if *value != u64::from(u32::MAX) {
+                continue;
+            }
+
+            let Some((bytes, rest)) = wide.split_first_chunk::<8>() else {
+                break;
+            };
+            *value = u64::from_le_bytes(*bytes);
+            wide = rest;
+        }
     }
 
-    Ok(ArchiveEntry {
+    let aes = extra_field(extra, 0x9901)
+        .filter(|data| data.len() >= 7)
+        .map(|data| AesExtra {
+            version: le(data, 0, 2) as u16,
+            strength: data[4],
+            method: le(data, 5, 2) as u16,
+        });
+    let (kind, mode) = kind_and_mode(name, made_by, external);
+
+    Ok(Record {
         name: name_text(name, flags),
+        kind,
         size,
-        dir: name.ends_with(b"/"),
         modified: unix_time(extra).or_else(|| dos_millis(le(&head, 14, 2) as u16, le(&head, 12, 2) as u16)),
+        mode,
+        link: None,
+        encrypted: flags & ENCRYPTED != 0 || method == AES_METHOD,
+        place: Place::Zip(Box::new(ZipPlace {
+            method,
+            flags,
+            crc: le(&head, 16, 4) as u32,
+            compressed,
+            offset: offset.saturating_add(base),
+            dos_time: le(&head, 12, 2) as u16,
+            made_by,
+            external,
+            aes,
+        })),
     })
+}
+
+/// What the entry is and the permission bits it stores. A name that ends in `/` is a folder; otherwise a Unix host (3 in
+/// the high byte of "made by") says it in the high half of the external attributes, and any other host in the DOS
+/// attribute bits of the low half.
+fn kind_and_mode(name: &[u8], made_by: u16, external: u32) -> (EntryType, Option<u32>) {
+    let unix = (made_by >> 8) == 3;
+    let mode = if unix { external >> 16 } else { 0 };
+    let permissions = (mode != 0).then_some(mode & 0o7777);
+
+    let kind = if name.ends_with(b"/") {
+        EntryType::Dir
+    } else {
+        match mode & 0o170_000 {
+            0o040_000 => EntryType::Dir,
+            0o120_000 => EntryType::Symlink,
+            0 | 0o100_000 if external & 0x10 != 0 && !unix => EntryType::Dir,
+            0 | 0o100_000 => EntryType::File,
+            _ => EntryType::Special,
+        }
+    };
+
+    (kind, permissions)
 }
 
 /// Reads exactly `buffer`; a directory that ends early is a broken zip.
@@ -245,7 +328,7 @@ fn name_text(raw: &[u8], flags: u16) -> String {
         flags & UTF8_NAME != 0 || std::str::from_utf8(raw).map_or_else(|error| error.error_len().is_none(), |_| true);
 
     if utf8 {
-        return clean_name(&String::from_utf8_lossy(raw));
+        return String::from_utf8_lossy(raw).into_owned();
     }
 
     let text: String = raw
@@ -256,7 +339,7 @@ fn name_text(raw: &[u8], flags: u16) -> String {
         })
         .collect();
 
-    clean_name(&text)
+    text
 }
 
 /// A zip time (MS-DOS fields, no time zone) as milliseconds since the Unix epoch. The fields are read as UTC: a zip

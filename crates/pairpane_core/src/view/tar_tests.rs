@@ -10,9 +10,9 @@ use tar::EntryType;
 
 use crate::model::ArchiveFormat;
 
-use super::archive::Capped;
+use crate::archive::tar::{Capped, Stream};
+
 use super::archive_tests::{MOMENT, entry, failure, gzip, list, tar_of};
-use super::tar_list::Stream;
 use super::testing::file_of;
 
 /// A header block for `path`, of `kind` and `size`, with its checksum; `edit` may change the header before that.

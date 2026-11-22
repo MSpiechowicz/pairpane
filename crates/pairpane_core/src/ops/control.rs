@@ -202,6 +202,7 @@ mod tests {
             source: facts.clone(),
             target: facts,
             suggested: "a (2).txt".to_owned(),
+            comparable: true,
         }
     }
 

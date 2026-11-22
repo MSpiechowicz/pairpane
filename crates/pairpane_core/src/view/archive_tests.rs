@@ -1,91 +1,15 @@
 //! Listing zip, tar and tar.gz files: names, sizes, times, the caps, and archives that are broken.
 
-use std::io::{ErrorKind, Write};
+use std::io::ErrorKind;
 
-use flate2::Compression;
-use flate2::write::GzEncoder;
 use pretty_assertions::assert_eq;
 
 use crate::model::{ArchiveEntry, ArchiveFormat, ArchiveListing};
 
+pub(super) use crate::archive::testing::{MOMENT, gzip, tar_of, zip_of};
+
 use super::testing::{file_of, idle, opened};
 use super::{MAX_ARCHIVE_ENTRIES, ViewFile, archive};
-
-/// 2021-03-04 05:06:08 as a zip stores it (MS-DOS date and time).
-const DOS_DATE: u16 = 21092;
-const DOS_TIME: u16 = 10436;
-/// The same moment in milliseconds since the epoch, read as UTC.
-pub(super) const MOMENT: i64 = 1_614_834_368_000;
-
-/// A zip of stored (not compressed) entries, written by hand: `(name, content)`; a name ending in `/` is a folder.
-pub(super) fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    let mut directory = Vec::new();
-
-    for (name, content) in entries {
-        let offset = bytes.len() as u32;
-        let crc = crc32fast::hash(content);
-        let size = content.len() as u32;
-
-        bytes.extend_from_slice(b"PK\x03\x04");
-        for field in [20u16, 0, 0, DOS_TIME, DOS_DATE] {
-            bytes.extend_from_slice(&field.to_le_bytes());
-        }
-        for field in [crc, size, size] {
-            bytes.extend_from_slice(&field.to_le_bytes());
-        }
-        bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
-        bytes.extend_from_slice(&0u16.to_le_bytes());
-        bytes.extend_from_slice(name.as_bytes());
-        bytes.extend_from_slice(content);
-
-        directory.extend_from_slice(b"PK\x01\x02");
-        for field in [20u16, 20, 0, 0, DOS_TIME, DOS_DATE] {
-            directory.extend_from_slice(&field.to_le_bytes());
-        }
-        for field in [crc, size, size] {
-            directory.extend_from_slice(&field.to_le_bytes());
-        }
-        directory.extend_from_slice(&(name.len() as u16).to_le_bytes());
-        for field in [0u16, 0, 0, 0] {
-            directory.extend_from_slice(&field.to_le_bytes());
-        }
-        directory.extend_from_slice(&0u32.to_le_bytes());
-        directory.extend_from_slice(&offset.to_le_bytes());
-        directory.extend_from_slice(name.as_bytes());
-    }
-
-    let start = bytes.len() as u32;
-    bytes.extend_from_slice(&directory);
-    bytes.extend_from_slice(b"PK\x05\x06\0\0\0\0");
-    bytes.extend_from_slice(&(entries.len() as u16).to_le_bytes());
-    bytes.extend_from_slice(&(entries.len() as u16).to_le_bytes());
-    bytes.extend_from_slice(&(directory.len() as u32).to_le_bytes());
-    bytes.extend_from_slice(&start.to_le_bytes());
-    bytes.extend_from_slice(&0u16.to_le_bytes());
-
-    bytes
-}
-
-/// A tar of `(path, content)`, a path ending in `/` being a folder, all modified at `MOMENT`.
-pub(super) fn tar_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut builder = tar::Builder::new(Vec::new());
-
-    for (path, content) in entries {
-        let mut header = tar::Header::new_gnu();
-        header.set_size(content.len() as u64);
-        header.set_mtime((MOMENT / 1000) as u64);
-        header.set_mode(0o644);
-        header.set_entry_type(if path.ends_with('/') {
-            tar::EntryType::Directory
-        } else {
-            tar::EntryType::Regular
-        });
-        builder.append_data(&mut header, path, *content).expect("append");
-    }
-
-    builder.into_inner().expect("a tar")
-}
 
 pub(super) fn many_names(count: usize) -> Vec<String> {
     (0..count).map(|number| format!("f{number}")).collect()
@@ -93,13 +17,6 @@ pub(super) fn many_names(count: usize) -> Vec<String> {
 
 pub(super) fn empty_files(names: &[String]) -> Vec<(&str, &[u8])> {
     names.iter().map(|name| (name.as_str(), b"".as_slice())).collect()
-}
-
-pub(super) fn gzip(bytes: &[u8]) -> Vec<u8> {
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
-    encoder.write_all(bytes).expect("compress");
-
-    encoder.finish().expect("finish")
 }
 
 pub(super) fn list(bytes: &[u8], format: ArchiveFormat) -> ArchiveListing {

@@ -5,6 +5,8 @@ use std::io::{Read, Seek, SeekFrom};
 
 use pretty_assertions::assert_eq;
 
+use crate::archive::FileReader;
+
 use super::testing::{file_of, opened, temp};
 use super::{MAX_READ, open};
 
@@ -65,7 +67,7 @@ fn the_size_follows_the_file() {
 #[test]
 fn the_reader_reads_and_seeks_on_its_own_position() {
     let (_folder, file) = file_of(b"0123456789");
-    let mut reader = file.reader();
+    let mut reader = FileReader::new(&file);
     let mut four = [0; 4];
 
     reader.read_exact(&mut four).expect("read");

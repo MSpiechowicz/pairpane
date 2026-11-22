@@ -197,6 +197,7 @@ impl Run<'_> {
             source: facts(source),
             target: facts(existing),
             suggested,
+            comparable: true,
         });
 
         self.phase(JobPhase::Waiting);

@@ -142,6 +142,26 @@ fn a_gzip_file_that_is_not_a_tar_is_bytes() {
 }
 
 #[test]
+fn the_other_archives_the_viewer_lists_are_found_by_their_bytes() {
+    let xz = [0xFD, b'7', b'z', b'X', b'Z', 0, 0, 4];
+    let zstd = [0x28, 0xB5, 0x2F, 0xFD, 0, 0];
+    let seven_z = [b'7', b'z', 0xBC, 0xAF, 0x27, 0x1C, 0, 4];
+    let archive = |format| ViewKind::Archive { format };
+
+    assert_eq!(sniff(&xz, "pack.tar.xz"), archive(ArchiveFormat::TarXz));
+    assert_eq!(sniff(&xz, "pack.txz"), archive(ArchiveFormat::TarXz));
+    assert_eq!(sniff(&zstd, "pack.tar.zst"), archive(ArchiveFormat::TarZst));
+    assert_eq!(sniff(b"BZh91AY&SY", "pack.tbz2"), archive(ArchiveFormat::TarBz2));
+    assert_eq!(sniff(&seven_z, "pack.7z"), archive(ArchiveFormat::SevenZ));
+    assert_eq!(sniff(&seven_z, "no extension"), archive(ArchiveFormat::SevenZ));
+
+    // A lone compressed file is not an archive here, and a RAR is read by a program of the system, which a viewer
+    // session (with no path) cannot start.
+    assert_eq!(sniff(&xz, "notes.xz"), ViewKind::Binary);
+    assert_eq!(sniff(b"Rar!\x1A\x07\x01\x00\0\0", "pack.rar"), ViewKind::Binary);
+}
+
+#[test]
 fn svg_needs_both_its_extension_and_its_element() {
     let svg = b"<?xml version=\"1.0\"?>\n<!-- c -->\n<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>";
 

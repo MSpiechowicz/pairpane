@@ -14,9 +14,11 @@ use tar::EntryType;
 
 use crate::model::ArchiveFormat;
 
-use super::archive::Capped;
+use crate::archive::Flow;
+use crate::archive::tar::{Capped, Stream, walk};
+
+use super::archive::Listed;
 use super::archive_tests::{MOMENT, empty_files, entry, failure, gzip, list, many_names, tar_of, zip_of, zip64_then};
-use super::tar_list::{self, Stream};
 use super::testing::{file_of, idle, temp};
 use super::{MAX_ARCHIVE_ENTRIES, archive, open};
 
@@ -121,13 +123,18 @@ impl Stream for Scripted {
     }
 }
 
-fn walk(parts: Vec<Part>) -> Vec<(String, u64)> {
+fn walked(parts: Vec<Part>) -> Vec<(String, u64)> {
     let mut stream = Scripted { parts: parts.into() };
-    let (entries, truncated) = tar_list::list(&mut stream, None, &idle()).expect("a listing");
+    let mut listed = Listed::default();
+    let result = walk(&mut stream, None, &idle(), |record, _| Ok(listed.push(record))).expect("a listing");
 
-    assert!(!truncated);
+    assert!(!result.cut);
 
-    entries.into_iter().map(|entry| (entry.name, entry.size)).collect()
+    listed
+        .entries
+        .into_iter()
+        .map(|entry| (entry.name, entry.size))
+        .collect()
 }
 
 #[test]
@@ -136,7 +143,7 @@ fn a_huge_long_name_is_cut_and_stepped_over_never_read() {
     // 8000 bytes of name, then the zeros of the rest: they are a gap that fails when read.
     let parts = describing(EntryType::GNULongName, size, &[b'n'; 8000], Some(size - 8000));
 
-    assert_eq!(walk(parts), [("n".repeat(4096), 2)]);
+    assert_eq!(walked(parts), [("n".repeat(4096), 2)]);
 }
 
 #[test]
@@ -145,13 +152,13 @@ fn a_huge_pax_entry_and_long_link_are_not_read_whole_either() {
     let mut records = record("path", &"p".repeat(100));
     records.resize(64 * 1024, 0);
     let parts = describing(EntryType::XHeader, size, &records, Some(size - records.len() as u64));
-    assert_eq!(walk(parts), [("p".repeat(100), 2)]);
+    assert_eq!(walked(parts), [("p".repeat(100), 2)]);
 
     let parts = describing(EntryType::GNULongLink, size, &[], Some(size));
-    assert_eq!(walk(parts), [("short".to_owned(), 2)]);
+    assert_eq!(walked(parts), [("short".to_owned(), 2)]);
 
     let parts = describing(EntryType::XGlobalHeader, size, &[], Some(size));
-    assert_eq!(walk(parts), [("short".to_owned(), 2)]);
+    assert_eq!(walked(parts), [("short".to_owned(), 2)]);
 }
 
 #[test]
@@ -310,7 +317,7 @@ fn a_flag_raised_while_stepping_over_a_huge_entry_stops_the_listing() {
         cancel: &cancel,
     };
 
-    let error = tar_list::list(&mut stream, Some(&reached), &cancel).expect_err("cancelled");
+    let error = walk(&mut stream, Some(&reached), &cancel, |_, _| Ok(Flow::Continue)).expect_err("cancelled");
 
     assert_eq!(error.kind(), io::ErrorKind::Interrupted);
     assert!(stream.inner.reads < 100);

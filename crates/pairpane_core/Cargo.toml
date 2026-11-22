@@ -9,25 +9,35 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+aes.workspace = true
 base64.workspace = true
+bzip2.workspace = true
 blake3.workspace = true
 chardetng.workspace = true
 crc32fast.workspace = true
+ctr.workspace = true
 encoding_rs.workspace = true
 flate2.workspace = true
 fs4.workspace = true
+hmac.workspace = true
+lzma-rust2.workspace = true
 md-5.workspace = true
 memchr.workspace = true
 minisign-verify.workspace = true
 notify.workspace = true
+pbkdf2.workspace = true
 pulldown-cmark.workspace = true
 rayon.workspace = true
+ruzstd.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sevenz-rust2.workspace = true
+sha1.workspace = true
 sha2.workspace = true
 tar.workspace = true
 tracing.workspace = true
 ts-rs.workspace = true
+zeroize.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
@@ -55,6 +65,9 @@ windows-sys.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+# The encoders that build the archives the tests read (the application only decodes).
+lzma-rust2 = { workspace = true, features = ["encoder"] }
+sevenz-rust2 = { workspace = true, features = ["compress"] }
 pretty_assertions.workspace = true
 tempfile.workspace = true
 

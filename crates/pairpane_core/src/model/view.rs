@@ -26,15 +26,28 @@ pub enum ViewKind {
     Binary,
 }
 
-/// The archive formats whose entries the viewer lists.
+/// The archive formats whose entries are listed (by the viewer and by a pane that opens an archive).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum ArchiveFormat {
+    /// A zip (`.zip`, `.jar`).
     Zip,
     Tar,
     /// A tar inside gzip (`.tar.gz`, `.tgz`).
     TarGz,
+    /// A tar inside XZ (`.tar.xz`, `.txz`).
+    TarXz,
+    /// A tar inside Zstandard (`.tar.zst`, `.tzst`).
+    TarZst,
+    /// A tar inside bzip2 (`.tar.bz2`, `.tbz2`, `.tbz`).
+    TarBz2,
+    /// A 7z archive.
+    SevenZ,
+    /// A RAR archive; read by the `unrar` program of the system, so only a pane opens one.
+    Rar,
+    /// One gzip-compressed file (`.gz` that is not a tar): an archive of a single entry.
+    Gz,
 }
 
 /// A viewer session that was opened on a file.

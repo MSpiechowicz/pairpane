@@ -41,6 +41,7 @@ export function conflict(jobId: number, question = 1, extra: Partial<ConflictInf
     source: { size: 4096, modified: Date.UTC(2026, 10, 20, 12, 0), dir: false },
     target: { size: 2048, modified: Date.UTC(2026, 10, 19, 12, 0), dir: false },
     suggested: 'a (2).pdf',
+    comparable: true,
     ...extra,
   };
 }

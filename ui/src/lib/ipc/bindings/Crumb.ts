@@ -3,4 +3,9 @@
 /**
  * One step of the path bar: a folder name and the full path to open it.
  */
-export type Crumb = { name: string, path: string, };
+export type Crumb = { name: string, path: string, 
+/**
+ * For a step inside an archive: the folder path inside it (`""` for the archive's root, which is the crumb with the
+ * archive's name); `path` is then the archive's path. Absent for a real folder.
+ */
+inside?: string, };

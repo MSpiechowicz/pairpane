@@ -9,7 +9,8 @@
 //! - [`ViewFile::read_at`] and [`ViewFile::size`]: raw bytes at an offset (the hex view, images, PDF, media).
 //! - [`text_window`]: lines of a text file from or up to a byte offset, in any encoding.
 //! - [`search`]: the next or previous match of a text or byte needle, scanned in chunks, cancellable.
-//! - [`markdown`]: a Markdown file as a tree of plain data; [`archive`]: the entries of a zip, tar or tar.gz. Both take
+//! - [`markdown`]: a Markdown file as a tree of plain data; [`archive`]: the entries of a zip, tar (plain or compressed)
+//!   or 7z, as [`crate::archive`] reads them. Both take
 //!   a cancel flag (raised when the session ends) and then fail with `Interrupted`.
 //! - [`decode_heic`]: a HEIC picture as RGBA pixels, decoded by the codecs the system has (libheif on Linux, the Windows
 //!   Imaging Component on Windows) and never by a codec of the app; it fails with `Unsupported` when there is none. The
@@ -37,9 +38,7 @@ mod open;
 pub mod range;
 mod search;
 mod sniff;
-mod tar_list;
 mod text;
-mod zip_list;
 
 #[cfg(test)]
 mod archive_limit_tests;
