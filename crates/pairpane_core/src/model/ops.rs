@@ -34,6 +34,8 @@ pub enum OpKind {
     AddToArchive,
     /// Renames items of one folder, each to a new name.
     Rename,
+    /// Copies what differs between two folders, each item the way the synchronization chose.
+    Sync,
 }
 
 /// Where a running job is. Runs in this order; `waiting` and `cancelling` can interrupt the later steps.

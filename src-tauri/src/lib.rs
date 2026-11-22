@@ -52,6 +52,7 @@ pub fn run() -> ExitCode {
             app.manage(commands::view::Viewer::default());
             app.manage(commands::archives::Archives::default());
             app.manage(commands::find::Finder::default());
+            app.manage(commands::compare::Comparer::default());
             // Files an earlier run left in the temporary folder (an entry opened in the viewer is deleted at once).
             tauri::async_runtime::spawn_blocking(commands::view::archive_entry::sweep);
             // The same for the staging folders of an unpacking that a crash left (a RAR unpacked by `unrar`).
@@ -97,6 +98,9 @@ pub fn run() -> ExitCode {
             commands::find::find_cancel,
             commands::find::find_forget,
             commands::find::list::find_open,
+            commands::compare::compare_start,
+            commands::compare::compare_cancel,
+            commands::compare::compare_forget,
             commands::volumes::volumes_list,
             commands::state::state_load,
             commands::state::state_save,
@@ -110,6 +114,7 @@ pub fn run() -> ExitCode {
             commands::ops::ops_rename,
             commands::ops::tasks::ops_task,
             commands::ops::ops_rename_undo,
+            commands::compare::ops_sync,
             commands::renames::rename_preview,
             commands::items::ops_trash,
             commands::items::ops_untrash,
@@ -148,6 +153,9 @@ pub fn run() -> ExitCode {
                     // First: a search that runs stops its walk (it may be on a slow disk) before anything waits.
                     if let Some(finder) = app.try_state::<commands::find::Finder>() {
                         finder.shut_down();
+                    }
+                    if let Some(comparer) = app.try_state::<commands::compare::Comparer>() {
+                        comparer.shut_down();
                     }
                     // An archive read that nobody cancels (a file opened in the viewer, a password check, the
                     // checks before an extraction) stops, so none starts `unrar` again while the staging folders go.

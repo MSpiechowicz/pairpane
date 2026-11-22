@@ -40,6 +40,7 @@
     pack: 'Pack',
     addToArchive: 'Add to archive',
     rename: 'Rename',
+    sync: 'Synchronize',
   } as const;
 
   /** The jobs that put things into a folder of their own: the row says where. */
