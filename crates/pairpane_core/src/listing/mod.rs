@@ -87,6 +87,7 @@ pub fn list_at(
         crumbs: crumbs(shown),
         total: count(names.len()),
         archive: None,
+        results: None,
     });
 
     let (mut dirs, mut files, mut bytes) = (0_u32, 0_u32, 0_u64);
@@ -219,8 +220,32 @@ fn describe(folder: &Path, name: &Name) -> Entry {
         return unread(name);
     }
 
+    let own = fs::symlink_metadata(folder.join(&name.os_name)).ok();
+
+    describe_known(folder, name, own)
+}
+
+/// The entry `name` of `folder` as a listing shows it, read now; `None` when it is gone or its name must not be opened
+/// (see `platform::is_unsafe_name`). For a caller that lists entries it found itself (a search's results).
+pub fn describe_present(folder: &Path, name: &str) -> Option<Entry> {
+    if platform::is_unsafe_name(name) {
+        return None;
+    }
+
+    let name = Name {
+        name: name.to_owned(),
+        os_name: OsString::from(name),
+        key: String::new(),
+        dir: false,
+    };
+    let own = fs::symlink_metadata(folder.join(&name.os_name)).ok()?;
+
+    Some(describe_known(folder, &name, Some(own)))
+}
+
+/// [`describe`] for an entry whose own metadata (not following a link) `own` is already read; `None` when it vanished.
+fn describe_known(folder: &Path, name: &Name, own: Option<Metadata>) -> Entry {
     let path = folder.join(&name.os_name);
-    let own = fs::symlink_metadata(&path).ok();
 
     let link = own
         .as_ref()
@@ -274,7 +299,7 @@ fn unread(name: &Name) -> Entry {
 }
 
 /// Last modification in milliseconds since the Unix epoch (negative before it).
-fn modified_millis(metadata: &Metadata) -> Option<i64> {
+pub(crate) fn modified_millis(metadata: &Metadata) -> Option<i64> {
     let modified = metadata.modified().ok()?;
 
     match modified.duration_since(UNIX_EPOCH) {
@@ -284,7 +309,7 @@ fn modified_millis(metadata: &Metadata) -> Option<i64> {
 }
 
 /// The path bar for `path`: one crumb per folder from the root down. The root is named as written (`/`, `C:\`).
-fn crumbs(path: &Path) -> Vec<Crumb> {
+pub fn crumbs(path: &Path) -> Vec<Crumb> {
     let mut crumbs: Vec<Crumb> = path
         .ancestors()
         .map(|ancestor| {

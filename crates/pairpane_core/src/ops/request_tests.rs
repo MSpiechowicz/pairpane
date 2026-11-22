@@ -111,8 +111,46 @@ fn a_pack_has_the_names_of_its_sources_plain_and_unique() {
 
     assert_eq!(submitted(zip(), &[]), Err(Refused::InvalidNames));
     assert_eq!(submitted(zip(), &["x", "x"]), Err(Refused::InvalidNames));
-    assert_eq!(submitted(zip(), &["d/x"]), Err(Refused::InvalidNames));
     assert_eq!(submitted(zip(), &[".."]), Err(Refused::InvalidNames));
+}
+
+#[test]
+fn a_pack_takes_relative_paths_of_plain_names_none_inside_another() {
+    let zip = || pack("a.zip", options(PackFormat::Zip));
+
+    assert_eq!(submitted(zip(), &["a/b.txt", "c/d/e.txt", "f"]), Ok(()));
+    assert_eq!(submitted(zip(), &["a/b", "a/c", "ab"]), Ok(()));
+
+    for names in [
+        &["../x"][..],
+        &["a/../x"],
+        &["/abs"],
+        &["a//b"],
+        &["a/./b"],
+        &["./a/b"],
+        &["a/"],
+        &["a/b\\c"],
+        &["a/b\0c"],
+        &["a/b", "a/b"],
+        &["a", "a/b"],
+        &["a/b/c", "x", "a/b"],
+    ] {
+        assert_eq!(submitted(zip(), names), Err(Refused::InvalidNames), "{names:?}");
+    }
+
+    let long = format!("a/{}", "x".repeat(300));
+    assert_eq!(submitted(zip(), &[&long]), Err(Refused::InvalidNames));
+}
+
+#[test]
+fn only_a_pack_takes_relative_paths() {
+    for task in [Task::Transfer, add("a.zip", ""), Task::Split { part_size: u64::MAX }] {
+        assert_eq!(
+            submitted(task.clone(), &["a/b"]),
+            Err(Refused::InvalidNames),
+            "{task:?}"
+        );
+    }
 }
 
 #[test]

@@ -17,7 +17,9 @@ use std::time::Duration;
 
 use pairpane_core::listing::platform;
 use pairpane_core::model::{Answer, ControlAction, IpcError, IpcErrorCode, JobId, OpKind, OpsEvent};
-use pairpane_core::ops::{Engine, MAX_NAMES, MAX_NAMES_BYTES, Request, Task, name_fits, rename_in};
+use pairpane_core::ops::{
+    Engine, MAX_NAMES, MAX_NAMES_BYTES, Request, Task, has_nested_names, is_item_path, name_fits, rename_in,
+};
 use tauri::State;
 use tauri::async_runtime;
 use tauri::ipc::Channel;
@@ -204,16 +206,36 @@ fn request(kind: OpKind, from: String, names: Vec<String>, to: String, verify: b
 /// names together take at most [`MAX_NAMES_BYTES`], counted before duplicates are dropped); duplicates are dropped
 /// (first one kept) and what is left is between 1 and [`MAX_NAMES`].
 pub(super) fn checked_names(folder: &Path, names: Vec<String>) -> CommandResult<Vec<String>> {
+    unique_names(names, |name| check_name(folder, name))
+}
+
+/// [`checked_names`] for the items of a pack, which may also be paths below `folder` (`a/b.txt`, each part a plain
+/// name that fits): none may be inside another (`a` and `a/b`).
+pub(super) fn checked_item_paths(folder: &Path, names: Vec<String>) -> CommandResult<Vec<String>> {
+    let names = unique_names(names, |name| check_item_path(folder, name))?;
+
+    if has_nested_names(&names) {
+        return Err(CommandError::new(
+            IpcErrorCode::InvalidInput,
+            "an item cannot be chosen together with a folder that holds it",
+        ));
+    }
+
+    Ok(names)
+}
+
+/// The names of `names` that are not repeated, each passing `check` and every part of it short enough.
+fn unique_names(names: Vec<String>, check: impl Fn(&str) -> CommandResult<()>) -> CommandResult<Vec<String>> {
     let mut seen = HashSet::new();
     let mut unique = Vec::new();
     let mut bytes = 0_usize;
     for name in names {
         // First: the size of a name bounds the work on it, and the total bounds the work on the list.
         bytes = bytes.saturating_add(name.len());
-        if !name_fits(&name) || bytes > MAX_NAMES_BYTES {
+        if !name.split('/').all(name_fits) || bytes > MAX_NAMES_BYTES {
             return Err(names_too_large());
         }
-        check_name(folder, &name)?;
+        check(&name)?;
 
         if seen.contains(&name) {
             continue;
@@ -230,6 +252,18 @@ pub(super) fn checked_names(folder: &Path, names: Vec<String>) -> CommandResult<
     }
 
     Ok(unique)
+}
+
+/// An item of a pack is a plain name or a relative path of them whose path inside `folder` passes the folder rules.
+fn check_item_path(folder: &Path, name: &str) -> CommandResult<()> {
+    if !is_item_path(name) {
+        return Err(CommandError::new(
+            IpcErrorCode::InvalidInput,
+            "an item must be a plain name or a path of plain names below the folder",
+        ));
+    }
+
+    platform::check_folder(&folder.join(name)).map_err(|reason| CommandError::new(IpcErrorCode::InvalidInput, reason))
 }
 
 /// A name is a single plain name whose path inside `folder` passes the folder rules.

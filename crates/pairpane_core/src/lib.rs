@@ -6,10 +6,11 @@
 //! 1. [`model`]: serde + ts-rs DTOs that form the IPC contract (generated TypeScript bindings).
 //! 2. Rules that need no Tauri, tested here: [`listing`] (folder listings and change watching), [`volumes`]
 //!    (the drive list), [`ops`] (copy and move jobs), [`state`] (what is saved between runs), [`settings`] (the file the user edits), [`update`] (in-app updater),
-//!    [`view`] (the file viewer), [`edit`] (the built-in text editor), [`archive`] (reading archives).
+//!    [`view`] (the file viewer), [`edit`] (the built-in text editor), [`archive`] (reading archives), [`find`] (searching a folder tree).
 
 pub mod archive;
 pub mod edit;
+pub mod find;
 pub mod listing;
 pub mod model;
 pub mod ops;

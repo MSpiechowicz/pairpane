@@ -7,6 +7,7 @@
 mod app;
 mod archive;
 mod edit;
+mod find;
 mod ipc_error;
 mod items;
 mod listing;
@@ -22,6 +23,7 @@ mod volume;
 pub use app::AppInfo;
 pub use archive::ArchiveSpot;
 pub use edit::{EditDocument, EditOpened, EditSaveOptions, EditSaved, ExternalEdit, LineEnding};
+pub use find::{FindCriteria, FindEvent, FindHit, FindId, FindQuery, FindText, SavedSearch, Tri};
 pub use ipc_error::{IpcError, IpcErrorCode};
 pub use items::{LinkKind, TrashOutcome};
 pub use listing::{Crumb, Entry, EntryKind, ListEvent, PaneId, SizeEvent};

@@ -159,6 +159,7 @@ fn list_archive(
             archive: target.path.to_string_lossy().into_owned(),
             dir: dir.to_owned(),
         }),
+        results: None,
     });
 
     let mut offset = 0;

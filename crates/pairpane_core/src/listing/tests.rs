@@ -98,6 +98,7 @@ fn start_batches_and_done_describe_the_folder() {
         crumbs,
         total,
         archive,
+        ..
     } = &events[0]
     else {
         panic!("first event is start: {:?}", events[0]);

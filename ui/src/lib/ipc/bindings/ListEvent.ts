@@ -2,6 +2,7 @@
 import type { ArchiveSpot } from "./ArchiveSpot";
 import type { Crumb } from "./Crumb";
 import type { Entry } from "./Entry";
+import type { FindId } from "./FindId";
 import type { IpcError } from "./IpcError";
 
 /**
@@ -20,7 +21,12 @@ crumbs: Array<Crumb>, total: number,
 /**
  * Set when the listing is a folder inside an archive: then `path` is the folder that holds the archive.
  */
-archive?: ArchiveSpot, } | { "kind": "batch", offset: number, entries: Array<Entry>, } | { "kind": "done", dirs: number, files: number, 
+archive?: ArchiveSpot, 
+/**
+ * Set when the listing is the results of a search: then `path` is the folder searched and every entry's name is
+ * its path below it.
+ */
+results?: FindId, } | { "kind": "batch", offset: number, entries: Array<Entry>, } | { "kind": "done", dirs: number, files: number, 
 /**
  * Sum of the file sizes.
  */

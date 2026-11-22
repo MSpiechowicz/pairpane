@@ -2,9 +2,10 @@
 //!
 //! Like `ops_start`, the command checks syntax only and touches no disk: the archive's path passes [`Target::parse`], its
 //! extension must be the one of the format chosen (the engine writes the format asked for, and a name that says another
-//! would be opened as that), and the folder and the names pass the checks every job has. The password travels inside the
-//! job, wrapped in a [`Password`] as soon as it arrives, and is never kept by the app: a pack job is the only one that
-//! writes with it, and the page asks again for the next archive.
+//! would be opened as that), and the folder and the names pass the checks every job has (a name of a pack may also be a
+//! relative path below the folder, which is how the results of a search are packed together). The password travels
+//! inside the job, wrapped in a [`Password`] as soon as it arrives, and is never kept by the app: a pack job is the only
+//! one that writes with it, and the page asks again for the next archive.
 
 use std::sync::Arc;
 
@@ -13,13 +14,13 @@ use pairpane_core::model::{ArchiveFormat, IpcErrorCode, JobId, PackFormat, PackL
 use pairpane_core::ops::{PackJob, Request, Task};
 use tauri::State;
 
-use super::{Ops, checked_names, failed};
+use super::{Ops, checked_item_paths, failed};
 use crate::commands::archives::{Target, checked_password};
 use crate::commands::panes::resolve;
 use crate::error::{CommandError, CommandResult};
 
-/// Packs the `names` of the folder `from` into the new archive `archive` (an absolute path, with the extension of the
-/// `format`) and returns the job's id at once. An empty `password` means none; a tar.zst cannot have one. `encrypt_names`
+/// Packs the `names` of the folder `from` (plain names, or paths of them below it: see [`checked_item_paths`]) into the
+/// new archive `archive` (an absolute path, with the extension of the `format`) and returns the job's id at once. An empty `password` means none; a tar.zst cannot have one. `encrypt_names`
 /// only counts for a 7z with a password. Nothing is read from the disk here: a taken name is asked about by the job.
 #[tauri::command]
 #[expect(
@@ -83,7 +84,7 @@ fn pack_request(from: String, names: Vec<String>, archive: String, options: Pack
         ));
     }
     let from = resolve(Some(from), None)?;
-    let names = checked_names(&from, names)?;
+    let names = checked_item_paths(&from, names)?;
 
     let task = Task::Pack {
         name: target.name,

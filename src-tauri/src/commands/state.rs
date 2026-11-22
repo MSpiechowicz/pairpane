@@ -156,6 +156,7 @@ mod tests {
             left: pane(),
             right: pane(),
             hotlist: Vec::new(),
+            searches: Vec::new(),
         }
     }
 

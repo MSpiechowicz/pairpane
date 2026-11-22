@@ -6,6 +6,7 @@ use crate::archive;
 use crate::listing::platform;
 use crate::model::{ArchiveFormat, AttributeChange, ModeChange, OpKind, PackFormat};
 
+use super::transfer::MAX_DEPTH;
 use super::{MAX_NAME_UNITS, MAX_NAMES, MAX_NAMES_BYTES, MIN_PART_SIZE, PackJob, Refused, Request, Task};
 
 /// The Unix permission bits a mask of a mode change may use (with setuid, setgid and sticky).
@@ -31,15 +32,47 @@ pub fn name_fits(name: &str) -> bool {
     name_units(name) <= MAX_NAME_UNITS
 }
 
+/// Whether `name` is an item of a pack job: a plain file name, or a path below the folder of the items made of plain
+/// names (`a/b.txt`: [`archive::normalize`] leaves it as it is, and it is not nested deeper than the walk goes). A name
+/// of one part is judged as every other job judges its names, whatever it holds.
+pub fn is_item_path(name: &str) -> bool {
+    if !name.contains('/') {
+        return platform::is_plain_name(name);
+    }
+
+    let normal = matches!(archive::normalize(name), Ok(Some(ref plain)) if plain == name);
+
+    normal && name.split('/').count() <= MAX_DEPTH
+}
+
+/// Whether one of `names` is a folder that another is in (`a` and `a/b`): packing both would put the same file in the
+/// archive twice.
+#[must_use]
+pub fn has_nested_names(names: &[String]) -> bool {
+    let all: HashSet<&str> = names.iter().map(String::as_str).collect();
+
+    names
+        .iter()
+        .any(|name| name.match_indices('/').any(|(at, _)| all.contains(&name[..at])))
+}
+
 /// Refuses what `submit` can tell without the disk: no names, too many, a name twice, one that is not a plain file
-/// name, one that is too long, names that together take more than [`MAX_NAMES_BYTES`], or a task that does not
-/// fit the request (see [`validate_task`]).
+/// name (for a pack: a plain name or a relative path, none inside another), one that is too long, names that together
+/// take more than [`MAX_NAMES_BYTES`], or a task that does not fit the request (see [`validate_task`]).
 pub(super) fn validate(request: &Request) -> Result<(), Refused> {
     if request.names.is_empty() {
         return Err(Refused::InvalidNames);
     }
 
-    check_names(&request.names)?;
+    if matches!(request.task, Task::Pack { .. }) {
+        check_names_with(&request.names, is_item_path)?;
+
+        if has_nested_names(&request.names) {
+            return Err(Refused::InvalidNames);
+        }
+    } else {
+        check_names(&request.names)?;
+    }
 
     validate_task(request)
 }
@@ -47,6 +80,11 @@ pub(super) fn validate(request: &Request) -> Result<(), Refused> {
 /// Refuses more than [`MAX_NAMES`] names, a name twice, one that is not a plain file name, one that is too long, and
 /// names that together take more than [`MAX_NAMES_BYTES`].
 fn check_names(names: &[String]) -> Result<(), Refused> {
+    check_names_with(names, platform::is_plain_name)
+}
+
+/// [`check_names`] for names that are spelled right when `spelled` says so; each part of a path has to fit.
+fn check_names_with(names: &[String], spelled: impl Fn(&str) -> bool) -> Result<(), Refused> {
     if names.len() > MAX_NAMES {
         return Err(Refused::InvalidNames);
     }
@@ -55,12 +93,12 @@ fn check_names(names: &[String]) -> Result<(), Refused> {
     let mut bytes = 0_usize;
 
     for name in names {
-        if !platform::is_plain_name(name) || !seen.insert(name.as_str()) {
+        if !spelled(name) || !seen.insert(name.as_str()) {
             return Err(Refused::InvalidNames);
         }
 
         bytes = bytes.saturating_add(name.len());
-        if !name_fits(name) || bytes > MAX_NAMES_BYTES {
+        if !name.split('/').all(name_fits) || bytes > MAX_NAMES_BYTES {
             return Err(Refused::NamesTooLarge);
         }
     }

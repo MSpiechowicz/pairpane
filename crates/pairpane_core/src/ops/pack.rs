@@ -1,6 +1,9 @@
 //! Packing files into a new archive as a job: the items of the source folder (folders with all below them) are written
 //! into a zip, a tar.zst or a 7z in the target folder.
 //!
+//! An item is a name in the source folder or a path below it (see `pack_items`, which finds each one step by step without
+//! following a link); it is stored under that path.
+//!
 //! The tree is walked first (see `tree`: no link is followed, names in order, a folder before what is in it) and the
 //! entries are planned: a file's size and mode and time, and how to open it again. A link or a special file is not packed
 //! but counted as skipped, an empty folder is kept, and what the archive readers would refuse (a name that is not text or
@@ -34,7 +37,7 @@ use crate::model::{FileFacts, JobPhase};
 use super::PackJob;
 use super::conflict::Place;
 use super::extract_write::CHECK_EVERY;
-use super::held::{Held, Node};
+use super::held::Held;
 use super::partial::{Partial, run_token};
 use super::report::refusal;
 use super::task::{as_text, create_private};
@@ -386,11 +389,11 @@ impl Run<'_> {
         let job = self.job;
         let request = &job.request;
 
-        let (root, items) = self.sorted_items()?;
+        let (root, names) = self.sorted_names()?;
         let to = self.target_folder(&request.to)?;
 
         self.phase(JobPhase::Scanning);
-        let plan = self.plan_entries(&root, &items)?;
+        let plan = self.plan_entries(&root, &names)?;
 
         // A job whose every item failed has nothing to write: the items' errors say why.
         if plan.entries.is_empty() {
@@ -430,28 +433,6 @@ impl Run<'_> {
         }
 
         Ok(())
-    }
-
-    /// Walks the `items` of the folder `root` and plans the entries.
-    fn plan_entries(&mut self, root: &Arc<Held>, items: &[Node]) -> Result<Plan, Stop> {
-        let mut plan = Plan::new(self, root, String::new(), self.pack_limits());
-
-        self.walk_items(root, items, &mut plan)?;
-
-        Ok(plan)
-    }
-
-    /// The folder of the job's items, held, and the items in it in name order: the order of the entries of an archive does
-    /// not depend on the order the items were selected in.
-    pub(super) fn sorted_items(&mut self) -> Result<(Arc<Held>, Vec<Node>), Stop> {
-        let request = &self.job.request;
-
-        let from = self.open_folders(&[&request.from, &request.to])?;
-        let root = Arc::new(Held::root(&from)?);
-        let mut items = self.look_up_items(&root);
-        items.sort_by(|a, b| a.name.cmp(&b.name));
-
-        Ok((root, items))
     }
 
     /// The most entries, and the most bytes of names, an archive takes.

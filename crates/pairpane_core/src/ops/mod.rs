@@ -118,6 +118,7 @@ mod meta;
 mod open;
 mod origin;
 mod pack;
+mod pack_items;
 mod partial;
 mod plan;
 mod progress;
@@ -191,6 +192,8 @@ mod origin_tests;
 #[cfg(test)]
 mod pack_conflict_tests;
 #[cfg(test)]
+mod pack_items_tests;
+#[cfg(test)]
 mod pack_tests;
 #[cfg(all(test, unix))]
 mod pack_unix_tests;
@@ -218,7 +221,7 @@ pub(crate) use open::create_new;
 pub(crate) use partial::{Partial, run_token};
 pub use request::{AnswerError, PackJob, Refused, Request, Task, UnknownJob};
 pub use trash::{CAN_UNTRASH, Trashed, UntrashFailure};
-pub use validate::name_fits;
+pub use validate::{has_nested_names, is_item_path, name_fits};
 
 use std::io;
 use std::path::{Path, PathBuf};

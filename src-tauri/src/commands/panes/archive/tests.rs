@@ -91,6 +91,7 @@ fn the_root_of_a_tar_is_listed_folders_first_with_the_crumbs_of_its_place() {
         crumbs,
         total,
         archive: spot,
+        ..
     } = &events[0]
     else {
         panic!("start comes first: {events:?}");

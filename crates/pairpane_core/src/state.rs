@@ -62,6 +62,7 @@ pub fn clean(state: SavedState) -> SavedState {
         left: clean_pane(state.left),
         right: clean_pane(state.right),
         hotlist,
+        searches: state.searches,
     }
 }
 
