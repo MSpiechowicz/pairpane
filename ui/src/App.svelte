@@ -3,8 +3,12 @@
 
   import CompareTools from '$lib/compare/CompareTools.svelte';
   import { Comparison } from '$lib/compare/controller.svelte';
+  import { FileDiff } from '$lib/diff/fileDiff.svelte';
+  import DiffOverlay from '$lib/diff/DiffOverlay.svelte';
+  import { pickFiles } from '$lib/diff/pick';
   import { Editor } from '$lib/editor/editor.svelte';
   import EditorOverlay from '$lib/editor/EditorOverlay.svelte';
+  import { Unsaved } from '$lib/editor/unsaved';
   import FindDialog from '$lib/find/FindDialog.svelte';
   import { Finder } from '$lib/find/finder.svelte';
   import { goTo } from '$lib/find/goto';
@@ -33,6 +37,7 @@
   import Pane from '$lib/shell/Pane.svelte';
   import { Session } from '$lib/shell/session.svelte';
   import { isTyping, reloadsPage, shortcutFor } from '$lib/shell/shortcuts';
+  import { switchesPane } from '$lib/shell/switchPane';
   import Splash from '$lib/shell/Splash.svelte';
   import { Theme } from '$lib/shell/theme.svelte';
   import Toast from '$lib/shell/Toast.svelte';
@@ -101,15 +106,28 @@
   const files = new FileActions(ipc, panes, () => active);
   const comparison = new Comparison(ipc, panes, (text, error) => files.say(text, error), () => showHidden);
   const viewer = new Viewer(ipc, panes, () => active);
-  const editor = new Editor(ipc, {
-    under: () => viewer.under,
+  // The editor and the diff both hold text that is not saved: the backend hears of the two as one.
+  const unsaved = new Unsaved(ipc);
+  const editor = new Editor(
+    ipc,
+    {
+      under: () => viewer.under,
+      say: (text, error) => files.say(text, error),
+      view: (target, notice) => viewer.openAt(target, notice),
+      blocked: (): boolean => diff.busy,
+    },
+    unsaved,
+  );
+  const diff = new FileDiff(ipc, unsaved, {
+    pick: () =>
+      pickFiles({ active: panes[active].view, other: panes[active === 'left' ? 'right' : 'left'].view, side: active, quick: viewer.quick }),
     say: (text, error) => files.say(text, error),
-    view: (target, notice) => viewer.openAt(target, notice),
+    blocked: (): boolean => editor.busy,
   });
   const question = $derived(transfers.question);
   /** A dialog (or the viewer's or editor's overlay) has the keyboard: the shortcuts and Tab are its own then. */
   const modal = $derived(
-    files.modal || question !== undefined || viewer.modal || editor.modal || passwords.modal || finder.modal || comparison.modal,
+    files.modal || question !== undefined || viewer.modal || editor.modal || diff.modal || passwords.modal || finder.modal || comparison.modal,
   );
 
   /** Alt+F7: the Find dialog, on the folder the active pane shows (inside an archive: the folder that holds it). */
@@ -146,40 +164,21 @@
   }
 
   const theme = new Theme();
-  // A restart cannot be stopped once it has begun: an editor with changes asks before it.
+  // A restart cannot be stopped once it has begun: an editor or a diff with changes asks before it.
   const updates = new Updates(
     ipc,
     () => info?.version,
-    () => editor.confirmDiscard(),
+    async () => (await editor.confirmDiscard()) && (await diff.confirmDiscard()),
   );
   // macOS has a native app menu (with "Check for Updates…"); Windows and Linux have only the top bar.
   const nativeMenu = /Mac/.test(navigator.userAgent);
 
-  /**
-   * Tab switches the active pane while focus is in a pane's list or nowhere (the page itself). In the top bar, the
-   * menus (a pane's dropdowns too), the dock and a pane's text fields (the mask prompt) it moves focus as usual,
-   * so every control stays reachable from the keyboard. While the quick view is open there is one pane to work in.
-   */
+  /** Tab switches the active pane (see {@link switchesPane}). */
   function switchPane(event: KeyboardEvent) {
-    const target = event.target;
-    const inPane = target === document.body || (target instanceof Element && target.closest('[data-pane]'));
-    const inMenu = target instanceof Element && target.closest('[data-menu]') !== null;
-    if (
-      viewer.quick ||
-      event.key !== 'Tab' ||
-      event.shiftKey ||
-      event.ctrlKey ||
-      event.altKey ||
-      event.metaKey ||
-      !inPane ||
-      inMenu ||
-      isTyping(target)
-    ) {
-      return;
+    if (switchesPane(event, viewer.quick)) {
+      event.preventDefault();
+      active = active === 'left' ? 'right' : 'left';
     }
-
-    event.preventDefault();
-    active = active === 'left' ? 'right' : 'left';
   }
 
   /** Opens a dropdown under a pane's header; that pane becomes the active one. */
@@ -256,6 +255,9 @@
       case 'edit':
         edit();
         break;
+      case 'compareFiles':
+        diff.open();
+        break;
       case 'quickView':
         viewer.toggleQuick();
         break;
@@ -282,6 +284,8 @@
   function chooseFile(choice: FilesChoice) {
     if (choice === 'editBuiltin') {
       edit(true);
+    } else if (choice === 'compareFiles') {
+      diff.open();
     } else if (choice === 'find') {
       find();
     } else if (choice === 'compare' || choice === 'synchronize') {
@@ -315,7 +319,8 @@
           if (command === 'checkForUpdates') {
             void updates.check(true);
           } else if (command === 'closeRequested') {
-            void editor.onCloseRequested();
+            // Each overlay with changes is asked about, one after the other.
+            void editor.onCloseRequested(() => diff.discard());
           }
         },
       });
@@ -450,6 +455,8 @@
 {#if editor.session}
   <EditorOverlay {editor} session={editor.session} />
 {/if}
+
+<DiffOverlay {diff} />
 
 <Splash onEnd={focusActiveList} />
 

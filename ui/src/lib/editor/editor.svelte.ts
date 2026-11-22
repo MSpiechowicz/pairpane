@@ -6,27 +6,9 @@ import { focusActiveList } from '$lib/panes/focus';
 import { displayName, formatSize } from '$lib/panes/format';
 import type { Target, Under } from '$lib/viewer/viewer.svelte';
 
+import { type Discard, type Question, SaveFlow } from './saveFlow.svelte';
 import { EditSession } from './session.svelte';
-
-/** What the user answers a question with. */
-export type Answer = 'confirm' | 'alternate' | 'cancel';
-
-/** How a save that something asked for ended: written, not written (refused, or given up), or its question was replaced. */
-type Written = 'saved' | 'failed' | 'replaced';
-
-/** What may be done with the buffer: thrown away, kept, or the question about it was replaced by another one. */
-type Discard = 'go' | 'stay' | 'replaced';
-
-/** A question the editor asks: up to three buttons (the third is Cancel, and so is Escape). */
-export interface Question {
-  title: string;
-  message?: string;
-  confirm: string;
-  alternate?: string;
-  /** The first button cannot be taken back: the focus starts on Cancel. */
-  danger?: boolean;
-  answer: (answer: Answer) => void;
-}
+import { Unsaved } from './unsaved';
 
 export interface EditorHooks {
   /** What the active pane's cursor is on. */
@@ -35,6 +17,8 @@ export interface EditorHooks {
   say: (text: string, error: boolean) => void;
   /** Shows a file in the viewer (when it is too large to edit). */
   view: (target: Target, notice: string) => void;
+  /** Whether another overlay (the diff) is being opened or is open: only one at a time. */
+  blocked?: () => boolean;
 }
 
 /**
@@ -43,19 +27,26 @@ export interface EditorHooks {
  */
 export class Editor {
   session = $state.raw<EditSession | undefined>();
-  question = $state.raw<Question | undefined>();
 
   readonly #ipc: Transport;
   readonly #hooks: EditorHooks;
+  readonly #unsaved: Unsaved;
+  readonly #flow: SaveFlow;
   #opening = false;
-  /** The save that is under way (with whatever it asks), so that a second request joins it instead of being lost. */
-  #saving: Promise<Written> | undefined;
-  /** Ends the question on the screen as replaced (nobody is left waiting for it). */
-  #replace: (() => void) | undefined;
 
-  constructor(ipc: Transport, hooks: EditorHooks) {
+  constructor(ipc: Transport, hooks: EditorHooks, unsaved: Unsaved = new Unsaved(ipc)) {
     this.#ipc = ipc;
     this.#hooks = hooks;
+    this.#unsaved = unsaved;
+    this.#flow = new SaveFlow(ipc, unsaved, {
+      reload: () => this.reload(),
+      isOpen: (session) => this.session === session,
+    });
+  }
+
+  /** The question on the screen: about a file that changed on disk, or about changes that would be lost. */
+  get question(): Question | undefined {
+    return this.#flow.question;
   }
 
   /** The overlay has the keyboard: the shortcuts and Tab are its own then. */
@@ -65,6 +56,11 @@ export class Editor {
 
   get dirty(): boolean {
     return this.session?.dirty === true;
+  }
+
+  /** An editor is being opened or is open (what keeps the diff from opening beside it). */
+  get busy(): boolean {
+    return this.#opening || this.session !== undefined;
   }
 
   /** F4 on the active cursor: a folder, `..` and an empty pane have nothing to edit. */
@@ -77,7 +73,7 @@ export class Editor {
 
   /** Opens `target`: in the external editor unless `builtin` (or none is set up), else in the overlay. */
   async open(target: Target, { builtin }: { builtin: boolean }) {
-    if (this.#opening || this.session !== undefined) {
+    if (this.busy || this.#hooks.blocked?.() === true) {
       return;
     }
 
@@ -89,7 +85,7 @@ export class Editor {
         return;
       }
 
-      const session = new EditSession(this.#ipc, path, name, (dirty) => this.#publish(dirty));
+      const session = new EditSession(this.#ipc, path, name, (dirty) => this.#unsaved.report('editor', dirty));
       const opened = await session.open(null);
       if (opened.kind === 'text' || opened.kind === 'undecodable') {
         this.session = session;
@@ -110,11 +106,6 @@ export class Editor {
     } else {
       this.#hooks.say(`${displayName(target.name)} is not a text file; F3 views it.`, true);
     }
-  }
-
-  /** The backend is told whether a window close would lose changes, so that it asks before it closes. */
-  #publish(dirty: boolean) {
-    this.#ipc.invoke('editor_set_dirty', { dirty }).catch(() => {});
   }
 
   /** The encoding select: reads the file again in it, or (with changes in the buffer) changes only how it is saved. */
@@ -151,99 +142,15 @@ export class Editor {
    * Asked again while a save is under way, it waits for that one.
    */
   async save(): Promise<boolean> {
-    return (await this.#start()) === 'saved';
-  }
-
-  #start(): Promise<Written> {
     const session = this.session;
-    if (session === undefined) {
-      return Promise.resolve('failed');
-    }
 
-    if (this.#saving === undefined) {
-      const saving = this.#write(session).finally(() => {
-        if (this.#saving === saving) {
-          this.#saving = undefined;
-        }
-      });
-      this.#saving = saving;
-    }
-
-    return this.#saving;
-  }
-
-  async #write(session: EditSession): Promise<Written> {
-    let result = await session.save(false);
-    if (result === 'failed' && session.failure === undefined) {
-      // A refusal that came before anything was sent still has to be seen (a save on the way out never ends silently).
-      session.failure = `${session.name} was not saved.`;
-    }
-
-    if (result === 'changed') {
-      return this.#overChanged(session);
-    }
-
-    return result === 'saved' ? 'saved' : 'failed';
-  }
-
-  /** Asks what to do with a file that changed (or went) since it was read. */
-  async #overChanged(session: EditSession): Promise<Written> {
-    const gone = session.gone;
-    const answer = await this.#ask({
-      title: gone ? 'The file was removed' : 'The file changed on disk',
-      message: gone
-        ? `${session.name} was removed by something else since it was opened.`
-        : `${session.name} was changed by something else since it was opened.`,
-      confirm: gone ? 'Save anyway' : 'Overwrite',
-      alternate: gone ? undefined : 'Reload',
-      danger: !gone,
-    });
-
-    if (answer === 'replaced') {
-      return 'replaced';
-    }
-
-    if (answer === 'confirm') {
-      return (await session.save(true)) === 'saved' ? 'saved' : 'failed';
-    }
-
-    if (answer === 'alternate') {
-      await this.reload();
-    }
-
-    return 'failed';
-  }
-
-  /** A question that is replaced by another is resolved as `replaced`, not as cancelled: its caller must not act. */
-  #ask(question: Omit<Question, 'answer'>): Promise<Answer | 'replaced'> {
-    this.#replace?.();
-
-    return new Promise((resolve) => {
-      const done = () => {
-        if (this.question === asked) {
-          this.question = undefined;
-          this.#replace = undefined;
-        }
-      };
-      const asked: Question = {
-        ...question,
-        answer: (answer) => {
-          done();
-          resolve(answer);
-        },
-      };
-
-      this.#replace = () => {
-        done();
-        resolve('replaced');
-      };
-      this.question = asked;
-    });
+    return session !== undefined && (await this.#flow.start(session)) === 'saved';
   }
 
   /** Esc and the Close button: closes, after asking when there are changes. */
   async requestClose() {
-    if (this.session !== undefined && (await this.#discard()) === 'go') {
+    const session = this.session;
+    if (session !== undefined && (await this.#flow.discard([session])) === 'go') {
       this.close();
     }
   }
@@ -253,90 +160,33 @@ export class Editor {
    * changed, else when the user chose Save (and it saved) or Don't save. A question replaced by another is not a yes.
    */
   async confirmDiscard(): Promise<boolean> {
-    return (await this.#discard()) === 'go';
+    return (await this.discard()) === 'go';
   }
 
-  /**
-   * The question is asked every time and never waits on a save that is under way: "Don't save" always gets the user
-   * out, even when a write hangs.
-   */
-  async #discard(): Promise<Discard> {
+  /** The question about the buffer's changes (none to ask about is a `go`); see {@link SaveFlow.discard}. */
+  async discard(): Promise<Discard> {
     const session = this.session;
-    if (session === undefined || !session.dirty) {
-      return 'go';
-    }
 
-    const answer = await this.#ask({
-      title: `Save changes to ${session.name}?`,
-      message: 'Your changes will be lost if you do not save them.',
-      confirm: 'Save',
-      alternate: "Don't save",
-    });
-
-    if (answer === 'replaced') {
-      return 'replaced';
-    }
-
-    if (answer === 'confirm') {
-      return this.#saveThenGo(session);
-    }
-
-    return answer === 'alternate' ? 'go' : 'stay';
-  }
-
-  /**
-   * Text typed while the save was under way is not in the file: it is saved once more, and whatever is still
-   * not saved after that keeps the editor open. Nothing typed is ever thrown away by a Save.
-   */
-  async #saveThenGo(session: EditSession): Promise<Discard> {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const written = await this.#start();
-      if (written !== 'saved') {
-        return written === 'replaced' ? 'replaced' : 'stay';
-      }
-
-      if (this.session !== session) {
-        return 'stay';
-      }
-
-      if (!session.dirty) {
-        return 'go';
-      }
-    }
-
-    return 'stay';
+    return session === undefined ? 'go' : this.#flow.discard([session]);
   }
 
   /** Closes the overlay; the list that had the focus takes it back. */
   close() {
-    this.session?.release();
+    const session = this.session;
+    session?.release();
     this.session = undefined;
-    // A save that never answered is not waited for by the next file.
-    this.#saving = undefined;
+    if (session !== undefined) {
+      // A save that never answered is not waited for by the next file.
+      this.#flow.forget(session);
+    }
     void tick().then(focusActiveList);
   }
 
-  /** The window was asked to close while a buffer has changes: it closes once the user has dealt with them. */
-  async onCloseRequested() {
-    // The question may take as long as the user wants: the backend is told it is being asked, so it does not give up.
-    this.#ipc.invoke('editor_close_ack', undefined).catch(() => {});
-
-    const discard = await this.#discard();
-    if (discard === 'replaced') {
-      // A later close request has its own question; only that one's answer acts.
-      return;
-    }
-
-    if (discard === 'go') {
-      await this.#ipc.invoke('app_close_confirmed', undefined).catch(() => {});
-
-      return;
-    }
-
-    // Kept open: telling the backend again that there are changes ends its pending close, so a later close asks
-    // again (an unanswered one is given up after a while and would let the window close without asking).
-    if (this.dirty) {
-      this.#ipc.invoke('editor_set_dirty', { dirty: true }).catch(() => {});
-    }
+  /**
+   * The window was asked to close while a buffer has changes: it closes once the user has dealt with them (and with
+   * whatever `next` asks about after them).
+   */
+  async onCloseRequested(next?: () => Promise<Discard>) {
+    await this.#flow.closeRequested(this.session === undefined ? [] : [this.session], next);
   }
 }

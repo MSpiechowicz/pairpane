@@ -46,7 +46,7 @@ pub use state::{SavedPane, SavedState, SavedTab, SortColumn};
 pub use tasks::{AttributeChange, HashAlgorithm, ItemProperties, JobTask, ModeChange, WindowsAttributes};
 pub use update::{MAX_UPDATE_NOTES_BYTES, MenuCommand, UpdateInfo, UpdatePhase, UpdateProgress};
 pub use view::{
-    ArchiveEntry, ArchiveFormat, ArchiveListing, SearchHit, SearchNeedle, SearchQuery, TextLine, TextQuery, TextWindow,
-    ViewKind, ViewOpened,
+    ArchiveEntry, ArchiveFormat, ArchiveListing, ByteDifference, SearchHit, SearchNeedle, SearchQuery, TextLine,
+    TextQuery, TextWindow, ViewKind, ViewOpened,
 };
 pub use volume::{Volume, VolumeEvent, VolumeKind};

@@ -1,10 +1,12 @@
 import { tick } from 'svelte';
 
 import { splitResult } from '$lib/find/results';
+import type { Entry } from '$lib/ipc/bindings/Entry';
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import type { Transport } from '$lib/ipc/transport';
 import { focusActiveList } from '$lib/panes/focus';
 import type { PaneTabs } from '$lib/panes/tabs.svelte';
+import type { PaneView } from '$lib/panes/view.svelte';
 
 import { ViewSession } from './session.svelte';
 
@@ -23,6 +25,21 @@ export type Under = Target | 'folder' | undefined;
 
 /** What the quick view shows: a session, the placeholder for a folder, or nothing. */
 export type QuickShown = ViewSession | 'folder' | undefined;
+
+/** The file `entry` of `view` as a target: a search result in the folder that holds it, an entry of an archive inside it. */
+export function fileTarget(view: PaneView, entry: Entry): Target {
+  const { archive, path, folder, results } = view.listing;
+  if (archive !== undefined) {
+    return { path: archive.archive, name: entry.name, inside: archive.dir };
+  }
+
+  if (results !== undefined) {
+    const { folder: holder, name } = splitResult(folder ?? '', entry.name);
+    return { path: holder, name };
+  }
+
+  return { path: path!, name: entry.name };
+}
 
 const sameTarget = (a: Under, b: Under) =>
   a === b || (typeof a === 'object' && typeof b === 'object' && a.path === b.path && a.name === b.name && a.inside === b.inside);
@@ -71,7 +88,7 @@ export class Viewer {
    */
   #look(): Under {
     const view = this.#panes[this.#active()].view;
-    const { archive, path, folder, results } = view.listing;
+    const { archive, path, results } = view.listing;
     if (path === undefined && archive === undefined && results === undefined) {
       return undefined;
     }
@@ -81,20 +98,7 @@ export class Viewer {
       return view.isUp(view.cursor) ? 'folder' : undefined;
     }
 
-    if (entry.kind === 'dir') {
-      return 'folder';
-    }
-
-    if (archive !== undefined) {
-      return { path: archive.archive, name: entry.name, inside: archive.dir };
-    }
-
-    if (results !== undefined) {
-      const { folder: holder, name } = splitResult(folder ?? '', entry.name);
-      return { path: holder, name };
-    }
-
-    return { path: path!, name: entry.name };
+    return entry.kind === 'dir' ? 'folder' : fileTarget(view, entry);
   }
 
   /** F3: the overlay for the file (or archive entry) under the cursor. A folder, `..` and an empty pane have nothing to view. */

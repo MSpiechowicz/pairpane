@@ -9,6 +9,9 @@ import type { EditorSurface } from './surface';
 /** How a save ended: the file is written, it changed (or went) on disk since it was read, or it was refused. */
 export type SaveResult = 'saved' | 'changed' | 'failed';
 
+/** How each line ending is written for the user. */
+export const ENDING_LABELS: Record<LineEnding, string> = { lf: 'LF', crlf: 'CRLF', cr: 'CR' };
+
 /** Whether the encoding can start with a byte order mark (UTF-8 and UTF-16; the others have none). */
 export const isUnicode = (encoding: string) => encoding === 'UTF-8' || encoding.startsWith('UTF-16');
 
@@ -27,6 +30,8 @@ export class EditSession {
   unreadable = $state('');
   readOnly = $state(false);
   mixedEndings = $state(false);
+  /** The file can no longer be read as text (a reload found bytes): what is shown stays, but cannot be changed or saved. */
+  unavailable = $state(false);
 
   /** What the file is saved in; changed by the user, it is no longer what the file was read with. */
   encoding = $state('UTF-8');
@@ -164,7 +169,7 @@ export class EditSession {
 
   /** Writes the text. `force` saves over a file that changed (or went) since it was read. */
   async save(force: boolean): Promise<SaveResult> {
-    if (this.status !== 'ready' || this.readOnly || this.saving) {
+    if (this.status !== 'ready' || this.readOnly || this.unavailable || this.saving) {
       return 'failed';
     }
 
@@ -198,6 +203,15 @@ export class EditSession {
     } finally {
       this.saving = false;
     }
+  }
+
+  /** A reload found something that is not text: the text on screen is kept as it was, locked, and `note` says why. */
+  retire(note: string) {
+    this.unavailable = true;
+    this.readOnly = true;
+    this.#surface?.setReadOnly(true);
+    this.failure = note;
+    this.#setDirty(false);
   }
 
   /** The editor is closed: what was changed is given up. */

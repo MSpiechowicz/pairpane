@@ -5,6 +5,6 @@ export type Menu = 'drives' | 'hotlist';
 
 /**
  * What the Files menu asks for: an action of the file keys, the file in the built-in editor (F4 may mean another), the
- * Find dialog, or one of the two ways to compare the panes' folders.
+ * Find dialog, one of the two ways to compare the panes' folders, or the comparison of two files.
  */
-export type FilesChoice = FileAction | 'editBuiltin' | 'find' | 'compare' | 'synchronize';
+export type FilesChoice = FileAction | 'editBuiltin' | 'find' | 'compare' | 'synchronize' | 'compareFiles';

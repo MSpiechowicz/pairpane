@@ -31,3 +31,50 @@ export interface SurfaceModule {
 
 /** The CodeMirror surface, loaded on first use: the editor's code stays out of the window until F4 needs it. */
 export const loadSurface = (): Promise<SurfaceModule> => import('./cm');
+
+/** One side of the diff. */
+export type MergeSide = 'left' | 'right';
+
+/** One file of the diff: its name (it picks the language), its text and whether it may be changed. */
+export interface MergeFile {
+  name: string;
+  text: string;
+  readOnly: boolean;
+}
+
+export interface MergeOptions {
+  parent: HTMLElement;
+  left: MergeFile;
+  right: MergeFile;
+  /** Ctrl+S inside the text of `side`. */
+  onSave: (side: MergeSide) => void;
+  /** How many changed blocks the two texts have now (told at the start and after each edit). */
+  onChunks: (count: number) => void;
+}
+
+/** The two texts side by side, with what differs marked. Each side is an editor of its own, with the same contract as the single one. */
+export interface MergeSurface {
+  left: EditorSurface;
+  right: EditorSurface;
+  /**
+   * The texts are so long, or so costly to compare, that every edit takes a noticeable time to diff again. The merge
+   * view diffs synchronously on each edit and cannot defer it, so the caller can only lighten what is drawn.
+   */
+  slow: boolean;
+  /** Moves to the next (previous) changed block, round the end, and scrolls to it. */
+  next(): void;
+  previous(): void;
+  /** Hides (or shows again) the long stretches that are the same in both. */
+  setCollapsed(collapsed: boolean): void;
+  /** The side that has the focus, or had it last. */
+  focusedSide(): MergeSide;
+  focus(side: MergeSide): void;
+  destroy(): void;
+}
+
+export interface MergeModule {
+  createMergeSurface(options: MergeOptions): MergeSurface;
+}
+
+/** The merge view, loaded on first use: the diff's code stays out of the window until the first comparison. */
+export const loadMerge = (): Promise<MergeModule> => import('./cmMerge');

@@ -28,6 +28,7 @@ export type Action =
   | 'transfers'
   | 'view'
   | 'edit'
+  | 'compareFiles'
   | 'quickView';
 
 /** Ctrl + key. (Ctrl on every OS: on macOS Cmd+W already closes the window and Cmd+Q quits the app.) */
@@ -87,13 +88,13 @@ function withAlt(event: KeyboardEvent): Action | undefined {
 }
 
 /**
- * A function key on its own, or Delete: F3 views the file, F4 edits it, F5 copies, F6 moves, Shift+F6 renames, F2 renames in place, F7 makes a
- * folder, Shift+F4 a file, F8 and Delete move to the Trash, Shift+F8 and Shift+Delete delete for good.
+ * A function key on its own, or Delete: F3 views the file, F4 edits it, F5 copies, F6 moves, Shift+F6 renames, F2 renames in place, Shift+F2
+ * compares two files, F7 makes a folder, Shift+F4 a file, F8 and Delete move to the Trash, Shift+F8 and Shift+Delete delete for good.
  */
 function functionKey(event: KeyboardEvent): Action | undefined {
   switch (event.key) {
     case 'F2':
-      return event.shiftKey ? undefined : 'renameInline';
+      return event.shiftKey ? 'compareFiles' : 'renameInline';
     case 'F3':
       return event.shiftKey ? undefined : 'view';
     case 'F4':

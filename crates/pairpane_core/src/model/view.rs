@@ -144,6 +144,25 @@ pub struct SearchQuery {
     pub backward: bool,
 }
 
+/// The answer of a search for the next place where two open files differ byte for byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[ts(export)]
+pub enum ByteDifference {
+    /// The offset of the first byte that differs; a byte only the longer file has differs too.
+    Found {
+        #[ts(type = "number")]
+        offset: u64,
+    },
+    /// There is no difference in that direction.
+    None,
+    /// The scan budget of one call ran out before an answer; ask again from `from`.
+    Searching {
+        #[ts(type = "number")]
+        from: u64,
+    },
+}
+
 /// Where a search found its needle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

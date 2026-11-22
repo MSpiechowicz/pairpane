@@ -104,8 +104,12 @@ describe('shortcutFor', () => {
     expect(press('F4')).toBe('edit');
   });
 
-  it('Shift+F2, Shift+F7 and the Ctrl, Alt and Cmd variants of the new keys are not shortcuts', () => {
-    expect(press('F2', { shiftKey: true })).toBeUndefined();
+  it('Shift+F2 compares two files; plain F2 still renames in place', () => {
+    expect(press('F2', { shiftKey: true })).toBe('compareFiles');
+    expect(press('F2')).toBe('renameInline');
+  });
+
+  it('Shift+F7 and the Ctrl, Alt and Cmd variants of the new keys are not shortcuts', () => {
     expect(press('F7', { shiftKey: true })).toBeUndefined();
 
     for (const name of ['F2', 'F4', 'F7', 'F8', 'Delete']) {

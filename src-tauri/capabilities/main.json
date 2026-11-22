@@ -49,6 +49,7 @@
     "allow-view-text",
     "allow-view-search",
     "allow-view-search-cancel",
+    "allow-diff-next-difference",
     "allow-view-markdown",
     "allow-view-archive",
     "allow-view-image-decode",
