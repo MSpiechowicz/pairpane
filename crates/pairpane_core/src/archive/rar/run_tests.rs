@@ -117,19 +117,20 @@ fn ordinals(index: &ArchiveIndex, dir: &str, names: &[&str]) -> Vec<u32> {
 fn the_arguments_end_the_switches_before_any_path_and_the_destination_comes_last() {
     let archive = Path::new("/data/-x.rar");
     let staging = Path::new("/tmp/stage");
+    let destination = format!("/tmp/stage{}", std::path::MAIN_SEPARATOR);
 
     let list = list_args(archive);
     assert_eq!(list.last().expect("last"), "/data/-x.rar");
     assert_eq!(list[list.len() - 2], "--");
 
     let all = extract_args(archive, None, staging);
-    assert_eq!(all[all.len() - 3..], ["--", "/data/-x.rar", "/tmp/stage/"]);
+    assert_eq!(all[all.len() - 3..], ["--", "/data/-x.rar", destination.as_str()]);
     assert!(all.iter().any(|arg| arg == "-ol-"), "links are skipped by unrar itself");
 
     let named = extract_args(archive, Some(&["-r", "a/@b"]), staging);
     assert_eq!(
         named[named.len() - 5..],
-        ["--", "/data/-x.rar", "-r", "a/@b", "/tmp/stage/"]
+        ["--", "/data/-x.rar", "-r", "a/@b", destination.as_str()]
     );
 }
 
@@ -147,9 +148,9 @@ fn the_archive_and_the_staging_folder_must_be_plain_absolute_paths() {
 
 #[test]
 fn a_program_that_is_not_there_is_the_missing_error() {
-    let error = Unrar::at(PathBuf::from("/nonexistent/pairpane/unrar"))
-        .list(Path::new("/data/a.rar"), &IDLE)
-        .expect_err("no program");
+    let program = std::env::temp_dir().join("nonexistent-pairpane").join("unrar");
+    let archive = std::env::temp_dir().join("a.rar");
+    let error = Unrar::at(program).list(&archive, &IDLE).expect_err("no program");
 
     assert!(is_missing(&error));
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
@@ -230,6 +231,7 @@ fn an_entry_with_encrypted_content_is_refused_when_it_is_unpacked_and_folders_ar
 }
 
 #[test]
+#[cfg(unix)]
 fn a_program_that_unpacks_nothing_fails_each_file_and_leaves_nothing() {
     for program in ["/usr/bin/true", "/usr/bin/false"] {
         let Some(rig) = rig_with(Some(Unrar::at(PathBuf::from(program))), &rar_of(&[])) else {

@@ -62,7 +62,7 @@ mod unix {
     #[test]
     fn a_child_that_runs_on_is_given_up_on_at_the_flag_and_at_the_deadline() {
         let started = Instant::now();
-        let mut child = command(Path::new("/usr/bin/sleep"), ["30"], &[])
+        let mut child = command(Path::new("/bin/sleep"), ["30"], &[])
             .spawn()
             .expect("sleep runs");
 
@@ -87,7 +87,7 @@ mod unix {
 
     #[test]
     fn a_child_without_a_reader_may_run_longer_than_the_grace() {
-        let mut child = command(Path::new("/usr/bin/sleep"), ["3"], &[])
+        let mut child = command(Path::new("/bin/sleep"), ["3"], &[])
             .spawn()
             .expect("sleep runs");
 
@@ -98,7 +98,7 @@ mod unix {
 
     #[test]
     fn a_failed_check_gives_up_with_its_error_and_the_flag_and_the_deadline_still_do() {
-        let mut child = command(Path::new("/usr/bin/sleep"), ["30"], &[])
+        let mut child = command(Path::new("/bin/sleep"), ["30"], &[])
             .spawn()
             .expect("sleep runs");
         let cancel = AtomicBool::new(false);

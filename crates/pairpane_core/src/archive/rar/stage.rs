@@ -178,6 +178,7 @@ fn is_ours(_seen: &fs::Metadata, _owner: u32) -> bool {
 }
 
 fn private_folder(path: &Path) -> io::Result<()> {
+    #[cfg_attr(not(unix), expect(unused_mut, reason = "only Unix sets a mode on the builder"))]
     let mut builder = DirBuilder::new();
 
     #[cfg(unix)]

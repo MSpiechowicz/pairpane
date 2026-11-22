@@ -15,13 +15,21 @@ fn a_plain_name_is_kept_and_odd_separators_are_tidied() {
         ("./a/b", "a/b"),
         ("a//b/./c/", "a/b/c"),
         ("zażółć/gęślą.txt", "zażółć/gęślą.txt"),
-        // A colon is a name on Unix and refused only where it makes a stream or a drive.
-        ("ab:c/d", "ab:c/d"),
         ("..hidden/x", "..hidden/x"),
     ];
 
     for (raw, tidy) in cases {
         assert_eq!(normalize(raw), Ok(Some(tidy.to_owned())), "{raw:?}");
+    }
+}
+
+#[test]
+fn a_colon_is_a_name_on_unix_and_refused_on_windows() {
+    // On Windows a colon makes a stream or a drive, so no file can be named with one.
+    if cfg!(windows) {
+        assert_eq!(normalize("ab:c/d"), Err(Unsafe::Reserved));
+    } else {
+        assert_eq!(normalize("ab:c/d"), Ok(Some("ab:c/d".to_owned())));
     }
 }
 
@@ -87,8 +95,15 @@ fn a_part_over_255_units_or_a_path_over_the_depth_is_refused() {
     let longest = "n".repeat(MAX_NAME_UNITS);
     assert_eq!(normalize(&longest), Ok(Some(longest.clone())));
     assert_eq!(normalize(&format!("{longest}x")), Err(Unsafe::TooLong));
+    // Units are bytes on Unix and UTF-16 units on Windows, so 255 two-byte characters fit only on Windows.
+    let wide = format!("a/{}", "é".repeat(MAX_NAME_UNITS));
+    if cfg!(windows) {
+        assert!(normalize(&wide).is_ok());
+    } else {
+        assert_eq!(normalize(&wide), Err(Unsafe::TooLong));
+    }
     assert_eq!(
-        normalize(&format!("a/{}", "é".repeat(MAX_NAME_UNITS))),
+        normalize(&format!("a/{}", "é".repeat(MAX_NAME_UNITS + 1))),
         Err(Unsafe::TooLong)
     );
 
