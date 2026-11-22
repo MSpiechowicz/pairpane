@@ -51,6 +51,16 @@ const ended = (id: number, extra: Partial<Extract<OpsEvent, { kind: 'ended' }>> 
 });
 
 describe('TransfersPanel', () => {
+  it('names an extraction, where it goes and the step it is in', async () => {
+    const { transfers, send } = await store();
+    send({ kind: 'added', job: job(1, { label: 'a.zip', kind: 'extract', phase: 'extracting', to: '/out' }) });
+    render(TransfersPanel, { transfers, onClose: vi.fn() });
+
+    expect(screen.getByText('Extract')).toBeInTheDocument();
+    expect(screen.getByText('→ /out')).toBeInTheDocument();
+    expect(screen.getByText('Extracting…')).toBeInTheDocument();
+  });
+
   it('has a row per job: label, target, progress, speed and time left', async () => {
     const { transfers, send } = await store();
     send({ kind: 'added', job: job(1, { label: '3 items', kind: 'move', to: '/backup' }) });

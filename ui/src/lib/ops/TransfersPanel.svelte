@@ -21,6 +21,7 @@
     splitting: 'Splitting…',
     combining: 'Combining…',
     changing: 'Changing…',
+    extracting: 'Extracting…',
     waiting: 'Waiting for your answer',
     cancelling: 'Cancelling…',
   } as const;
@@ -33,10 +34,11 @@
     split: 'Split',
     combine: 'Combine',
     attributes: 'Attributes',
+    extract: 'Extract',
   } as const;
 
   /** The jobs that put things into a folder of their own: the row says where. */
-  const TARGETED: ReadonlySet<string> = new Set(['copy', 'move', 'split', 'combine']);
+  const TARGETED: ReadonlySet<string> = new Set(['copy', 'move', 'split', 'combine', 'extract']);
 
   const errorCount = (result: JobResult) => result.errors.length + result.moreErrors;
 

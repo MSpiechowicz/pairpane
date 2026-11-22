@@ -26,6 +26,8 @@ pub enum OpKind {
     Combine,
     /// Changes permissions and times.
     Attributes,
+    /// Extracts entries of an archive into the target folder.
+    Extract,
 }
 
 /// Where a running job is. Runs in this order; `waiting` and `cancelling` can interrupt the later steps.
@@ -55,6 +57,8 @@ pub enum JobPhase {
     Combining,
     /// Setting permissions and times.
     Changing,
+    /// Reading an archive and writing the entries it holds (extract jobs).
+    Extracting,
     /// Stopped on a conflict question until [`Answer`] arrives (see [`OpsEvent::Conflict`]).
     Waiting,
     /// Cancel was requested; the job is stopping and removing what it created.
@@ -128,6 +132,8 @@ pub struct ConflictInfo {
     /// The first free name for `rename` (`a (2).txt`), the file name only. It is what `rename` will use; the
     /// webview never sends a name of its own.
     pub suggested: String,
+    /// Both sides are files on disk, so `compare` can hash them. `false` when the source is an entry of an archive.
+    pub comparable: bool,
 }
 
 /// The answer to a [`ConflictInfo`]. `compare` is not final: it hashes both files, reports

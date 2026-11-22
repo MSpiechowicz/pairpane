@@ -86,6 +86,7 @@ pub fn list_at(
         parent: shown.parent().map(|parent| parent.to_string_lossy().into_owned()),
         crumbs: crumbs(shown),
         total: count(names.len()),
+        archive: None,
     });
 
     let (mut dirs, mut files, mut bytes) = (0_u32, 0_u32, 0_u64);
@@ -295,6 +296,7 @@ fn crumbs(path: &Path) -> Vec<Crumb> {
             Crumb {
                 name,
                 path: ancestor.to_string_lossy().into_owned(),
+                inside: None,
             }
         })
         .collect();

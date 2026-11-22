@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::IpcError;
+use super::{ArchiveSpot, IpcError};
 
 /// Which of the two panes a command is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -54,6 +54,11 @@ pub struct Entry {
 pub struct Crumb {
     pub name: String,
     pub path: String,
+    /// For a step inside an archive: the folder path inside it (`""` for the archive's root, which is the crumb with the
+    /// archive's name); `path` is then the archive's path. Absent for a real folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub inside: Option<String>,
 }
 
 /// What a pane's listing channel delivers, in this order: `start`, any number of `batch`es in entry order,
@@ -70,6 +75,10 @@ pub enum ListEvent {
         /// The path bar, from the root down to this folder.
         crumbs: Vec<Crumb>,
         total: u32,
+        /// Set when the listing is a folder inside an archive: then `path` is the folder that holds the archive.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        archive: Option<ArchiveSpot>,
     },
     /// Entries `offset..offset + entries.len()`.
     Batch { offset: u32, entries: Vec<Entry> },

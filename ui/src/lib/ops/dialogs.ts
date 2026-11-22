@@ -1,4 +1,5 @@
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
+import { archiveName } from '$lib/panes/archive';
 import { isWindowsPlatform } from '$lib/panes/keys';
 
 import { type OpRequest, stemLength } from './targets';
@@ -20,7 +21,8 @@ export type FileAction =
   | 'checksum'
   | 'verifyChecksum'
   | 'split'
-  | 'combine';
+  | 'combine'
+  | 'extract';
 
 /** What the OS calls the place deleted items go to. */
 export const trashName = () => (isWindowsPlatform() ? 'Recycle Bin' : 'Trash');
@@ -50,6 +52,10 @@ export function specOf(request: OpRequest): Spec {
     case 'move': {
       const verb = request.kind === 'copy' ? 'Copy' : 'Move';
       return { title: `${verb} ${what(request.names)} to`, confirm: verb, label: 'Target folder', initial: request.to, verify: true };
+    }
+    case 'extract': {
+      const items = request.names.length > 0 ? request.names : request.archives.map(({ archive }) => archiveName(archive));
+      return { title: `Extract ${what(items)} to`, confirm: 'Extract', label: 'Target folder', initial: request.to, verify: false };
     }
     case 'combine':
       return {
@@ -131,6 +137,12 @@ export async function perform(ipc: Transport, request: OpRequest, value: string,
     case 'copy':
     case 'move':
       await ipc.invoke('ops_start', { kind: request.kind, from: request.from, names: request.names, to: value, verify });
+      return { name: value };
+    case 'extract':
+      // One job for each archive; one that is refused stops the rest, which the dialog shows.
+      for (const { archive, dir } of request.archives) {
+        await ipc.invoke('ops_extract', { archive, dir, names: request.names, to: value });
+      }
       return { name: value };
     case 'combine':
       await ipc.invoke('ops_task', { from: request.from, names: [request.name], task: { kind: 'combine', to: value } });

@@ -146,4 +146,21 @@ describe('HotlistMenu', () => {
 
     expect(hotlist.paths).toHaveLength(3);
   });
+
+  it('cannot add a folder inside an archive', async () => {
+    const { backend, tabs } = await menu();
+    await tabs.view.listing.openArchive({ archive: '/home/me/Projects/a.zip', dir: '' });
+    backend.last().emit({
+      kind: 'start',
+      path: '/home/me/Projects',
+      parent: '/home/me',
+      crumbs: [],
+      total: 0,
+      archive: { archive: '/home/me/Projects/a.zip', dir: '' },
+    });
+    await tick();
+
+    expect(toggle()).toBeDisabled();
+    expect(toggle()).toHaveAttribute('title', 'A folder inside an archive can’t be a favourite.');
+  });
 });

@@ -16,6 +16,7 @@ describe('FilesMenu', () => {
     expect(screen.getByRole('menuitem', { name: 'Create hard link…' })).toBeEnabled();
     expect(screen.getByRole('menuitem', { name: 'Properties' })).toHaveAttribute('aria-keyshortcuts', 'Alt+Enter');
     expect(screen.getByRole('menuitem', { name: 'Change attributes…' })).not.toHaveAttribute('aria-keyshortcuts');
+    expect(screen.getByRole('menuitem', { name: 'Extract…' })).toHaveAttribute('aria-keyshortcuts', 'Alt+F9');
   });
 
   it('has the built-in editor, which has no key of its own (F4 may run an external one)', async () => {
@@ -46,6 +47,7 @@ describe('FilesMenu', () => {
       'Verify checksum file',
       'Split file…',
       'Combine files…',
+      'Extract…',
     ];
     for (const name of names) {
       await fireEvent.click(screen.getByRole('menuitem', { name }));
@@ -64,6 +66,7 @@ describe('FilesMenu', () => {
       'verifyChecksum',
       'split',
       'combine',
+      'extract',
     ]);
   });
 });

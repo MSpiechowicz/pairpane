@@ -5,9 +5,15 @@ import type { CommandArgs, CommandName, CommandResult } from './commands';
 /** Receives the events a command streams back (a Tauri `Channel` on the Rust side). */
 export type EventSink<T> = (event: T) => void;
 
+/** What a caller may tell a transport layer about one call; the backend never sees it. */
+export interface InvokeOptions {
+  /** Aborted when the caller no longer wants the result: a layer that would run the command again must not. */
+  signal?: AbortSignal;
+}
+
 /** The seam between the UI and the backend; Tauri and "unavailable" implement it. */
 export interface Transport {
-  invoke<K extends CommandName>(name: K, args: CommandArgs<K>): Promise<CommandResult<K>>;
+  invoke<K extends CommandName>(name: K, args: CommandArgs<K>, options?: InvokeOptions): Promise<CommandResult<K>>;
 }
 
 const FALLBACK_CODE: IpcErrorCode = 'internal';

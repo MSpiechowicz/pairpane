@@ -35,6 +35,13 @@ describe('shortcutFor', () => {
     expect(press('Enter', { altKey: true, ctrlKey: true })).toBeUndefined();
   });
 
+  it('Alt+F9 extracts; F9 alone and the other modifiers do not', () => {
+    expect(press('F9', { altKey: true })).toBe('extract');
+    expect(press('F9')).toBeUndefined();
+    expect(press('F9', { altKey: true, shiftKey: true })).toBeUndefined();
+    expect(press('F9', { altKey: true, ctrlKey: true })).toBeUndefined();
+  });
+
   it('F5 copies, F6 moves, Shift+F6 renames and Ctrl+J toggles the transfers', () => {
     expect(press('F5')).toBe('copy');
     expect(press('F6')).toBe('move');

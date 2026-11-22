@@ -12,6 +12,8 @@
 //! one at a time) have caps of their own and a request that finds its cap full is refused as busy. No text sent to the
 //! page holds a path.
 //!
+//! - `archive_entry.rs`: `archive_view_open`, an entry of an archive extracted to a private temporary file, opened as a
+//!   session and deleted at once; the stale ones are swept at start-up and exit.
 //! - `read.rs`: raw bytes, text windows, Markdown and archive listings (the last two stop when the session ends) and
 //!   HEIC pictures decoded to pixels by the system's own codecs (`view_image_decode`).
 //! - `search.rs`: the search of a session, cancelled by the next search, by `view_search_cancel` and by closing.
@@ -24,7 +26,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use pairpane_core::model::{IpcErrorCode, ViewKind, ViewOpened};
 use pairpane_core::ops::name_fits;
-use pairpane_core::view::{self as files, ViewFile};
+use pairpane_core::view::{self as files, Opened, ViewFile};
 use tauri::State;
 
 use self::media::Token;
@@ -34,6 +36,7 @@ use super::ops::{check_name, names_too_large};
 use super::panes::resolve;
 use crate::error::{CommandError, CommandResult};
 
+pub mod archive_entry;
 pub mod media;
 pub mod read;
 pub mod search;
@@ -119,17 +122,22 @@ impl Viewer {
             .await?
             .map_err(|error| view_error(&error))?;
 
+        Ok(self.start(opened))
+    }
+
+    /// Starts a session on the file that was opened and tells what the page needs to show it.
+    fn start(&self, opened: Opened) -> ViewOpened {
         let (session, released) = self.lock().add(opened.file, opened.kind.clone());
         drop(released);
 
-        Ok(ViewOpened {
+        ViewOpened {
             session,
             name: opened.name,
             size: opened.size,
             modified: opened.modified,
             kind: opened.kind,
             encoding: opened.encoding,
-        })
+        }
     }
 
     /// Ends the session: its search is cancelled, its media tokens stop working and its file is closed once nothing

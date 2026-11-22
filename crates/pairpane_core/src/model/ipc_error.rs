@@ -27,6 +27,8 @@ pub enum IpcErrorCode {
     /// The request cannot start yet because an earlier one has not finished (a folder that does not respond); trying
     /// again shortly may work.
     Busy,
+    /// The archive needs a password, or the one given is wrong (the message says which). Ask for it and try again.
+    PasswordRequired,
 }
 
 impl IpcError {
@@ -72,6 +74,7 @@ mod tests {
             (IpcErrorCode::Process, "process"),
             (IpcErrorCode::Internal, "internal"),
             (IpcErrorCode::Busy, "busy"),
+            (IpcErrorCode::PasswordRequired, "passwordRequired"),
         ];
 
         for (code, wire) in codes {

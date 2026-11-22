@@ -21,6 +21,7 @@ export type Action =
   | 'trash'
   | 'deletePermanently'
   | 'properties'
+  | 'extract'
   | 'transfers'
   | 'view'
   | 'edit'
@@ -69,6 +70,8 @@ function withAlt(event: KeyboardEvent): Action | undefined {
       return 'driveMenuRight';
     case 'Enter':
       return 'properties';
+    case 'F9':
+      return 'extract';
     default:
       return undefined;
   }

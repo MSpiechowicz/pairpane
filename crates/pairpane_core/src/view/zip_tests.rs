@@ -9,57 +9,13 @@ use tempfile::TempDir;
 
 use crate::model::ArchiveFormat;
 
+use crate::archive::testing::{DOS_DATE, directory_of, field, record};
+
 use super::archive_tests::{MOMENT, entry, failure, list, zip_of, zip64_then};
 use super::testing::{idle, put, temp};
 use super::{ViewFile, archive, open};
 
 const GIB: u64 = 1024 * 1024 * 1024;
-const DOS_DATE: u16 = 21092;
-const DOS_TIME: u16 = 10436;
-
-/// A record of a central directory with a name, general purpose `flags`, a 32-bit `size`, `extra` data and the DOS
-/// `date`.
-fn record(name: &[u8], flags: u16, size: u32, extra: &[u8], date: u16) -> Vec<u8> {
-    let mut bytes = b"PK\x01\x02".to_vec();
-
-    for field in [20u16, 20, flags, 0, DOS_TIME, date] {
-        bytes.extend_from_slice(&field.to_le_bytes());
-    }
-    bytes.extend_from_slice(&0u32.to_le_bytes());
-    bytes.extend_from_slice(&size.to_le_bytes());
-    bytes.extend_from_slice(&size.to_le_bytes());
-    bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
-    bytes.extend_from_slice(&(extra.len() as u16).to_le_bytes());
-    bytes.extend_from_slice(&[0; 14]);
-    bytes.extend_from_slice(name);
-    bytes.extend_from_slice(extra);
-
-    bytes
-}
-
-/// A zip that is only a central directory of `records` and its end record, which declares `entries` entries.
-fn directory_of(records: &[Vec<u8>], entries: u16) -> Vec<u8> {
-    let directory = records.concat();
-    let mut bytes = directory.clone();
-
-    bytes.extend_from_slice(b"PK\x05\x06\0\0\0\0");
-    bytes.extend_from_slice(&entries.to_le_bytes());
-    bytes.extend_from_slice(&entries.to_le_bytes());
-    bytes.extend_from_slice(&(directory.len() as u32).to_le_bytes());
-    bytes.extend_from_slice(&0u32.to_le_bytes());
-    bytes.extend_from_slice(&0u16.to_le_bytes());
-
-    bytes
-}
-
-/// An extra data field `id` holding `data`.
-fn field(id: u16, data: &[u8]) -> Vec<u8> {
-    let mut bytes = id.to_le_bytes().to_vec();
-    bytes.extend_from_slice(&(data.len() as u16).to_le_bytes());
-    bytes.extend_from_slice(data);
-
-    bytes
-}
 
 fn one(record: Vec<u8>) -> crate::model::ArchiveEntry {
     let mut listing = list(&directory_of(&[record], 1), ArchiveFormat::Zip);

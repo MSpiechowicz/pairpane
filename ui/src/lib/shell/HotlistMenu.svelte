@@ -75,7 +75,13 @@
   {/snippet}
 
   {#snippet footer()}
-    <button class="here" type="button" disabled={here === undefined} onclick={toggleHere}>
+    <button
+      class="here"
+      type="button"
+      disabled={here === undefined}
+      title={listing.readonly ? 'A folder inside an archive can’t be a favourite.' : undefined}
+      onclick={toggleHere}
+    >
       {here !== undefined && hotlist.has(here) ? 'Remove current folder' : 'Add current folder'}
     </button>
   {/snippet}

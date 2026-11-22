@@ -97,6 +97,7 @@ fn start_batches_and_done_describe_the_folder() {
         parent,
         crumbs,
         total,
+        archive,
     } = &events[0]
     else {
         panic!("first event is start: {:?}", events[0]);
@@ -109,6 +110,7 @@ fn start_batches_and_done_describe_the_folder() {
     assert_eq!(crumbs.last().map(|crumb| crumb.path.as_str()), Some(path.as_str()));
     assert_eq!(crumbs[0].path, crumbs[0].name, "the root is named as written");
     assert_eq!(*total, 3);
+    assert_eq!(*archive, None, "a real folder is not in an archive");
 
     let listed = entries(&events);
     assert_eq!(listed[0].kind, EntryKind::Dir);

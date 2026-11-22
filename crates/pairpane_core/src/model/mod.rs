@@ -5,6 +5,7 @@
 //! `cargo test -p pairpane_core` runs. The generated files are never edited by hand.
 
 mod app;
+mod archive;
 mod edit;
 mod ipc_error;
 mod items;
@@ -18,6 +19,7 @@ mod view;
 mod volume;
 
 pub use app::AppInfo;
+pub use archive::ArchiveSpot;
 pub use edit::{EditDocument, EditOpened, EditSaveOptions, EditSaved, ExternalEdit, LineEnding};
 pub use ipc_error::{IpcError, IpcErrorCode};
 pub use items::{LinkKind, TrashOutcome};

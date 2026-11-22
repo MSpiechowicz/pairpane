@@ -173,7 +173,7 @@
         {ondblclick}
       >
         <!-- A new folder starts at the top; a reload of the same folder keeps the scroll position. -->
-        {#key listing.path}
+        {#key listing.location}
           <VirtualRows count={view.count} active={view.cursor} bind:pageSize>
             {#snippet row(index)}
               {@const entry = view.entryAt(index)}

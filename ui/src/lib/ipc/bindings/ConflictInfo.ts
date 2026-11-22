@@ -19,4 +19,8 @@ name: string, source: FileFacts, target: FileFacts,
  * The first free name for `rename` (`a (2).txt`), the file name only. It is what `rename` will use; the
  * webview never sends a name of its own.
  */
-suggested: string, };
+suggested: string, 
+/**
+ * Both sides are files on disk, so `compare` can hash them. `false` when the source is an entry of an archive.
+ */
+comparable: boolean, };

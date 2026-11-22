@@ -54,9 +54,11 @@
     <button class="btn" type="button" onclick={() => answer('overwrite')}>Overwrite</button>
     <button class="btn" type="button" onclick={() => answer('rename')}>Rename → {info.suggested}</button>
     <button class="btn" type="button" onclick={() => answer('overwriteOlder')}>Overwrite older</button>
-    <button class="btn" type="button" disabled={compare !== undefined} onclick={() => answer('compare')}>
-      {comparison}
-    </button>
+    {#if info.comparable}
+      <button class="btn" type="button" disabled={compare !== undefined} onclick={() => answer('compare')}>
+        {comparison}
+      </button>
+    {/if}
   </div>
 
   <div class="mt-3 flex items-center justify-between gap-2">

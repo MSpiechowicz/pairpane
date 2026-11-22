@@ -2,16 +2,17 @@ import { tick } from 'svelte';
 
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
+import { archiveName } from '$lib/panes/archive';
 import { focusActiveList } from '$lib/panes/focus';
 import { InlineRename } from '$lib/panes/inlineRename.svelte';
 import type { PaneTabs } from '$lib/panes/tabs.svelte';
 import type { PaneView } from '$lib/panes/view.svelte';
 
 import { type FileAction, type Notice, trashName, what } from './dialogs';
-import { type DialogKind, type OpRequest, requestFor, targets } from './targets';
+import { chosen, type DialogKind, type OpRequest, READ_ONLY_NOTICE, refusal, requestFor, targets } from './targets';
 import { isTool, ItemTools } from './tools.svelte';
 
-/** The copy, move, combine, rename, new item or link dialog that is open, and the panes it works between. */
+/** The copy, move, extract, combine, rename, new item or link dialog that is open, and the panes it works between. */
 export interface OpenDialog {
   request: OpRequest;
   source: PaneView;
@@ -42,6 +43,7 @@ const DIALOGS: Partial<Record<FileAction, DialogKind>> = {
   symlink: 'symlink',
   hardlink: 'hardlink',
   combine: 'combine',
+  extract: 'extract',
 };
 
 /**
@@ -74,26 +76,40 @@ export class FileActions {
     return this.dialog !== undefined || this.removal !== undefined || this.tools.modal;
   }
 
-  /** Does what the key or menu item asks, for the active pane; nothing when there is nothing to act on. */
+  /**
+   * Does what the key or menu item asks, for the active pane; nothing when there is nothing to act on. An action
+   * that would change an archive, or write into a pane that shows one, is refused in a card instead.
+   */
   run(action: FileAction) {
-    if (action === 'renameInline') {
-      const tabs = this.#panes[this.#active()];
+    const active = this.#active();
+    const source = this.#panes[active].view;
+    const other = this.#panes[active === 'left' ? 'right' : 'left'].view;
+    const refused = refusal(action, source, other);
+
+    if (refused !== undefined) {
+      this.say(refused, true);
+    } else if (action === 'renameInline') {
+      const tabs = this.#panes[active];
       this.rename.begin(tabs.view, tabs.active);
     } else if (action === 'trash' || action === 'deletePermanently') {
       this.#ask(action === 'deletePermanently');
+    } else if (isTool(action)) {
+      this.tools.run(action, source, other);
     } else {
-      const active = this.#active();
-      const source = this.#panes[active].view;
-      const other = this.#panes[active === 'left' ? 'right' : 'left'].view;
-
-      if (isTool(action)) {
-        this.tools.run(action, source, other);
-      } else {
-        this.#open(DIALOGS[action] as DialogKind, source, other);
-      }
+      this.#open(DIALOGS[action] as DialogKind, source, other);
     }
 
     this.#settle();
+  }
+
+  /** F4 on an archive's entry: says that the archive is read-only, and whether it did. */
+  refuseEdit(): boolean {
+    if (!this.#panes[this.#active()].view.listing.readonly) {
+      return false;
+    }
+
+    this.say(READ_ONLY_NOTICE, true);
+    return true;
   }
 
   #open(kind: DialogKind, source: PaneView, other: PaneView) {
@@ -102,6 +118,8 @@ export class FileActions {
       this.dialog = { request, source, other };
     } else if (kind === 'combine' && source.entryAt(source.cursor) !== undefined) {
       this.say('Choose the first part of a split file, named like “video.mkv.001”.', true);
+    } else if (kind === 'extract' && chosen(source).length > 0) {
+      this.say('Choose an archive to extract.', true);
     }
   }
 
@@ -132,6 +150,8 @@ export class FileActions {
       const { request, source, other } = dialog;
       if (request.kind === 'copy' || request.kind === 'move') {
         source.deselect(request.names);
+      } else if (request.kind === 'extract') {
+        source.deselect(request.names.length > 0 ? request.names : request.archives.map(({ archive }) => archiveName(archive)));
       } else if (request.kind === 'symlink' || request.kind === 'hardlink') {
         other.pointAt(name);
       } else if (request.kind !== 'combine') {

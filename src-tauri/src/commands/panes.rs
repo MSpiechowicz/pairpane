@@ -24,7 +24,7 @@ use tauri::async_runtime;
 use tauri::ipc::Channel;
 
 use self::run::Open;
-use super::limit::ThreadCap;
+use super::limit::{Permit, ThreadCap};
 use super::sizes::Sizing;
 use crate::error::{CommandError, CommandResult};
 
@@ -48,6 +48,15 @@ struct Watch {
 
 type Slots = Arc<Mutex<HashMap<PaneId, Slot>>>;
 
+/// What an open of a pane holds from the moment it is the latest: its place of the listing cap, its generation, the flag
+/// the next open raises and whether the pane's watch was kept.
+struct Claim {
+    permit: Permit,
+    generation: u64,
+    cancel: Arc<AtomicBool>,
+    watched: bool,
+}
+
 /// The panes' listings and watches.
 #[derive(Default)]
 pub struct Panes {
@@ -63,6 +72,29 @@ pub struct Panes {
 const LISTING_THREADS: usize = 4;
 
 impl Panes {
+    /// Makes a new open of `folder` the latest of `pane`, after a place of the pane's listing cap is taken (refused as busy
+    /// before anything changes, so the pane keeps showing its folder). The slot of the open it replaces is dropped here,
+    /// outside the lock, and its listing is cancelled.
+    fn claim(&self, pane: PaneId, folder: &Path, on_event: &Channel<ListEvent>) -> CommandResult<Claim> {
+        let permit = self
+            .listings(pane)
+            .acquire(LISTING_THREADS)
+            .ok_or_else(|| CommandError::new(IpcErrorCode::Busy, "a folder is not responding; try again shortly"))?;
+        let generation = self.generations.fetch_add(1, Ordering::Relaxed) + 1;
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        let (earlier, watched) = replace_slot(&mut lock(&self.slots), pane, generation, folder, &cancel, on_event);
+        // Dropped outside the lock: stopping a watch may wait on the OS.
+        drop(earlier);
+
+        Ok(Claim {
+            permit,
+            generation,
+            cancel,
+            watched,
+        })
+    }
+
     fn listings(&self, pane: PaneId) -> &ThreadCap {
         match pane {
             PaneId::Left => &self.left_listings,
@@ -89,17 +121,12 @@ pub async fn pane_open(
     on_event: Channel<ListEvent>,
 ) -> CommandResult<()> {
     let folder = resolve(path, child.as_deref())?;
-    // Refused before anything changes, so the pane keeps showing its folder.
-    let permit = panes
-        .listings(pane)
-        .acquire(LISTING_THREADS)
-        .ok_or_else(|| CommandError::new(IpcErrorCode::Busy, "a folder is not responding; try again shortly"))?;
-    let generation = panes.generations.fetch_add(1, Ordering::Relaxed) + 1;
-    let cancel = Arc::new(AtomicBool::new(false));
-
-    let (earlier, watched) = replace_slot(&mut lock(&panes.slots), pane, generation, &folder, &cancel, &on_event);
-    // Dropped outside the lock: stopping a watch may wait on the OS.
-    drop(earlier);
+    let Claim {
+        permit,
+        generation,
+        cancel,
+        watched,
+    } = panes.claim(pane, &folder, &on_event)?;
 
     let open = Open {
         slots: Arc::clone(&panes.slots),
@@ -392,6 +419,7 @@ mod tests {
     }
 }
 
+pub mod archive;
 mod run;
 
 #[cfg(test)]

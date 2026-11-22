@@ -103,12 +103,15 @@ export function viewAnswers(
   extra: Answers = {},
 ): Answers {
   let sessions = 0;
+  const open = (args: { name: string }): ViewOpened => {
+    sessions += 1;
+    return { session: sessions, name: args.name, size: file.size, modified: null, kind: kind(args.name), encoding: 'UTF-8' };
+  };
 
   return {
-    view_open: (args: { name: string }): ViewOpened => {
-      sessions += 1;
-      return { session: sessions, name: args.name, size: file.size, modified: null, kind: kind(args.name), encoding: 'UTF-8' };
-    },
+    view_open: open,
+    // An entry of an archive is opened the same way: the backend answers with the session of its extracted copy.
+    archive_view_open: open,
     view_text: (args: { query: TextQuery }) => file.window(args.query),
     view_bytes: (args: { offset: number; length: number }) =>
       file.bytes.slice(args.offset, args.offset + args.length).buffer,

@@ -4,12 +4,14 @@
   import { Editor } from '$lib/editor/editor.svelte';
   import EditorOverlay from '$lib/editor/EditorOverlay.svelte';
   import type { AppInfo } from '$lib/ipc/bindings/AppInfo';
-  import { ipc } from '$lib/ipc/client';
+  import { ipc as backend } from '$lib/ipc/client';
   import { IpcFailure } from '$lib/ipc/transport';
   import ConflictDialog from '$lib/ops/ConflictDialog.svelte';
   import DeleteDialog from '$lib/ops/DeleteDialog.svelte';
   import { FileActions } from '$lib/ops/fileActions.svelte';
   import OpDialog from '$lib/ops/OpDialog.svelte';
+  import PasswordDialog from '$lib/ops/PasswordDialog.svelte';
+  import { Passwords } from '$lib/ops/passwords.svelte';
   import { Transfers } from '$lib/ops/transfers.svelte';
   import TransfersChip from '$lib/ops/TransfersChip.svelte';
   import TransfersPanel from '$lib/ops/TransfersPanel.svelte';
@@ -42,6 +44,10 @@
   /** The dropdown that is open, and the pane under whose header it is. */
   let menu = $state<{ side: Side; kind: Menu } | undefined>();
 
+  // Whatever reads inside an archive that needs a password asks for it, then goes on: the panes, the jobs and the
+  // viewer all work through this transport.
+  const passwords = new Passwords(backend);
+  const ipc = passwords.wrap(backend);
   const panes = { left: new PaneTabs(ipc, 'left'), right: new PaneTabs(ipc, 'right') };
   // The volumes name the first step of the paths and fill the drive menu.
   const volumes = new Volumes(ipc);
@@ -70,13 +76,20 @@
   });
   const question = $derived(transfers.question);
   /** A dialog (or the viewer's or editor's overlay) has the keyboard: the shortcuts and Tab are its own then. */
-  const modal = $derived(files.modal || question !== undefined || viewer.modal || editor.modal);
+  const modal = $derived(files.modal || question !== undefined || viewer.modal || editor.modal || passwords.modal);
+
+  /** F4 and the Files menu's editor: an archive's entries are read-only, so there is nothing to edit there. */
+  function edit(builtin = false) {
+    if (!files.refuseEdit()) {
+      editor.edit(builtin);
+    }
+  }
 
   function onDockKey(key: string) {
     if (key === 'F3') {
       viewer.open();
     } else if (key === 'F4') {
-      editor.edit();
+      edit();
     } else if (key === 'F5') {
       files.run('copy');
     } else if (key === 'F6') {
@@ -185,6 +198,7 @@
       case 'trash':
       case 'deletePermanently':
       case 'properties':
+      case 'extract':
         files.run(action);
         break;
       case 'transfers':
@@ -194,7 +208,7 @@
         viewer.open();
         break;
       case 'edit':
-        editor.edit();
+        edit();
         break;
       case 'quickView':
         viewer.toggleQuick();
@@ -218,7 +232,7 @@
 
   function chooseFile(choice: FilesChoice) {
     if (choice === 'editBuiltin') {
-      editor.edit(true);
+      edit(true);
     } else {
       files.run(choice);
     }
@@ -296,7 +310,7 @@
     {/each}
   </main>
 
-  <Dock onKey={onDockKey}>
+  <Dock inArchive={panes[active].view.listing.readonly} onKey={onDockKey}>
     <TransfersChip {transfers} open={panelOpen} onToggle={() => (panelOpen = !panelOpen)} />
   </Dock>
 </div>
@@ -347,6 +361,12 @@
 {#if question}
   {#key `${question.info.job}:${question.info.question}`}
     <ConflictDialog {transfers} {question} />
+  {/key}
+{/if}
+
+{#if passwords.prompt}
+  {#key passwords.prompt.archive}
+    <PasswordDialog {passwords} prompt={passwords.prompt} />
   {/key}
 {/if}
 

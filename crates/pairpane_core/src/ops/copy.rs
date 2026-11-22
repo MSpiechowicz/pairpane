@@ -218,6 +218,16 @@ impl Run<'_> {
         meta: &Metadata,
         source: &Path,
     ) -> Result<bool, Stop> {
+        self.commit_with(temp, place, |run, target| run.place(rel, meta, source, target))
+    }
+
+    /// [`Run::commit`] for any source: `again` decides anew where the item goes when its name was taken.
+    pub(super) fn commit_with(
+        &mut self,
+        temp: &Path,
+        place: &mut Place,
+        mut again: impl FnMut(&mut Self, &Path) -> Result<Place, Stop>,
+    ) -> Result<bool, Stop> {
         loop {
             let renamed = match place {
                 Place::New(target) => rename::noreplace(temp, target),
@@ -229,7 +239,7 @@ impl Run<'_> {
                 Ok(()) => return Ok(true),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                     let target = place.path().to_owned();
-                    *place = self.place(rel, meta, source, &target)?;
+                    *place = again(self, &target)?;
                 }
                 Err(error) => return Err(error.into()),
             }

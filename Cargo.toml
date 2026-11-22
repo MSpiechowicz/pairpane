@@ -83,8 +83,8 @@ jiff = { version = "1.0.1", default-features = false, features = ["std", "tz-sys
 # guesses one from a sample (no multi-threading); `pulldown-cmark` parses Markdown into a tree the webview draws itself (no
 # HTML is ever produced, so its HTML renderer is off); `tar` lists the entries of a tar and `flate2` (the pure Rust
 # zlib-rs backend) inflates a `.tar.gz` for that listing, never to disk; `memchr` finds the newlines and the search text
-# in a chunk quickly. A zip's central directory is read by pairpane_core::view::zip_list itself, not by a zip crate,
-# which sizes its tables from counts a crafted file declares.
+# in a chunk quickly. A zip's central directory is read by pairpane_core::archive::zip::directory itself, not by a zip
+# crate, which sizes its tables from counts a crafted file declares.
 encoding_rs = "0.8.44"
 chardetng = { version = "1.0.0", default-features = false }
 pulldown-cmark = { version = "0.13.6", default-features = false }
@@ -110,6 +110,28 @@ landlock = "0.4.8"
 # system calls (pairpane_core::view::heic::kernel, Linux only, `unsafe` with a `SAFETY` comment on every block). The
 # version the lockfile has already through `landlock` (one copy, not two).
 libc = "0.2.191"
+# Archives (pairpane_core::archive), all pure Rust and safe APIs, none of them reading a file by itself: the archive code
+# hands each decoder a bounded reader. `bzip2` (the libbz2-rs-sys backend, no C library) and `ruzstd` (a decoder; the
+# encoder inside it is used by the tests only) are the codecs of a bzip2 or zstd entry in a zip and of `.tar.bz2` and
+# `.tar.zst`; `lzma-rust2` reads the XZ container of `.tar.xz` (the same copy `sevenz-rust2` uses for LZMA and LZMA2).
+# libbz2-rs-sys is licensed `bzip2-1.0.6` (see deny.toml).
+bzip2 = "0.6.1"
+ruzstd = "0.9.1"
+lzma-rust2 = { version = "0.25.0", default-features = false, features = ["std", "xz", "optimization"] }
+# 7z archives (pairpane_core::archive::sevenz). Only what the format needs: the AES-256 of encrypted content and headers,
+# bzip2 and deflate next to the LZMA family it always has. Not the C `zstd`, brotli, lz4, nor PPMd. Its `compress` feature
+# (the encoders) is on in the dev dependencies only, to build the 7z files the tests read.
+sevenz-rust2 = { version = "0.25.0", default-features = false, features = ["aes256", "bzip2", "deflate"] }
+# WinZip AES entries of a zip (AES-128 and AES-256, AE-1 and AE-2): PBKDF2-HMAC-SHA1, AES in counter mode and an HMAC-SHA1
+# tag. On the RustCrypto generation `sevenz-rust2` uses (`aes` 0.9, digest 0.11), so there is one copy of `aes`, `cipher`
+# and `digest` of that generation; the `sha2` 0.10 above stays on digest 0.10 for the checksum files.
+aes = "0.9.4"
+ctr = "0.10.1"
+hmac = "0.13.0"
+sha1 = { version = "0.11.0", default-features = false }
+pbkdf2 = { version = "0.13.0", default-features = false, features = ["hmac"] }
+# Archive passwords are kept in memory only and overwritten when dropped; already in the lockfile.
+zeroize = "1.9.2"
 # Dev dependencies
 pretty_assertions = "1.4"
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }

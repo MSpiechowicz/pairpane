@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::archive::{ArchiveIndex, EntrySource};
 use crate::listing::size::PROGRESS_INTERVAL;
 
 use super::volume::{self, VolumeKey};
@@ -15,6 +16,9 @@ pub(super) type Keyer = Arc<dyn Fn(&Path) -> VolumeKey + Send + Sync>;
 
 /// What a test runs before a folder is opened by a walk, given the folder's path relative to the job's folder.
 pub(super) type OpenHook = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// Makes the source of the data of an extraction from its index, in place of the archive's own.
+pub(super) type SourceHook = Arc<dyn Fn(&ArchiveIndex) -> Box<dyn EntrySource> + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub(super) struct Hooks {
@@ -43,6 +47,10 @@ pub(super) struct Hooks {
     pub(super) before_open: Option<OpenHook>,
     /// No identity can be read, as when a Windows ACL refuses the open while the names are unchanged.
     pub(super) unreadable_identity: bool,
+    /// The data of an extraction comes from this source, whatever the archive holds.
+    pub(super) entry_source: Option<SourceHook>,
+    /// The free space an extraction leaves on the disk, in place of `MIN_FREE_RESERVE`.
+    pub(super) free_reserve: Option<u64>,
 }
 
 impl Hooks {
