@@ -39,6 +39,7 @@ const CHANGES: FileAction[] = [
   'move',
   'rename',
   'renameInline',
+  'multiRename',
   'newFolder',
   'newFile',
   'trash',

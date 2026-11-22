@@ -25,6 +25,7 @@
   import { Hotlist } from '$lib/panes/hotlist.svelte';
   import { PaneTabs } from '$lib/panes/tabs.svelte';
   import { Volumes } from '$lib/panes/volumes.svelte';
+  import { SavedRenames } from '$lib/rename/saved.svelte';
   import Dock from '$lib/shell/Dock.svelte';
   import type { FilesChoice, Menu } from '$lib/shell/menu';
   import Pane from '$lib/shell/Pane.svelte';
@@ -58,6 +59,7 @@
   const volumes = new Volumes(ipc);
   const hotlist = new Hotlist();
   const searches = new SavedSearches();
+  const renames = new SavedRenames();
   const finder = new Finder(ipc, (id) =>
     [panes.left, panes.right].some((tabs) => tabs.view.listing.results === id),
   );
@@ -65,6 +67,7 @@
     panes,
     hotlist,
     searches,
+    renames,
     active: { get: () => active, set: (side) => (active = side) },
   });
   session.watch();
@@ -85,10 +88,12 @@
     }
   }
 
-  const transfers = new Transfers(ipc, (job) => {
+  const transfers = new Transfers(ipc, (job, result) => {
     if (job.kind === 'addToArchive') {
       archiveChanged(job.to);
     }
+
+    files.renames.ended(job, result);
   });
   let panelOpen = $state(false);
   const files = new FileActions(ipc, panes, () => active);
@@ -229,6 +234,7 @@
       case 'move':
       case 'rename':
       case 'renameInline':
+      case 'multiRename':
       case 'newFolder':
       case 'newFile':
       case 'trash':
@@ -389,7 +395,13 @@
 {/if}
 
 {#if files.tools.dialog}
-  <ToolDialogs {ipc} dialog={files.tools.dialog} onClose={() => files.closeTool()} onDone={(output) => files.toolDone(output)} />
+  <ToolDialogs
+    {ipc}
+    dialog={files.tools.dialog}
+    {renames}
+    onClose={() => files.closeTool()}
+    onDone={(output) => files.toolDone(output)}
+  />
 {/if}
 
 {#if files.removal}

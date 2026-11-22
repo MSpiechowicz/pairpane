@@ -202,16 +202,17 @@ describe('TransfersPanel file tools', () => {
       { kind: 'added', job: job(5, { kind: 'attributes', label: '3 items', to: '/data' }) },
       { kind: 'added', job: job(6, { kind: 'pack', label: 'photos', to: '/backup/photos.7z' }) },
       { kind: 'added', job: job(7, { kind: 'addToArchive', label: 'notes.txt', to: '/backup/old.zip' }) },
+      { kind: 'added', job: job(8, { kind: 'rename', label: '3 items', to: '/data' }) },
     );
     render(TransfersPanel, { transfers, onClose: vi.fn() });
 
-    const kinds = ['Checksum', 'Verify', 'Split', 'Combine', 'Attributes', 'Pack', 'Add to archive'];
-    expect(kinds.map((kind) => screen.getByText(kind))).toHaveLength(7);
+    const kinds = ['Checksum', 'Verify', 'Split', 'Combine', 'Attributes', 'Pack', 'Add to archive', 'Rename'];
+    expect(kinds.map((kind) => screen.getByText(kind))).toHaveLength(8);
     expect(screen.getByText('→ /backup/photos.7z')).toBeInTheDocument();
     expect(screen.getByText('→ /backup/old.zip')).toBeInTheDocument();
     expect(screen.getByText('→ /backup')).toBeInTheDocument();
     expect(screen.getByText('→ /restore')).toBeInTheDocument();
-    expect(screen.queryByText('→ /data')).not.toBeInTheDocument();
+    expect(screen.queryByText('→ /data')).not.toBeInTheDocument(); // a rename stays in its folder
   });
 
   it('says where a tool is before there is a speed to show', async () => {
@@ -222,10 +223,11 @@ describe('TransfersPanel file tools', () => {
       { kind: 'added', job: job(3, { kind: 'combine', phase: 'combining', label: 'c' }) },
       { kind: 'added', job: job(4, { kind: 'attributes', phase: 'changing', label: 'd' }) },
       { kind: 'added', job: job(5, { kind: 'pack', phase: 'packing', label: 'e' }) },
+      { kind: 'added', job: job(6, { kind: 'rename', phase: 'renaming', label: 'f' }) },
     );
     render(TransfersPanel, { transfers, onClose: vi.fn() });
 
-    for (const text of ['Hashing…', 'Splitting…', 'Combining…', 'Changing…', 'Packing…']) {
+    for (const text of ['Hashing…', 'Splitting…', 'Combining…', 'Changing…', 'Packing…', 'Moving…']) {
       expect(screen.getByText(text)).toBeInTheDocument();
     }
   });

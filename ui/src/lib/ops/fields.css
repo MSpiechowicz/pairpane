@@ -16,6 +16,21 @@
   outline: none;
 }
 
+/* A field with its caption in front of it, on one line; it takes the room there is. */
+.labelled {
+  display: flex;
+  flex: 1 1 200px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--dim);
+}
+
+.labelled .field {
+  flex: 1;
+  min-width: 0;
+}
+
 /* A line of small print under the fields of a dialog. */
 .hint {
   margin: 8px 0 0;

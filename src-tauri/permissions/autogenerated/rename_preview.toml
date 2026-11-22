@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rename-preview"
+description = "Enables the rename_preview command without any pre-configured scope."
+commands.allow = ["rename_preview"]
+
+[[permission]]
+identifier = "deny-rename-preview"
+description = "Denies the rename_preview command without any pre-configured scope."
+commands.deny = ["rename_preview"]

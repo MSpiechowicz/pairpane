@@ -35,6 +35,8 @@
     "allow-ops-mkfile",
     "allow-ops-link",
     "allow-ops-task",
+    "allow-ops-rename-undo",
+    "allow-rename-preview",
     "allow-ops-properties",
     "allow-view-open",
     "allow-archive-view-open",

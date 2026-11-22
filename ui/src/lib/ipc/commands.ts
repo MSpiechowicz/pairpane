@@ -21,6 +21,8 @@ import type { OpsEvent } from './bindings/OpsEvent';
 import type { PackFormat } from './bindings/PackFormat';
 import type { PackLevel } from './bindings/PackLevel';
 import type { PaneId } from './bindings/PaneId';
+import type { RenamePreview } from './bindings/RenamePreview';
+import type { RenameRule } from './bindings/RenameRule';
 import type { SavedState } from './bindings/SavedState';
 import type { SearchHit } from './bindings/SearchHit';
 import type { SearchQuery } from './bindings/SearchQuery';
@@ -89,6 +91,8 @@ export const commands = {
   ops_control: cmd<{ job: JobId; action: ControlAction }, null>(),
   ops_answer: cmd<{ job: JobId; question: number; answer: Answer; all: boolean }, null>(),
   ops_rename: cmd<{ path: string; from: string; to: string }, null>(),
+  rename_preview: cmd<{ path: string; names: string[]; rule: RenameRule }, RenamePreview>(),
+  ops_rename_undo: cmd<{ job: JobId }, JobId>(),
   ops_trash: cmd<{ path: string; names: string[]; within?: ResultFolder }, TrashOutcome>(),
   ops_untrash: cmd<{ token: number }, number>(),
   ops_delete: cmd<{ path: string; names: string[]; within?: ResultFolder }, null>(),

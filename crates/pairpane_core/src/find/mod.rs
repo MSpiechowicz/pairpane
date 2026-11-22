@@ -70,6 +70,7 @@ use crate::model::{Entry, FindCriteria, FindEvent, FindHit, FindQuery};
 use crate::view::{is_known_encoding, refusal};
 
 use content::Content;
+pub(crate) use filters::bounded_regex;
 use filters::{Filters, Names};
 use out::{Out, Run};
 

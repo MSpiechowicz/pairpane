@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { Transport } from '$lib/ipc/transport';
+  import RenameDialog from '$lib/rename/RenameDialog.svelte';
+  import type { SavedRenames } from '$lib/rename/saved.svelte';
 
   import AttributesDialog from './AttributesDialog.svelte';
   import ChecksumDialog from './ChecksumDialog.svelte';
@@ -11,11 +13,14 @@
   let {
     ipc,
     dialog,
+    renames,
     onClose,
     onDone,
   }: {
     ipc: Transport;
     dialog: ToolDialog;
+    /** The rename rules kept by name. */
+    renames: SavedRenames;
     onClose: () => void;
     /** A job started; a checksum file says its name. */
     onDone: (output?: string) => void;
@@ -30,6 +35,8 @@
   <ChecksumDialog {ipc} path={dialog.path} names={dialog.names} {onClose} {onDone} />
 {:else if dialog.kind === 'split'}
   <SplitDialog {ipc} path={dialog.path} entry={dialog.entry} to={dialog.to} {onClose} {onDone} />
-{:else}
+{:else if dialog.kind === 'pack'}
   <PackDialog {ipc} path={dialog.path} names={dialog.names} to={dialog.to} {onClose} {onDone} />
+{:else}
+  <RenameDialog {ipc} path={dialog.path} names={dialog.names} {renames} {onClose} {onDone} />
 {/if}

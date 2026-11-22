@@ -48,6 +48,7 @@ pub fn run() -> ExitCode {
             app.manage(commands::volumes::Volumes::default());
             app.manage(commands::ops::Ops::default());
             app.manage(commands::items::Items::default());
+            app.manage(commands::renames::Renames::default());
             app.manage(commands::view::Viewer::default());
             app.manage(commands::archives::Archives::default());
             app.manage(commands::find::Finder::default());
@@ -108,6 +109,8 @@ pub fn run() -> ExitCode {
             commands::ops::ops_answer,
             commands::ops::ops_rename,
             commands::ops::tasks::ops_task,
+            commands::ops::ops_rename_undo,
+            commands::renames::rename_preview,
             commands::items::ops_trash,
             commands::items::ops_untrash,
             commands::items::ops_delete,

@@ -45,6 +45,10 @@ impl Run<'_> {
             return self.add_to_archive(name, inner, source);
         }
 
+        if let Task::Rename { targets, undo, log } = task {
+            return self.rename_batch(targets, *undo, log);
+        }
+
         let scene = self.prepare_task(task)?;
 
         match task {
@@ -53,7 +57,11 @@ impl Run<'_> {
             Task::Split { part_size } => self.split_file(&scene, *part_size),
             Task::Combine => self.combine_parts(&scene),
             Task::Attributes(change) => self.change_attributes(&scene, change),
-            Task::Transfer | Task::Extract { .. } | Task::Pack { .. } | Task::AddToArchive { .. } => {
+            Task::Transfer
+            | Task::Extract { .. }
+            | Task::Pack { .. }
+            | Task::AddToArchive { .. }
+            | Task::Rename { .. } => {
                 Err(refusal(io::ErrorKind::InvalidInput, "this job cannot start with these items").into())
             }
         }

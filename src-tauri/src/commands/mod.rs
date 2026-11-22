@@ -9,6 +9,7 @@ pub mod items;
 mod limit;
 pub mod ops;
 pub mod panes;
+pub mod renames;
 pub mod sizes;
 pub mod state;
 pub mod updates;

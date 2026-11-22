@@ -91,7 +91,7 @@ pub(super) struct Held {
 
 #[cfg(windows)]
 pub(super) struct Held {
-    path: PathBuf,
+    pub(super) path: PathBuf,
 }
 
 #[cfg(unix)]

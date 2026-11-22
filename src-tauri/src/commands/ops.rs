@@ -25,6 +25,7 @@ use tauri::async_runtime;
 use tauri::ipc::Channel;
 
 use self::extractions::Extractions;
+use self::rename_undo::RenameUndo;
 use super::limit::{Permit, ThreadCap};
 use super::panes::resolve;
 use super::within::{Within, confirm};
@@ -50,6 +51,7 @@ pub struct Ops {
     engine: Engine,
     listener: Listener,
     extractions: Arc<Extractions>,
+    rename_undo: RenameUndo,
     renames: ThreadCap,
     guards: ThreadCap,
 }
@@ -73,6 +75,7 @@ impl Default for Ops {
             engine,
             listener,
             extractions,
+            rename_undo: RenameUndo::default(),
             renames: ThreadCap::default(),
             guards: ThreadCap::default(),
         }
@@ -202,6 +205,14 @@ pub async fn ops_answer(
 #[tauri::command]
 pub async fn ops_rename(ops: State<'_, Ops>, path: String, from: String, to: String) -> CommandResult<()> {
     ops.rename(path, from, to).await
+}
+
+/// Puts back the last multi-rename, which the job `job` was (the id `ops_task` returned), and returns the id of the job that
+/// does it. Not found when `job` is not the most recent rename, was undone already or renamed nothing; invalid input while
+/// it still runs. Items renamed again or removed since are skipped by the job (it counts them), never overwritten.
+#[tauri::command]
+pub async fn ops_rename_undo(ops: State<'_, Ops>, job: JobId) -> CommandResult<JobId> {
+    ops.rename_undo.undo(&ops.engine, job)
 }
 
 /// Checks a request from the webview and builds the engine's: both folders pass `check_folder`, and the names pass
@@ -357,8 +368,11 @@ pub mod add;
 pub mod extract;
 mod extractions;
 pub mod pack;
+mod rename_undo;
 pub mod tasks;
 
+#[cfg(test)]
+mod rename_tests;
 #[cfg(test)]
 mod tasks_tests;
 #[cfg(test)]

@@ -2,14 +2,14 @@
 //! engine, so it shows in the Transfers panel and can be paused and cancelled like a copy.
 //!
 //! Nothing is read from the disk here. A job that works in place (a checksum file, the check of one, permissions and
-//! times) has its own folder as the target, so it waits in the queue of that folder's volume; a split or a combine
+//! times, renames) has its own folder as the target, so it waits in the queue of that folder's volume; a split or a combine
 //! queues behind the volume of the folder it writes to.
 
 use pairpane_core::model::{AttributeChange, IpcErrorCode, JobId, JobTask, ModeChange};
-use pairpane_core::ops::{MIN_PART_SIZE, Request, Task, name_fits};
+use pairpane_core::ops::{MIN_PART_SIZE, RenameLog, Request, Task, name_fits};
 use tauri::State;
 
-use super::{Ops, checked_names, failed, names_too_large};
+use super::{Ops, checked_names, names_too_large};
 use crate::commands::panes::resolve;
 use crate::error::{CommandError, CommandResult};
 
@@ -21,12 +21,12 @@ impl Ops {
     pub(super) fn task(&self, from: String, names: Vec<String>, task: JobTask) -> CommandResult<JobId> {
         let request = task_request(from, names, task)?;
 
-        self.engine.submit(request).map_err(failed)
+        self.rename_undo.submit(&self.engine, request)
     }
 }
 
 /// Runs a file tool on the `names` of the folder `from` as a job and returns its id at once: a checksum file, the check
-/// of one, splitting a file, joining its parts, or changing permissions and times (see `JobTask`). Nothing is read
+/// of one, splitting a file, joining its parts, changing permissions and times, or renaming items to new names (see `JobTask`). Nothing is read
 /// from the disk here; a failure ends the job with a failed `ended` event.
 #[tauri::command]
 pub async fn ops_task(ops: State<'_, Ops>, from: String, names: Vec<String>, task: JobTask) -> CommandResult<JobId> {
@@ -37,6 +37,7 @@ pub async fn ops_task(ops: State<'_, Ops>, from: String, names: Vec<String>, tas
 /// [`checked_names`], and what the task says is what the system can do.
 pub(super) fn task_request(from: String, names: Vec<String>, task: JobTask) -> CommandResult<Request> {
     let from = resolve(Some(from), None)?;
+    let sent = names.len();
     let names = checked_names(&from, names)?;
 
     let (to, task) = match task {
@@ -72,6 +73,20 @@ pub(super) fn task_request(from: String, names: Vec<String>, task: JobTask) -> C
             check_attributes(&change)?;
 
             (from.clone(), Task::Attributes(change))
+        }
+        JobTask::Rename { targets } => {
+            // `checked_names` dropped the names that came twice: the new names would no longer line up with the items.
+            if targets.len() != sent || names.len() != sent {
+                return Err(invalid("choose a new name for each item, and each item once"));
+            }
+
+            let task = Task::Rename {
+                targets,
+                undo: false,
+                log: RenameLog::default(),
+            };
+
+            (from.clone(), task)
         }
     };
 

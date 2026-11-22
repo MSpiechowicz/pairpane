@@ -161,11 +161,15 @@ pub(super) fn execute(inner: &Inner, job: &Job) -> Finish {
         }
         Err(Stop::Cancelled) => {
             job.control.close();
+            run.flush_renamed();
             Outcome::Cancelled
         }
-        Err(Stop::Failed(error)) => Outcome::Failed {
-            error: report::ipc_error(&error),
-        },
+        Err(Stop::Failed(error)) => {
+            run.flush_renamed();
+            Outcome::Failed {
+                error: report::ipc_error(&error),
+            }
+        }
     };
 
     Finish {
@@ -177,6 +181,14 @@ pub(super) fn execute(inner: &Inner, job: &Job) -> Finish {
 }
 
 impl Run<'_> {
+    /// A multi-rename that ends early leaves its view with the exact count of the items it went through (progress is
+    /// throttled), which the page reads to tell whether anything was renamed and can be undone.
+    fn flush_renamed(&mut self) {
+        if matches!(self.job.request.task, Task::Rename { .. }) {
+            self.tick(true);
+        }
+    }
+
     pub(super) fn moving(&self) -> bool {
         self.job.request.kind == OpKind::Move
     }

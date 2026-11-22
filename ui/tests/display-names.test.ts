@@ -130,6 +130,24 @@ describe('names on the screen', () => {
     expect(missed).toEqual([]);
   });
 
+  it('the multi-rename dialog and the saved bar are among the components it reads', () => {
+    const files = Object.keys(sources).map((path) => path.replace('../src/lib/', ''));
+
+    expect(files).toEqual(
+      expect.arrayContaining([
+        'rename/RenameDialog.svelte',
+        'rename/RuleFields.svelte',
+        'rename/PreviewTable.svelte',
+        'saved/SavedBar.svelte',
+      ]),
+    );
+    // The names of the items and of the saved presets are shown, so those templates have to be written through displayName.
+    expect(shownIn(sources['../src/lib/rename/PreviewTable.svelte']).map(({ expression }) => expression)).toEqual(
+      expect.arrayContaining(['displayName(item.from)', 'displayName(item.to)']),
+    );
+    expect(shownIn(sources['../src/lib/saved/SavedBar.svelte']).map(({ expression }) => expression)).toContain('displayName(kept)');
+  });
+
   it('looks at the components that are there, and every exception is still needed', () => {
     const files = Object.keys(sources).map((path) => path.replace('../src/lib/', ''));
     expect(files.length).toBeGreaterThan(40);

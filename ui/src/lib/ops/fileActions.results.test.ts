@@ -52,6 +52,7 @@ describe('FileActions on search results', () => {
     'renameInline',
     'newFolder',
     'newFile',
+    'multiRename',
     'symlink',
     'hardlink',
     'properties',
@@ -197,7 +198,7 @@ describe('removing search results', () => {
     await files.confirmRemoval();
 
     expect(sent(backend, 'ops_trash')).toEqual([{ path: '/work/a', names: ['x.txt', 'y.txt'], within: { root: '/work', dir: 'a' } }]);
-    expect(files.toast).toMatchObject({ text: 'Moved 2 items to the Trash.', undo: 5 });
+    expect(files.toast).toMatchObject({ text: 'Moved 2 items to the Trash.', undo: { kind: 'trash', token: 5 } });
 
     await files.undo();
 
@@ -218,7 +219,7 @@ describe('removing search results', () => {
     await files.confirmRemoval();
 
     expect(sent(backend, 'ops_trash')).toHaveLength(2); // the third folder is left alone
-    expect(files.toast).toMatchObject({ text: 'Some items were moved to the Trash, but not all. Denied.', error: true, undo: 8 });
+    expect(files.toast).toMatchObject({ text: 'Some items were moved to the Trash, but not all. Denied.', error: true, undo: { kind: 'trash', token: 8 } });
     expect(view.selectedShown().map((item) => item.name)).toEqual(['b/z.txt', 'top.txt']);
   });
 

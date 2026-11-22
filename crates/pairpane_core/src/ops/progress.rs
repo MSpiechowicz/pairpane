@@ -83,6 +83,12 @@ impl Run<'_> {
         self.tick(false);
     }
 
+    /// A job that renames `count` items knows its total from the start.
+    pub(super) fn expect_items(&mut self, count: usize) {
+        self.progress.total_files = u32::try_from(count).unwrap_or(u32::MAX);
+        self.tick(false);
+    }
+
     /// A whole item was moved by a rename: it counts as one finished file.
     pub(super) fn renamed(&mut self) {
         self.progress.total_files = self.progress.total_files.saturating_add(1);

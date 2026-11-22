@@ -10,6 +10,8 @@ import type { SavedState } from '$lib/ipc/bindings/SavedState';
 import { IpcFailure } from '$lib/ipc/transport';
 import { Hotlist } from '$lib/panes/hotlist.svelte';
 import { PaneTabs } from '$lib/panes/tabs.svelte';
+import { blankRule } from '$lib/rename/rule';
+import { SavedRenames } from '$lib/rename/saved.svelte';
 
 import { arrive, fakeBackend } from '../../../tests/panes';
 import SessionHost from '../../../tests/SessionHost.svelte';
@@ -34,11 +36,13 @@ function setup(answers: Parameters<typeof fakeBackend>[0] = {}) {
   const panes = { left: new PaneTabs(backend.ipc, 'left'), right: new PaneTabs(backend.ipc, 'right') };
   const hotlist = new Hotlist();
   const searches = new SavedSearches();
+  const renames = new SavedRenames();
   const focus = { side: 'left' as PaneId };
   const session = new Session(backend.ipc, {
     panes,
     hotlist,
     searches,
+    renames,
     active: { get: () => focus.side, set: (side) => (focus.side = side) },
   });
 
@@ -55,7 +59,7 @@ function setup(answers: Parameters<typeof fakeBackend>[0] = {}) {
     flushSync();
   };
 
-  return { backend, panes, hotlist, searches, focus, session, calls, saves, opened, list };
+  return { backend, panes, hotlist, searches, renames, focus, session, calls, saves, opened, list };
 }
 
 type Setup = ReturnType<typeof setup>;
@@ -200,6 +204,7 @@ describe('Session saving', () => {
         right: { tabs: [{ path: '/home/me', sort: 'name', desc: false }], active: 0 },
         hotlist: [],
         searches: [],
+        renames: [],
       },
     ]);
   });
@@ -226,6 +231,24 @@ describe('Session saving', () => {
     await started(s);
 
     expect(s.searches.list).toEqual([]);
+    expect(s.renames.list).toEqual([]);
+  });
+
+  it('brings back the saved rename rules, and every save carries them, a delete included', async () => {
+    const rule = blankRule();
+    const s = setup({ state_load: () => ({ ...saved, renames: [{ name: 'Tidy', rule }] }) });
+    await started(s);
+
+    expect(s.renames.list).toEqual([{ name: 'Tidy', rule }]);
+
+    s.renames.save('Dated', { ...rule, name: '[YMD] [N]' });
+    await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS * 2);
+    expect(s.saves().at(-1)?.renames?.map((preset) => preset.name)).toEqual(['Tidy', 'Dated']);
+
+    s.renames.remove('Tidy');
+    s.renames.remove('Dated');
+    await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS * 2);
+    expect(s.saves().at(-1)?.renames).toEqual([]);
   });
 
   it('a save while a tab`s folder is still being opened stores that folder, not the one the pane still shows', async () => {

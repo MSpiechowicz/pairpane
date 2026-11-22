@@ -84,21 +84,25 @@ impl Names {
 }
 
 /// A regular expression within the limits of a search: linear time (the engine has no backtracking), a bounded
-/// program and cache, and a bounded nesting.
-fn regex(pattern: &str, case_sensitive: bool) -> io::Result<Regex> {
+/// program and cache, and a bounded nesting. The error says whether it was not valid or too big.
+pub(crate) fn bounded_regex(pattern: &str, case_sensitive: bool) -> Result<Regex, regex::Error> {
     RegexBuilder::new(pattern)
         .case_insensitive(!case_sensitive)
         .size_limit(REGEX_LIMIT)
         .dfa_size_limit(REGEX_LIMIT)
         .nest_limit(NEST_LIMIT)
         .build()
-        .map_err(|error| match error {
-            regex::Error::CompiledTooBig(_) => refusal(io::ErrorKind::InvalidInput, "the name pattern is too complex"),
-            _ => refusal(
-                io::ErrorKind::InvalidInput,
-                "the name pattern is not a valid regular expression",
-            ),
-        })
+}
+
+/// [`bounded_regex`] for a name pattern, refused with a fixed text.
+fn regex(pattern: &str, case_sensitive: bool) -> io::Result<Regex> {
+    bounded_regex(pattern, case_sensitive).map_err(|error| match error {
+        regex::Error::CompiledTooBig(_) => refusal(io::ErrorKind::InvalidInput, "the name pattern is too complex"),
+        _ => refusal(
+            io::ErrorKind::InvalidInput,
+            "the name pattern is not a valid regular expression",
+        ),
+    })
 }
 
 /// The tests of size, date and attributes.

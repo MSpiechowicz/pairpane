@@ -3,12 +3,12 @@
 //!
 //! The file and everything the webview sends to be saved is untrusted, so both directions go through [`clean`]: paths
 //! are checked by their syntax only ([`platform::check_folder`]; nothing on disk is touched, so a path on a dead
-//! mount costs nothing), and the number of tabs, favourites and saved searches is capped (a saved search must also be
-//! able to run, see [`searches`]). A file that is too big, not JSON, of
+//! mount costs nothing), and the number of tabs, favourites, saved searches and saved rename rules is capped (a saved
+//! search or rule must also be able to run, see [`searches`] and [`renames`]). A file that is too big, not JSON, of
 //! another version or in any way unexpected is not an error: the app starts with its defaults.
 //!
-//! A save that leaves out the searches (see [`SavedUpdate`]) keeps the stored ones; one that sends an empty list clears
-//! them.
+//! A save that leaves out the searches or the rename rules (see [`SavedUpdate`]) keeps the stored ones; one that sends an
+//! empty list clears them.
 //!
 //! Writes replace the file atomically (a temporary file, then a rename), so a crash never leaves half a file.
 //! Log lines never contain a path.
@@ -23,8 +23,11 @@ use serde::{Deserialize, Serialize};
 use crate::listing::platform::check_folder;
 use crate::model::{SavedPane, SavedState, SavedTab};
 
+mod named;
+mod renames;
 mod searches;
 
+pub use renames::MAX_RENAMES;
 pub use searches::{MAX_SEARCH_NAME_CHARS, MAX_SEARCHES, SavedUpdate};
 
 /// The layout of the file. A file of another version is ignored (and replaced by the next save).
@@ -56,7 +59,7 @@ struct Header {
 /// `state` with everything unusable removed: tabs and favourites whose path is not a plain local absolute folder
 /// path, tabs beyond [`MAX_TABS`], favourites beyond [`MAX_HOTLIST`] and repeated favourites. The active tab of a pane
 /// stays active when it survives, else the next surviving tab (the last one when none follows) is. Saved searches are
-/// cleaned by [`searches::clean_searches`].
+/// cleaned by [`searches::clean_searches`] and saved rename rules by [`renames::clean_renames`].
 pub fn clean(state: SavedState) -> SavedState {
     let mut seen = HashSet::new();
     let hotlist = state
@@ -72,6 +75,7 @@ pub fn clean(state: SavedState) -> SavedState {
         right: clean_pane(state.right),
         hotlist,
         searches: searches::clean_searches(state.searches),
+        renames: renames::clean_renames(state.renames),
     }
 }
 
@@ -170,7 +174,11 @@ pub fn save(file: &Path, state: SavedState) -> io::Result<()> {
 /// Like [`save`] for a state the webview sent: when it has no `searches` the ones stored in `file` are kept (none when
 /// the file cannot be used), when it has them, even none, they replace the stored ones. Otherwise as [`save_changed`].
 pub fn save_update(file: &Path, update: SavedUpdate, last: &mut Option<Vec<u8>>) -> io::Result<bool> {
-    let state = update.resolve(|| load(file).map(|stored| stored.searches).unwrap_or_default());
+    let state = update.resolve(|| {
+        load(file)
+            .map(|stored| (stored.searches, stored.renames))
+            .unwrap_or_default()
+    });
 
     save_changed(file, state, last)
 }
@@ -224,3 +232,6 @@ mod tests;
 
 #[cfg(test)]
 mod searches_tests;
+
+#[cfg(test)]
+mod renames_tests;

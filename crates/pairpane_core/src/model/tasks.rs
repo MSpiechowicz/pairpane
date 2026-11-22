@@ -86,6 +86,8 @@ pub enum JobTask {
     Combine { to: String },
     /// Changes permissions (or the Windows attributes) and times.
     Attributes { change: AttributeChange },
+    /// Renames the items (the names of the command, the sources): `targets[i]` is the new name of the item `i`.
+    Rename { targets: Vec<String> },
 }
 
 /// What the Windows file attributes of an item say (`null` for the whole group on other systems).
