@@ -1,3 +1,10 @@
+# [0.17.0](https://github.com/MSpiechowicz/pairpane/compare/v0.16.0...v0.17.0) (2026-11-22)
+
+
+### Features
+
+* **find:** find files (Alt+F7) by name, content, size, date and attributes; duplicates, saved searches, results panel (#37) ([5f76987](https://github.com/MSpiechowicz/pairpane/commit/5f76987e7ba2e209a131d72e8b31ade17ec9f66c))
+
 # [0.16.0](https://github.com/MSpiechowicz/pairpane/compare/v0.15.0...v0.16.0) (2026-11-22)
 
 
