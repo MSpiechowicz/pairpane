@@ -1,3 +1,10 @@
+# [0.16.0](https://github.com/MSpiechowicz/pairpane/compare/v0.15.0...v0.16.0) (2026-11-22)
+
+
+### Features
+
+* archives — pack and add to archives (#36) ([c4a36b6](https://github.com/MSpiechowicz/pairpane/commit/c4a36b60bfde9149004c5ec7c60eb01ec66950ae))
+
 # [0.15.0](https://github.com/MSpiechowicz/pairpane/compare/v0.14.0...v0.15.0) (2026-11-22)
 
 
