@@ -135,6 +135,11 @@ pub fn run() -> ExitCode {
 
                 // Cancel the jobs, silently, and give each a moment to remove its partial file (the plan's decision 8).
                 if let RunEvent::Exit = event {
+                    // First: an archive read that nobody cancels (a file opened in the viewer, a password check, the
+                    // checks before an extraction) stops, so none starts `unrar` again while the staging folders go.
+                    if let Some(archives) = app.try_state::<commands::archives::Archives>() {
+                        archives.shut_down();
+                    }
                     if let Some(ops) = app.try_state::<commands::ops::Ops>() {
                         ops.shutdown();
                     }

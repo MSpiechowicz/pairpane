@@ -134,6 +134,31 @@ fn a_password_fault_reaches_the_page_as_password_required() {
 }
 
 #[test]
+fn the_exit_flag_stops_the_reads_that_have_no_cancel_flag_of_their_own() {
+    let (_folder, path) = archive_in_folder("a.tar", &tar_of(&[item("a.txt", b"one")]));
+    let target = Target::parse(path).expect("valid");
+    let archives = Archives::default();
+    let opened = archives.open(&target).expect("open");
+    assert!(!archives.stop().load(Ordering::Relaxed));
+    archives
+        .index(&target, &opened, archives.stop(), None)
+        .expect("before the exit");
+
+    // Clones share it: the listing thread's copy stops with the one the app raises.
+    let clone = archives.clone();
+    archives.shut_down();
+
+    assert!(clone.stop().load(Ordering::Relaxed));
+    let (_other, other_path) = archive_in_folder("b.tar", &tar_of(&[item("b.txt", b"two")]));
+    let other = Target::parse(other_path).expect("valid");
+    let error = clone
+        .index(&other, &clone.open(&other).expect("open"), clone.stop(), None)
+        .expect_err("stopped");
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    assert_eq!(code(&archive_error(&error)), IpcErrorCode::Io);
+}
+
+#[test]
 fn a_missing_unrar_and_a_protected_rar_keep_their_own_texts_and_codes() {
     let missing = archive_error(&archive::rar::missing());
     let protected = archive_error(&archive::rar::protected());
@@ -142,6 +167,23 @@ fn a_missing_unrar_and_a_protected_rar_keep_their_own_texts_and_codes() {
     assert_eq!(code(&missing), IpcErrorCode::Unsupported);
     assert_eq!(code(&protected), IpcErrorCode::Unsupported);
     assert_eq!(protected.message, archive::rar::PASSWORD_TEXT);
+}
+
+#[test]
+fn an_unrar_that_is_too_old_is_told_with_its_own_text_naming_the_version() {
+    let known = archive_error(&archive::rar::too_old(Some("6.21")));
+    let unknown = archive_error(&archive::rar::too_old(None));
+
+    assert_eq!(code(&known), IpcErrorCode::Unsupported);
+    assert_eq!(
+        known.message,
+        "The installed unrar 6.21 is not compatible. Update unrar to version 7 or newer to open RAR archives."
+    );
+    assert_eq!(code(&unknown), IpcErrorCode::Unsupported);
+    assert_eq!(
+        unknown.message,
+        "The installed unrar is not compatible. Update unrar to version 7 or newer to open RAR archives."
+    );
 }
 
 #[test]

@@ -112,6 +112,7 @@ mod job;
 mod listed;
 mod meta;
 mod open;
+mod origin;
 mod partial;
 mod plan;
 mod progress;
@@ -170,6 +171,8 @@ mod held_tests;
 mod items_tests;
 #[cfg(test)]
 mod move_tests;
+#[cfg(test)]
+mod origin_tests;
 #[cfg(test)]
 mod plan_tests;
 #[cfg(test)]

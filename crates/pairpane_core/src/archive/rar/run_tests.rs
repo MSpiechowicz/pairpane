@@ -116,18 +116,18 @@ fn ordinals(index: &ArchiveIndex, dir: &str, names: &[&str]) -> Vec<u32> {
 #[test]
 fn the_arguments_end_the_switches_before_any_path_and_the_destination_comes_last() {
     let archive = Path::new("/data/-x.rar");
-    let staging = Path::new("/tmp/stage");
-    let destination = format!("/tmp/stage{}", std::path::MAIN_SEPARATOR);
+    // Relative to the working folder, which is the staging folder: never an absolute path `unrar` could make again.
+    let destination = format!(".{}", std::path::MAIN_SEPARATOR);
 
     let list = list_args(archive);
     assert_eq!(list.last().expect("last"), "/data/-x.rar");
     assert_eq!(list[list.len() - 2], "--");
 
-    let all = extract_args(archive, None, staging);
+    let all = extract_args(archive, None);
     assert_eq!(all[all.len() - 3..], ["--", "/data/-x.rar", destination.as_str()]);
     assert!(all.iter().any(|arg| arg == "-ol-"), "links are skipped by unrar itself");
 
-    let named = extract_args(archive, Some(&["-r", "a/@b"]), staging);
+    let named = extract_args(archive, Some(&["-r", "a/@b"]));
     assert_eq!(
         named[named.len() - 5..],
         ["--", "/data/-x.rar", "-r", "a/@b", destination.as_str()]

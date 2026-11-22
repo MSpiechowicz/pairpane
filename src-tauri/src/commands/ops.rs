@@ -22,6 +22,7 @@ use tauri::State;
 use tauri::async_runtime;
 use tauri::ipc::Channel;
 
+use self::extractions::Extractions;
 use super::limit::{Permit, ThreadCap};
 use super::panes::resolve;
 use crate::error::{CommandError, CommandResult};
@@ -36,10 +37,12 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 /// The latest channel the UI registered; `None` until it does.
 type Listener = Arc<Mutex<Option<Channel<OpsEvent>>>>;
 
-/// The transfer engine, the channel its events go to and the cap on rename threads.
+/// The transfer engine, the channel its events go to, the extraction jobs that run with a password and the cap on rename
+/// threads.
 pub struct Ops {
     engine: Engine,
     listener: Listener,
+    extractions: Arc<Extractions>,
     renames: ThreadCap,
 }
 
@@ -48,12 +51,20 @@ impl Default for Ops {
         let engine = Engine::new();
         let listener = Listener::default();
 
+        let extractions = Arc::<Extractions>::default();
+
         let sink = Arc::clone(&listener);
-        engine.set_sink(Arc::new(move |event| deliver(&sink, event)));
+        let watch = Arc::clone(&extractions);
+        engine.set_sink(Arc::new(move |event| {
+            // First: a password the job found wrong is forgotten before the page is told the job failed.
+            watch.observe(&event);
+            deliver(&sink, event);
+        }));
 
         Self {
             engine,
             listener,
+            extractions,
             renames: ThreadCap::default(),
         }
     }
@@ -290,6 +301,7 @@ fn lock(listener: &Listener) -> MutexGuard<'_, Option<Channel<OpsEvent>>> {
 }
 
 pub mod extract;
+mod extractions;
 pub mod tasks;
 
 #[cfg(test)]

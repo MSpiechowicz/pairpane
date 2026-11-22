@@ -11,7 +11,6 @@
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 
 use pairpane_core::archive::{self, Flow, MAX_VIEW_ENTRY, MIN_FREE_RESERVE, PasswordFault};
 use pairpane_core::listing::platform;
@@ -87,9 +86,8 @@ impl Viewer {
 /// Extracts the entry into a private temporary file, opens it for the viewer and deletes it.
 fn open_entry(archives: &Archives, target: &Target, dir: &str, name: &str) -> Result<Opened, IpcError> {
     let opened = archives.open(target).map_err(|error| archive_error(&error))?;
-    let never = AtomicBool::new(false);
     let index = archives
-        .index(target, &opened, &never, None)
+        .index(target, &opened, archives.stop(), None)
         .map_err(|error| archives.report(target, &error))?;
 
     let found = index
@@ -117,7 +115,7 @@ fn open_entry(archives: &Archives, target: &Target, dir: &str, name: &str) -> Re
 
     let scratch = Scratch::create(name).map_err(|error| archive_error(&error))?;
     let mut file = scratch.open_file().map_err(|error| archive_error(&error))?;
-    let mut source = archive::open_source(&index, &opened.input(), &never, password.as_deref())
+    let mut source = archive::open_source(&index, &opened.input(), archives.stop(), password.as_deref())
         .map_err(|error| archives.report(target, &error))?;
 
     let mut written = false;

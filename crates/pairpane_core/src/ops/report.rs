@@ -2,7 +2,7 @@
 
 use std::io::{self, ErrorKind};
 
-use crate::archive::{PasswordFault, password_fault};
+use crate::archive::{fault_text, password_fault};
 use crate::model::{IpcError, IpcErrorCode};
 
 /// Windows `ERROR_PRIVILEGE_NOT_HELD`: creating a symbolic link without the privilege (or Developer Mode).
@@ -21,13 +21,7 @@ pub(super) fn ipc_error(error: &io::Error) -> IpcError {
     }
 
     if let Some(fault) = password_fault(error) {
-        return IpcError::new(
-            IpcErrorCode::PasswordRequired,
-            match fault {
-                PasswordFault::Needed => "needs a password",
-                PasswordFault::Wrong => "the password is wrong",
-            },
-        );
+        return IpcError::new(IpcErrorCode::PasswordRequired, fault_text(fault));
     }
 
     if error.raw_os_error().is_none()
@@ -72,7 +66,7 @@ pub(super) fn refusal(kind: ErrorKind, text: &'static str) -> io::Error {
 mod tests {
     use pretty_assertions::assert_eq;
 
-    use crate::archive::password_error;
+    use crate::archive::{PasswordFault, password_error};
 
     use super::*;
 

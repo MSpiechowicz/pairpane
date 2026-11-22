@@ -16,9 +16,14 @@ const MAX_TRIES: u32 = 100;
 /// The start of the name of every staging folder (and the sweep removes the ones that are left).
 const PREFIX: &str = ".pairpane-rar-";
 
-/// How old a folder of another process must be for [`sweep`] to remove it: longer than an unpacking may run (see
-/// `run::EXTRACT_DEADLINE`, six hours), so the folder of a process that is still working is never taken.
+/// How old a folder of another process must be for [`sweep`] to remove it where the system cannot tell whether that
+/// process runs: longer than an unpacking may run (see `run::EXTRACT_DEADLINE`, six hours), so the folder of a process
+/// that is still working is never taken. A running unpacking also touches its folder (see [`touch`]), so its age is the
+/// time since its last sign of life.
 const STALE_AFTER: Duration = Duration::from_secs(7 * 60 * 60);
+
+/// A file made and removed in a staging folder to change the folder's modification time.
+const PULSE: &str = ".pairpane-alive";
 
 /// The folder of one unpacking.
 #[derive(Debug)]
@@ -87,8 +92,10 @@ impl Drop for Staging {
 
 /// Removes the staging folders that an earlier run left in the temporary folder (a crash or a kill skips the guard's
 /// drop), at start-up: folders named `.pairpane-rar-…` that are real folders (never a link), on Unix are ours, and belong
-/// to a process that is gone (where the system tells: Linux) or have not been touched for [`STALE_AFTER`] (longer than an
-/// unpacking may run, so the folder of another running instance is not taken). Run off the UI's way.
+/// to a process that is gone. Where the system tells whether a process runs (Linux) the folder of a running one is never
+/// taken, however old; elsewhere a folder is taken when it has not been touched for [`STALE_AFTER`] (longer than an
+/// unpacking may run, and a running one touches its folder, so the folder of another running instance is not taken).
+/// Run off the UI's way.
 pub fn sweep() {
     sweep_in(&std::env::temp_dir(), SystemTime::now(), false);
 }
@@ -123,8 +130,15 @@ pub(super) fn sweep_in(temp: &Path, now: SystemTime, include_own: bool) {
             .ok()
             .and_then(|modified| now.duration_since(modified).ok())
             .is_some_and(|age| age >= STALE_AFTER);
-        let mine = pid == std::process::id();
-        let removable = stale || (mine && include_own) || !running(pid);
+        let removable = if pid == std::process::id() {
+            // This process runs; only its own exit takes its folders.
+            include_own
+        } else {
+            match running(pid) {
+                Some(running) => !running,
+                None => stale,
+            }
+        };
 
         if seen.is_dir() && is_ours(&seen, owner) && removable {
             let _ = fs::remove_dir_all(entry.path());
@@ -137,15 +151,26 @@ fn owner_pid(rest: &str) -> Option<u32> {
     u32::from_str_radix(rest.split_once('-')?.0, 16).ok()
 }
 
-/// Whether the process `pid` runs; true where the system does not tell.
+/// Whether the process `pid` runs; `None` where the system does not tell.
 #[cfg(target_os = "linux")]
-fn running(pid: u32) -> bool {
-    Path::new("/proc").join(pid.to_string()).exists()
+fn running(pid: u32) -> Option<bool> {
+    Some(Path::new("/proc").join(pid.to_string()).exists())
 }
 
 #[cfg(not(target_os = "linux"))]
-fn running(_pid: u32) -> bool {
-    true
+fn running(_pid: u32) -> Option<bool> {
+    None
+}
+
+/// Changes the modification time of the staging folder `root` to now, by making and removing a file in it, so the sweep
+/// of another instance sees a folder that is in use as young. Best effort: nothing is reported. A file that is there
+/// already (an entry of the archive that has the name) is left alone.
+pub(super) fn touch(root: &Path) {
+    let pulse = root.join(PULSE);
+
+    if File::options().write(true).create_new(true).open(&pulse).is_ok() {
+        let _ = fs::remove_file(&pulse);
+    }
 }
 
 /// Who we are, as the owner of a folder we make: the system tells no other way without `unsafe`. `None` where the

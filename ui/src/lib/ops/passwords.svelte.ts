@@ -21,6 +21,8 @@ export interface Prompt {
 /** An ask that waits for the dialog: every action that needs the archive joins it and goes on with its answer. */
 interface Ask {
   prompt: Prompt;
+  /** The failure that made it ask: what a caller that joins it, and is refused, fails with. */
+  failure: IpcFailure;
   /** One per action that waits; each is called with `true` when the backend has the password, `false` when the user gave up. */
   waiters: Set<(taken: boolean) => void>;
 }
@@ -50,7 +52,9 @@ export class Passwords {
    * `ipc` with the guarded commands retried after the user gave the password: a command that fails because the
    * archive needs a password (or the one given does not open it) waits for the dialog and runs again. Giving up
    * is the command's own failure. A caller that aborts its `signal` no longer waits and is not run again; the
-   * question goes away with its last caller.
+   * question goes away with its last caller. A command that starts while the archive's question is on the screen
+   * joins it at once instead of failing the same way again, so a command replaced by a newer one of the same
+   * archive (a reload) hands the question over, with what was typed in it, rather than closing it.
    */
   wrap(ipc: Transport): Transport {
     return {
@@ -68,28 +72,38 @@ export class Passwords {
   ): Promise<CommandResult<K>> {
     const { archive } = args as unknown as { archive: string };
 
+    const asking = this.#asks.find((open) => open.prompt.archive === archive);
+    if (asking !== undefined && !(await this.#taken(archive, asking.failure, signal))) {
+      throw asking.failure;
+    }
+
     for (;;) {
       try {
         return await ipc.invoke(name, args);
       } catch (error) {
         const failure = IpcFailure.from(error);
-        if (failure.code !== 'passwordRequired' || !(await this.#ask(archive, failure.message, signal))) {
+        if (failure.code !== 'passwordRequired' || !(await this.#taken(archive, failure, signal))) {
           throw failure;
         }
       }
     }
   }
 
+  /** The password of `archive` was given and the caller still wants its command run (`signal` did not abort meanwhile). */
+  async #taken(archive: string, failure: IpcFailure, signal: InvokeOptions['signal']): Promise<boolean> {
+    return (await this.#ask(archive, failure, signal)) && signal?.aborted !== true;
+  }
+
   /** Waits for the password of `archive`; a question already on the screen for it is joined. `false`: gave up, or `signal` aborted. */
-  #ask(archive: string, message: string, signal: InvokeOptions['signal']): Promise<boolean> {
+  #ask(archive: string, failure: IpcFailure, signal: InvokeOptions['signal']): Promise<boolean> {
     if (signal?.aborted) {
       return Promise.resolve(false);
     }
 
     let ask = this.#asks.find((open) => open.prompt.archive === archive);
     if (ask === undefined) {
-      const reason = /wrong/i.test(message) ? 'wrong' : 'needed';
-      ask = { prompt: { archive, name: archiveName(archive), reason, failure: undefined, busy: false }, waiters: new Set() };
+      const reason = /wrong/i.test(failure.message) ? 'wrong' : 'needed';
+      ask = { prompt: { archive, name: archiveName(archive), reason, failure: undefined, busy: false }, failure, waiters: new Set() };
       this.#asks.push(ask);
       this.#show();
     }

@@ -29,4 +29,17 @@ describe('Dock', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Delete (F8)' }));
   });
+
+  it('F5 is called Extract inside an archive and Copy elsewhere, and still reports F5', async () => {
+    const onKey = vi.fn();
+    const { rerender } = render(Dock, { onKey });
+    expect(screen.getByRole('button', { name: 'Copy (F5)' })).toBeInTheDocument();
+
+    await rerender({ onKey, inArchive: true });
+
+    expect(screen.queryByRole('button', { name: 'Copy (F5)' })).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Extract (F5)' }));
+    expect(onKey.mock.calls).toEqual([['F5']]);
+    expect(screen.getByRole('button', { name: 'Move (F6)' })).toBeInTheDocument();
+  });
 });

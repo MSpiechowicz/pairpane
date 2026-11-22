@@ -3,14 +3,16 @@
 //! | what | command |
 //! | ---- | ------- |
 //! | list | `unrar vt -p- -cfg- -@ -- <archive>` (the technical listing, read by [`parse`](super::parse)) |
-//! | unpack | `unrar x -p- -o+ -ol- -idq -cfg- -@ -- <archive> [<name>...] <staging>/` |
+//! | unpack | `unrar x -p- -o+ -ol- -idq -cfg- -@ -- <archive> [<name>...] ./` (run in the staging folder) |
 //!
 //! `--` ends the switches before any path or name; `-p-` never asks for a password (and never uses one); `-cfg-` ignores
 //! the configuration files and the `RAR` variable; `-@` reads no list files (a name that starts with `@` is a name);
 //! `-ol-` skips every symbolic link instead of creating it; `-o+` overwrites (the staging folder is empty, and a name that
 //! comes twice in an archive is wanted as its last one). No shell is involved. The environment is cleared but for
 //! `LC_ALL` (a UTF-8 locale, so names are written as UTF-8) and `TZ=UTC` (so the times it prints are UTC). The standard
-//! input is closed, the standard error and, when unpacking, the standard output go nowhere. The listing's output is read
+//! input is closed, the standard error and, when unpacking, the standard output go nowhere. The destination is relative
+//! (`./`) to the working folder, which is the staging folder: when that folder is removed (the app exits while `unrar`
+//! runs) `unrar` fails instead of making the folder again at an absolute path. The listing's output is read
 //! with caps ([`parse`](super::parse)) and `unrar` is killed when the cancel flag is raised or the deadline passes.
 
 use std::ffi::OsString;
@@ -19,7 +21,7 @@ use std::path::{MAIN_SEPARATOR_STR, Path, PathBuf};
 use std::process::{Child, ExitStatus, Stdio};
 use std::sync::atomic::AtomicBool;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::archive::MIN_FREE_RESERVE;
 use crate::listing::platform;
@@ -27,7 +29,7 @@ use crate::process::{self, Exit, GRACE, Wait};
 use crate::view::refusal;
 
 use super::parse::{Listing, parse};
-use super::{find, full, missing, protected, too_old, version};
+use super::{find, full, missing, protected, stage, version};
 use crate::archive::error::{cancelled, check, unreadable, unsupported};
 
 /// How long a listing may take.
@@ -35,6 +37,9 @@ const LIST_DEADLINE: Duration = Duration::from_secs(5 * 60);
 
 /// How long an unpacking may take: a big archive on a slow disk takes hours, a hung `unrar` should not stay forever.
 const EXTRACT_DEADLINE: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// How often a running unpacking touches its staging folder (see [`stage::touch`]).
+const TOUCH_EVERY: Duration = Duration::from_secs(5);
 
 /// A UTF-8 locale of this system; `unrar` writes names in the locale's charset.
 #[cfg(target_os = "macos")]
@@ -58,13 +63,11 @@ pub struct Unrar {
 }
 
 impl Unrar {
-    /// The `unrar` of this system (see [`find`]), or the error [`missing`] makes, or [`too_old`] when it is older than 7.
+    /// The `unrar` of this system (see [`find`]), or the error [`missing`] makes, or [`super::too_old`] when it is older than 7.
     pub fn locate() -> io::Result<Self> {
         let program = find::find()?;
 
-        if !version::is_recent(&program) {
-            return Err(too_old());
-        }
+        version::require(&program)?;
 
         Ok(Self { program })
     }
@@ -111,7 +114,7 @@ impl Unrar {
     }
 
     /// Unpacks `names` (everything when `None`) of `archive` into the existing, empty folder `staging`, which `unrar` gets
-    /// as its working folder and as its destination. A file that cannot be unpacked is not there afterwards (a damaged one
+    /// as its working folder; its destination is that folder as `./` (never the absolute path). A file that cannot be unpacked is not there afterwards (a damaged one
     /// is removed by `unrar`); that is not an error here. While it runs the free space of the volume of `staging` is
     /// looked at, and `unrar` is killed with a "storage full" refusal when less than [`MIN_FREE_RESERVE`] is left.
     pub fn extract(
@@ -125,8 +128,15 @@ impl Unrar {
         plain(archive)?;
         plain(staging)?;
 
-        let mut child = self.start(extract_args(archive, names, staging), Some(staging), Stdio::null())?;
+        let mut child = self.start(extract_args(archive, names), Some(staging), Stdio::null())?;
+        let mut touched = Instant::now();
         let waited = process::wait_for_exit(&mut child, cancel, EXTRACT_DEADLINE, || {
+            // The folder's age is the time since its last sign of life, for the sweep of another instance.
+            if touched.elapsed() >= TOUCH_EVERY {
+                touched = Instant::now();
+                stage::touch(staging);
+            }
+
             keep_reserve(staging, MIN_FREE_RESERVE)
         });
         process::stop(&mut child);
@@ -168,16 +178,17 @@ pub(super) fn list_args(archive: &Path) -> Vec<OsString> {
     args
 }
 
-/// The arguments that unpack `names` of `archive` into `staging`.
-pub(super) fn extract_args(archive: &Path, names: Option<&[&str]>, staging: &Path) -> Vec<OsString> {
+/// The arguments that unpack `names` of `archive` into the working folder, as `./`.
+pub(super) fn extract_args(archive: &Path, names: Option<&[&str]>) -> Vec<OsString> {
     let mut args: Vec<OsString> = ["x", "-p-", "-o+", "-ol-", "-idq", "-cfg-", "-@", "--"]
         .map(OsString::from)
         .into();
     args.push(archive.into());
     args.extend(names.unwrap_or_default().iter().map(OsString::from));
 
-    // The destination is the last argument, and it is told from a name by its trailing separator.
-    let mut destination = OsString::from(staging);
+    // The destination is the last argument, and it is told from a name by its trailing separator. It is relative: the
+    // working folder is the staging folder, and a folder that is gone must not be made again by `unrar`.
+    let mut destination = OsString::from(".");
     destination.push(MAIN_SEPARATOR_STR);
     args.push(destination);
 

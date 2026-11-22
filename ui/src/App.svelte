@@ -310,7 +310,7 @@
     {/each}
   </main>
 
-  <Dock onKey={onDockKey}>
+  <Dock inArchive={panes[active].view.listing.readonly} onKey={onDockKey}>
     <TransfersChip {transfers} open={panelOpen} onToggle={() => (panelOpen = !panelOpen)} />
   </Dock>
 </div>

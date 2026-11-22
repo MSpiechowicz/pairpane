@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use pairpane_core::archive::{
@@ -48,13 +48,16 @@ const MAX_PASSWORDS: usize = 64;
 /// The longest password accepted, in bytes.
 const MAX_PASSWORD_BYTES: usize = 1024;
 
-/// The indexes and passwords of the archives opened lately, and the cap on the threads that read them. Clones share all
-/// of it (a listing thread holds one).
+/// The indexes and passwords of the archives opened lately, the cap on the threads that read them and the flag that stops
+/// them all when the app exits. Clones share all of it (a listing thread holds one).
 #[derive(Clone, Default)]
 pub struct Archives {
     cache: Arc<IndexCache>,
     passwords: Arc<Mutex<HashMap<PathBuf, Arc<Password>>>>,
     work: ThreadCap,
+    /// Raised once, when the app exits: the reads that have no cancel flag of their own (a password check, the checks
+    /// before an extraction, a file opened in the viewer) stop with it.
+    shutdown: Arc<AtomicBool>,
 }
 
 /// A checked archive path: the folder that holds the archive, its plain name and the two joined.
@@ -126,6 +129,26 @@ impl Archives {
     /// Drops the password kept for the archive, so the page is asked for one again.
     pub(super) fn forget(&self, archive: &Path) {
         self.lock().remove(archive);
+    }
+
+    /// [`Archives::forget`], but only when the password kept is `used` (the very one): a job that learns its password was
+    /// wrong must not drop the one the user gave after it started.
+    pub(super) fn forget_used(&self, archive: &Path, used: &Arc<Password>) {
+        let mut passwords = self.lock();
+
+        if passwords.get(archive).is_some_and(|kept| Arc::ptr_eq(kept, used)) {
+            passwords.remove(archive);
+        }
+    }
+
+    /// Stops every read that holds [`Archives::stop`]; called when the app exits, before the temporary folders are swept.
+    pub fn shut_down(&self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+    }
+
+    /// The flag [`Archives::shut_down`] raises: the cancel flag of the reads that no page cancels.
+    pub(super) fn stop(&self) -> &AtomicBool {
+        &self.shutdown
     }
 
     /// [`archive_error`] of `error`, met reading the archive `target` with the password kept for it. A password that
@@ -222,10 +245,8 @@ fn not_an_archive() -> io::Error {
 /// our own refusals with their text (which holds no path), and for anything else only the kind of failure. Never a path,
 /// never a password.
 pub(super) fn archive_error(error: &io::Error) -> IpcError {
-    match archive::password_fault(error) {
-        Some(PasswordFault::Needed) => return IpcError::new(IpcErrorCode::PasswordRequired, "needs a password"),
-        Some(PasswordFault::Wrong) => return IpcError::new(IpcErrorCode::PasswordRequired, "the password is wrong"),
-        None => {}
+    if let Some(fault) = archive::password_fault(error) {
+        return IpcError::new(IpcErrorCode::PasswordRequired, archive::fault_text(fault));
     }
 
     // Before the other "not found": it is the `unrar` program that is missing, not the archive.
@@ -293,9 +314,8 @@ impl Archives {
     /// The password check on a blocking thread.
     fn check(&self, target: &Target, password: Password) -> io::Result<bool> {
         let opened = self.open(target)?;
-        let never = AtomicBool::new(false);
 
-        let index = match self.index(target, &opened, &never, Some(&password)) {
+        let index = match self.index(target, &opened, self.stop(), Some(&password)) {
             Ok(index) => index,
             // A header that stays shut with this password is a wrong password, not a failure.
             Err(error) if archive::password_fault(&error).is_some() => return Ok(false),

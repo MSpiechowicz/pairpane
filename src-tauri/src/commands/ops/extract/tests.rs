@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use pairpane_core::archive::Password;
 use pairpane_core::model::{OpKind, OpsEvent, Outcome};
 use tauri::async_runtime::block_on;
 
@@ -209,4 +210,40 @@ fn a_remembered_password_that_the_archive_turns_down_is_forgotten_so_the_page_as
 
     assert_eq!(error.code(), IpcErrorCode::PasswordRequired);
     assert!(archives.password(Path::new(&archive)).is_none());
+}
+
+#[test]
+fn a_password_the_job_finds_wrong_while_it_decrypts_is_forgotten_when_the_job_ends() {
+    let zip = zip_of(&[encrypted("secret.txt", b"not really encrypted data")]);
+    let (_folder, archive) = archive_in_folder("pack.zip", &zip);
+    let (ops, out, events) = running();
+    let archives = Archives::default();
+    let kept = PathBuf::from(&archive);
+    archives.remember(kept.clone(), Password::new("wrong-one".to_owned()));
+
+    extract_into(&ops, &archives, &archive, "", &[], out.path()).expect("the directory does not turn it down");
+
+    let Outcome::Failed { error } = wait_for_end(&events) else {
+        panic!("the job fails on the data");
+    };
+    assert_eq!(error.code, IpcErrorCode::PasswordRequired);
+    assert!(error.message.contains("wrong"), "{}", error.message);
+    assert!(
+        archives.password(&kept).is_none(),
+        "forgotten before the page was told, so it asks again"
+    );
+}
+
+#[test]
+fn a_job_that_ends_for_another_reason_keeps_the_password() {
+    let (_folder, archive) = archive_in_folder("pack.tar", &sample());
+    let (ops, out, events) = running();
+    let archives = Archives::default();
+    let kept = PathBuf::from(&archive);
+    archives.remember(kept.clone(), Password::new("right-one".to_owned()));
+
+    extract_into(&ops, &archives, &archive, "", &[], out.path()).expect("accepted");
+
+    assert_eq!(wait_for_end(&events), Outcome::Done);
+    assert!(archives.password(&kept).is_some());
 }

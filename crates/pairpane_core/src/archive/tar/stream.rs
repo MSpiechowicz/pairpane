@@ -85,9 +85,9 @@ impl<F: ReadAt + ?Sized> Stream for BufReader<FileReader<'_, F>> {
     }
 }
 
-/// The most memory, in KiB, the LZMA2 decoder of one XZ block may take (its dictionary and model): 512 MiB, past the
-/// 64 MiB of `xz -9` and its 192 MiB with `-e` by a wide margin. A tar that needs more cannot be read.
-const XZ_MEMORY_KB: u32 = 512 * 1024;
+/// The most memory, in KiB, the LZMA2 decoder of one XZ block may take (its dictionary and model): 256 MiB, past the
+/// 64 MiB of `xz -9` and its 192 MiB with `-e`. A tar that needs more cannot be read.
+const XZ_MEMORY_KB: u32 = 256 * 1024;
 
 /// A Zstandard stream of one or more frames back to back (what `cat a.zst b.zst` makes), read as one: the decoder of
 /// `ruzstd` stops at the end of a frame, so the next frame is started when the file has more. A frame's window is held to

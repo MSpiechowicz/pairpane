@@ -47,10 +47,16 @@ struct Marker(PasswordFault);
 
 impl fmt::Display for Marker {
     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
-        out.write_str(match self.0 {
-            PasswordFault::Needed => "needs a password",
-            PasswordFault::Wrong => "the password is wrong",
-        })
+        out.write_str(fault_text(self.0))
+    }
+}
+
+/// What a page is told for `fault` (a fixed text without a password or a path; the page tells the two apart by the word
+/// "wrong").
+pub const fn fault_text(fault: PasswordFault) -> &'static str {
+    match fault {
+        PasswordFault::Needed => "needs a password",
+        PasswordFault::Wrong => "the password is wrong",
     }
 }
 

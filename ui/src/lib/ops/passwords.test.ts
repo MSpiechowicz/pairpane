@@ -176,6 +176,61 @@ describe('Passwords', () => {
       expect(calls('archive_open')).toHaveLength(1);
     });
 
+    it('is not run again when it aborts just as the password is taken, and fails with its own failure', async () => {
+      const flag = { aborted: false, addEventListener: () => {} };
+      const wanted = flag as unknown as AbortSignal;
+      const invoke = vi.fn(async (name: string) => {
+        if (name === 'archive_password') {
+          flag.aborted = true; // the abort lands after the question was answered, before the command goes on
+          return true;
+        }
+
+        throw required();
+      });
+      const backend = { invoke } as unknown as Transport;
+      const passwords = new Passwords(backend);
+      const started = passwords.wrap(backend).invoke('archive_open', open, { signal: wanted });
+      await vi.waitFor(() => expect(passwords.prompt).toBeDefined());
+
+      await passwords.submit('pw');
+
+      await expect(started).rejects.toMatchObject({ code: 'passwordRequired' });
+      expect(invoke.mock.calls.filter(([name]) => name === 'archive_open')).toHaveLength(1);
+    });
+
+    it('hands the question to a newer command of the same archive, which runs once the password was taken', async () => {
+      const { ipc, passwords, calls } = world();
+      const old = new AbortController();
+      const replaced = ipc.invoke('archive_open', open, { signal: old.signal });
+      await vi.waitFor(() => expect(passwords.prompt).toBeDefined());
+      const prompt = passwords.prompt;
+
+      const newer = ipc.invoke('archive_open', open, { signal: new AbortController().signal });
+      old.abort();
+      await expect(replaced).rejects.toMatchObject({ code: 'passwordRequired' });
+
+      expect(passwords.prompt).toBe(prompt);
+      expect(calls('archive_open')).toHaveLength(1);
+
+      await passwords.submit('pw');
+
+      await expect(newer).resolves.toBe(1);
+      expect(calls('archive_open')).toHaveLength(2);
+    });
+
+    it('fails a command that joined the question with the failure that raised it when the user gives up', async () => {
+      const { ipc, passwords, calls } = world();
+      const first = ipc.invoke('archive_open', open);
+      await vi.waitFor(() => expect(passwords.prompt).toBeDefined());
+      const joined = ipc.invoke('ops_extract', extract);
+
+      passwords.cancel();
+
+      await expect(first).rejects.toMatchObject({ code: 'passwordRequired' });
+      await expect(joined).rejects.toMatchObject({ code: 'passwordRequired' });
+      expect(calls('ops_extract')).toEqual([]);
+    });
+
     it('still runs again when it is not aborted', async () => {
       const { ipc, passwords, calls } = world();
       const started = ipc.invoke('archive_open', open, { signal: new AbortController().signal });

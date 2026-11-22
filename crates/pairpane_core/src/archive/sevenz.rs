@@ -21,9 +21,9 @@ use super::index::ArchiveIndex;
 use super::password::Password;
 use crate::view::refusal;
 
-/// The most memory, in KiB, that the headers of one archive and the dictionary of one coder may take: 1 GiB, far past the
-/// 64 MiB of `7z -mx9`; an archive that asks for more is refused.
-const MEMORY_KB: usize = 1024 * 1024;
+/// The most memory, in KiB, that the headers of one archive and the dictionary of one coder may take: 512 MiB, far past
+/// the 64 MiB of `7z -mx9`; an archive that asks for more is refused.
+const MEMORY_KB: usize = 512 * 1024;
 
 /// How much of the first encrypted entry [`check_password`] decodes to see whether the password opens it.
 const PROBE: u64 = 64 * 1024;
@@ -84,7 +84,10 @@ struct Opened {
     secret: sevenz_rust2::Password,
 }
 
-/// The password the way the format takes it (UTF-16); a missing one is the empty password, which means none.
+/// The password the way the format takes it (UTF-16); a missing one is the empty password, which means none. Called once
+/// per [`open`] (the result is kept in [`Opened`] for the decoding and dropped with it), so there is one copy of the
+/// password in the library's type at a time. That type is the library's own and cannot be overwritten when it is dropped
+/// (it holds a plain byte vector and implements no zeroizing), unlike this crate's own [`Password`].
 fn secret(password: Option<&Password>) -> sevenz_rust2::Password {
     password
         .filter(|password| !password.as_str().is_empty())
@@ -108,6 +111,9 @@ fn open(file: &dyn ReadAt, cancel: &AtomicBool, password: Option<&Password>) -> 
             if secret.is_empty() || password_fault(&failed).is_some() || failed.kind() != io::ErrorKind::InvalidData {
                 return Err(failed);
             }
+
+            // Not needed any more: the second read is without one.
+            drop(secret);
 
             let mut source = Source::new(file, cancel);
             let needs = matches!(

@@ -19,6 +19,7 @@ use super::conflict::Place;
 use super::meta;
 use super::name_fits;
 use super::open;
+use super::origin::Origin;
 use super::partial::Partial;
 use super::report::refusal;
 use super::transfer::{Run, Stop};
@@ -45,15 +46,18 @@ pub(super) struct Landing {
     finish: Vec<Folder>,
     /// Bytes written since the free space was looked at.
     unchecked: u64,
+    /// The marker of the archive's origin, put on each file written.
+    origin: Origin,
 }
 
 impl Landing {
-    pub(super) fn new(target: PathBuf) -> Self {
+    pub(super) fn new(target: PathBuf, origin: Origin) -> Self {
         Self {
             target,
             folders: HashMap::new(),
             finish: Vec::new(),
             unchecked: CHECK_EVERY,
+            origin,
         }
     }
 }
@@ -159,6 +163,7 @@ impl Run<'_> {
 
         if self.commit_with(&temp, &mut place, |run, again| run.place_entry(rel, &facts, again))? {
             guard.committed = true;
+            landing.origin.apply(place.path());
         } else {
             self.skipped += 1;
         }

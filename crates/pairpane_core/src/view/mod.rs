@@ -136,11 +136,11 @@ fn cancelled() -> io::Error {
 /// The payload of an error with a text of our own (see [`refusal`]); what tells it from an error of the system or of a
 /// library, whose text must never reach the page.
 #[derive(Debug)]
-struct Refusal(&'static str);
+struct Refusal(std::borrow::Cow<'static, str>);
 
 impl std::fmt::Display for Refusal {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        out.write_str(self.0)
+        out.write_str(&self.0)
     }
 }
 
@@ -149,7 +149,13 @@ impl std::error::Error for Refusal {}
 /// An error with a text of its own, for a rule that no system call reports (the text never holds a path). Its
 /// `to_string` is `text`, and [`is_refusal`] knows it.
 pub fn refusal(kind: io::ErrorKind, text: &'static str) -> io::Error {
-    io::Error::new(kind, Refusal(text))
+    io::Error::new(kind, Refusal(text.into()))
+}
+
+/// [`refusal`] with a text that is built at run time. The caller makes sure it holds no path and nothing the user
+/// typed; it is only ever made of fixed words and values the program parsed itself.
+pub fn refusal_text(kind: io::ErrorKind, text: String) -> io::Error {
+    io::Error::new(kind, Refusal(text.into()))
 }
 
 /// Whether `error` was made by [`refusal`], so its text is ours and holds no path; any other error (a system call, a

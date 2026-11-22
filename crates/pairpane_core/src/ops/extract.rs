@@ -24,6 +24,7 @@ use crate::model::JobPhase;
 use super::control::Control;
 use super::extract_write::Landing;
 use super::open;
+use super::origin::Origin;
 use super::plan::{Child, Kind};
 use super::report::refusal;
 use super::transfer::{Run, Stop};
@@ -93,6 +94,8 @@ impl Run<'_> {
         let print = Fingerprint::of(&request.from.join(name), &file.metadata()?);
         let target = self.target_folder(&request.to)?;
         let cancel = AtomicBool::new(false);
+        // Read once: every file written gets the same marker (see `origin`).
+        let origin = Origin::of(&found.path);
 
         let input = Input {
             file: &file,
@@ -140,7 +143,7 @@ impl Run<'_> {
                 None => archive::open_source(&index, &input, &cancel, password).map_err(|e| self.stopped(e))?,
             };
 
-            self.write_all(&mut *reader, &selection.items, &selection.ordinals(), target)
+            self.write_all(&mut *reader, &selection.items, &selection.ordinals(), target, origin)
         })
     }
 
@@ -151,12 +154,13 @@ impl Run<'_> {
         items: &[Selected<'_>],
         wanted: &[u32],
         target: std::path::PathBuf,
+        origin: Origin,
     ) -> Result<(), Stop> {
         if wanted.is_empty() {
             return Ok(());
         }
 
-        let mut landing = Landing::new(target);
+        let mut landing = Landing::new(target, origin);
         let mut stopped = None;
 
         let walked = reader.extract(wanted, &mut |entry: &IndexEntry, data: &mut dyn Read| {

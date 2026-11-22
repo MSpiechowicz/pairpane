@@ -11,10 +11,16 @@
     { key: 'F8', label: 'Delete', hot: true },
   ];
 
+  /** What F5 is called inside an archive: the selection is extracted. */
+  const labelOf = (key: string, label: string) => (key === 'F5' && inArchive ? 'Extract' : label);
+
   let {
+    inArchive = false,
     onKey,
     children,
   }: {
+    /** The active pane shows a folder inside an archive: there F5 extracts the selection instead of copying it. */
+    inArchive?: boolean;
     /** A function key was clicked; it does what pressing it does. */
     onKey?: (key: string) => void;
     /** Between the command line and the keys. */
@@ -31,7 +37,8 @@
   </label>
   {@render children?.()}
   <div class="keys">
-    {#each KEYS as { key, label, hot } (key)}
+    {#each KEYS as { key, label: plain, hot } (key)}
+      {@const label = labelOf(key, plain)}
       <button class="dock-key fk" class:hot type="button" aria-label="{label} ({key})" onclick={() => onKey?.(key)}>
         <kbd>{key}</kbd><span class="label">{label}</span>
       </button>

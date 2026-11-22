@@ -63,7 +63,7 @@ export class Listing {
   readonly #hooks: ListingHooks;
   #showHidden = false;
   #generation = 0;
-  /** Aborted when the next open starts: the open it belongs to is not wanted any more (its password question goes). */
+  /** Aborted once the next open has started: the open it belongs to is not wanted any more (its password question goes unless that one needs it too). */
   #wanted: AbortController | undefined;
   #spinner: ReturnType<typeof setTimeout> | undefined;
   /** The folder changed while it was still loading: list it again once done. */
@@ -155,7 +155,7 @@ export class Listing {
    */
   #open(target: Target, quiet: boolean): Promise<void> {
     const generation = ++this.#generation;
-    this.#wanted?.abort();
+    const replaced = this.#wanted;
     this.#wanted = new AbortController();
     const started = performance.now();
     // Listing the shown folder again (a live update, hidden toggled) must not be answered by one more reload.
@@ -183,7 +183,13 @@ export class Listing {
       }
     };
 
-    return this.#request(target, onEvent, this.#wanted.signal)
+    const request = this.#request(target, onEvent, this.#wanted.signal);
+
+    // Only now: the new open has joined the password question of the old one (a reload of the same archive), which
+    // would otherwise close, with what was typed in it, as its last waiter leaves.
+    replaced?.abort();
+
+    return request
       .then(() => undefined)
       .catch((error: unknown) => {
         if (generation === this.#generation) {

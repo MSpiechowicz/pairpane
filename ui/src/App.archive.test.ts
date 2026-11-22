@@ -113,6 +113,16 @@ describe('an archive is read-only', () => {
 });
 
 describe('extracting', () => {
+  it('the dock calls F5 Extract while the active pane is inside an archive, Copy otherwise', async () => {
+    await world();
+    expect(screen.getByRole('button', { name: 'Extract (F5)' })).toBeInTheDocument();
+
+    await key(document.body, 'Tab');
+
+    expect(screen.getByRole('button', { name: 'Copy (F5)' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Extract (F5)' })).toBeNull();
+  });
+
   it('F5 in an archive asks where, with the other pane`s folder, and extracts what the cursor is on', async () => {
     const backend = await world({ ops_extract: () => 3 });
     await cursorTo(2);
@@ -282,6 +292,39 @@ describe('the password of an archive', () => {
 
     await vi.waitFor(() => expect(backend.sent('archive_open')).toHaveLength(2));
     expect(backend.sent('archive_password')).toEqual([{ archive: '/left/a.zip', password: 'secret' }]);
+  });
+});
+
+describe('the password of the archive the pane keeps reloading', () => {
+  it('stays asked, with what was typed, when the same archive is listed again, and is retried once', async () => {
+    let taken = false;
+    let opens = 0;
+    const backend = await world({
+      archive_open: () => {
+        opens += 1;
+        return opens === 1 || taken ? null : needsPassword();
+      },
+      archive_password: () => (taken = true),
+    });
+    const hidden = screen.getByRole('button', { name: 'Hidden' });
+
+    await fireEvent.click(hidden);
+    const field = await screen.findByLabelText('Password');
+    await fireEvent.input(field, { target: { value: 'typed' } });
+    await fireEvent.click(hidden);
+    await vi.waitFor(() => expect(backend.sent('pane_open').length).toBeGreaterThan(2));
+    await tick();
+
+    expect(screen.getByLabelText('Password')).toBe(field);
+    expect(field).toHaveValue('typed');
+    expect(backend.sent('archive_open')).toHaveLength(2);
+
+    await key(field, 'Enter');
+
+    await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(backend.sent('archive_password')).toEqual([{ archive: '/left/a.zip', password: 'typed' }]);
+    await vi.waitFor(() => expect(backend.sent('archive_open')).toHaveLength(3));
+    expect(backend.sent('archive_open')[2]).toMatchObject({ archive: '/left/a.zip', showHidden: false });
   });
 });
 

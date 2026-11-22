@@ -71,7 +71,7 @@ mod walk_tests;
 
 pub use cache::{Fingerprint, IndexCache};
 pub use entries::{Cancellable, Declared, EntrySource, EntryType, Flow, Place, Record, Visit, Walked};
-pub use error::{PasswordFault, cancelled, password_error, password_fault, unreadable, unsupported};
+pub use error::{PasswordFault, cancelled, fault_text, password_error, password_fault, unreadable, unsupported};
 pub use file::{FileReader, ReadAt};
 pub use index::{ArchiveIndex, Builder, Child, IndexEntry, Selected, Selection};
 pub use kind::{HEAD_BYTES, by_extension, by_magic, detect};

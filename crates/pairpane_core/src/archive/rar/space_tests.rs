@@ -69,5 +69,5 @@ fn the_unrar_of_this_system_is_recent_enough_to_be_used() {
         return;
     };
 
-    assert!(version::is_recent(&unrar.program));
+    assert!(version::require(&unrar.program).is_ok());
 }

@@ -8,7 +8,6 @@
 //! `passwordRequired`, so the page asks first and the job never starts only to stop.
 
 use std::collections::HashSet;
-use std::sync::atomic::AtomicBool;
 
 use pairpane_core::archive::{self, PasswordFault};
 use pairpane_core::listing::platform;
@@ -55,21 +54,25 @@ impl Ops {
 
         let permit = archives.begin()?;
         let shared = archives.clone();
-        let (folder, name) = (target.folder.clone(), target.name.clone());
+        let (folder, name, path) = (target.folder.clone(), target.name.clone(), target.path.clone());
         let (inner, chosen) = (dir.clone(), names.clone());
         let source = blocking(permit, move || prepare(&shared, &target, &inner, &chosen))
             .await?
             .map_err(failed)?;
 
+        let password = source.password.clone();
         let task = Task::Extract {
             inner: dir,
             entries: names,
             source,
         };
 
-        self.engine
-            .submit(Request::task(folder, vec![name], to, task))
-            .map_err(failed)
+        // A password the job finds wrong while it decrypts is forgotten when the job ends (see `extractions`).
+        self.extractions.submit(archives, path, password, || {
+            self.engine
+                .submit(Request::task(folder, vec![name], to, task))
+                .map_err(failed)
+        })
     }
 }
 
@@ -91,11 +94,9 @@ fn prepare(archives: &Archives, target: &Target, dir: &str, names: &[String]) ->
 
             // A compressed tar is decoded by the job itself, which can be cancelled and shows its progress.
             if matches!(format, ArchiveFormat::Zip | ArchiveFormat::SevenZ) {
-                let never = AtomicBool::new(false);
-
                 Some(
                     archives
-                        .index(target, &opened, &never, None)
+                        .index(target, &opened, archives.stop(), None)
                         .map_err(|error| archives.report(target, &error))?,
                 )
             } else {
