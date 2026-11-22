@@ -16,24 +16,19 @@ mod budget;
 mod cache;
 mod layer;
 mod parse;
+mod read;
 
 use std::collections::HashSet;
 use std::collections::hash_map::RandomState;
-use std::fs;
-use std::hash::BuildHasher;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use ignore::Match;
 
-use crate::ops::open_listed;
-
 use budget::{Budget, Charge, Turns};
 use cache::{Held, Kept, Slot, forget_down_to, forget_to_free};
-use layer::{Layer, Rules, matched};
-use parse::{MAX_BYTES, count_lines, listed, parse, read_limited};
+use layer::{Layer, matched};
 
 /// The most lines of an ignore file.
 pub(super) const MAX_LINES: usize = 2_000;
@@ -83,11 +78,14 @@ thread_local! {
 /// for a parent, a walk thread's pin, or a lookup. Only rules that nothing but `kept` (and idle folders below) holds are
 /// forgotten for room. The rules of the folder searched, and of those above it, are held by `top` for the whole search.
 ///
-/// Every folder with rules or a `.git` has a layer, and every layer is charged to the budget: its rules and, besides,
-/// [`LAYER_BYTES`] and its path twice (in the layer and in the map). So a tree with a `.git` in every folder cannot make
-/// the search hold more than the budget either: the layers of idle chains of folders are forgotten, the deepest first, when
-/// there is no room for a new one, and when there is nothing to forget the folder shares the layer of the nearest one
-/// above that was kept (a `.git` there does not count for it), and is counted as left out.
+/// Every folder with rules, and every folder with a `.git` that is not below one that is only a `.git`, has a layer, and
+/// every layer is charged to the budget: its rules and, besides, [`LAYER_BYTES`] and its path twice (in the layer and in
+/// the map). So a tree with rules in every folder cannot make the search hold more than the budget either: the layers of
+/// idle chains of folders are forgotten, the deepest first, when there is no room for a new one, and when there is nothing
+/// to forget the folder shares the layer of the nearest one above that was kept, and its rules are counted as left out.
+/// A `.git` is never lost with them: a folder with one, when its layer has no room, gets a boundary that holds nothing and
+/// costs nothing, so the rules of the folders above still end there and the files of the folders below are still read as
+/// those of a repository. A chain of `.git` folders is one layer, as the ones below the first add nothing.
 ///
 /// A folder without a layer has a place in `kept` that only points (weakly) to the layer that stands for it, so the places
 /// of the folders of a deep tree with no ignore files take next to nothing and are forgotten freely.
@@ -116,6 +114,9 @@ pub(crate) struct Ignores {
     /// How many files were compiled.
     #[cfg(test)]
     compiled: AtomicU64,
+    /// How many layers were refused for lack of room.
+    #[cfg(test)]
+    refused: AtomicU64,
 }
 
 impl Ignores {
@@ -136,6 +137,8 @@ impl Ignores {
             skipped,
             #[cfg(test)]
             compiled: AtomicU64::new(0),
+            #[cfg(test)]
+            refused: AtomicU64::new(0),
         };
 
         let mut above: Vec<&Path> = root.ancestors().skip(1).collect();
@@ -160,6 +163,18 @@ impl Ignores {
         self.compiled.load(Ordering::Relaxed)
     }
 
+    /// How many layers were refused for lack of room.
+    #[cfg(test)]
+    pub(super) fn refused(&self) -> u64 {
+        self.refused.load(Ordering::Relaxed)
+    }
+
+    /// Refuses every new layer until the clock reaches `until`, as a budget held in use by other folders does.
+    #[cfg(test)]
+    pub(super) fn starve(&self, until: u64) {
+        self.starved_until.store(until, Ordering::Relaxed);
+    }
+
     /// The most lines and bytes of ignore files that were held at once.
     #[cfg(test)]
     pub(super) fn peak(&self) -> (usize, usize) {
@@ -178,6 +193,11 @@ impl Ignores {
             return false;
         };
 
+        // The rules are those of the folder searched and of the folders above and below it.
+        if !path.starts_with(&self.root) {
+            return false;
+        }
+
         let layer = self.layer(dir);
         let mut ignore = Match::None;
         let mut git = Match::None;
@@ -186,10 +206,12 @@ impl Ignores {
 
         let mut next = Some(&layer);
         while let Some(layer) = next {
-            // A layer with a `.git` and no rules has nothing to match: it only ends the reach of git's files, and a deep
-            // chain of them is walked without comparing the path to each.
+            // A layer with a `.git` and no rules has nothing to match: it only ends the reach of git's files. Every layer
+            // is of a folder above the path (the path is below the folder searched), so the path is below it.
             if layer.has_rules() {
                 let Ok(relative) = path.strip_prefix(&layer.dir) else {
+                    debug_assert!(false, "{path:?} is not below {:?}", layer.dir);
+
                     break;
                 };
 
@@ -344,132 +366,21 @@ impl Ignores {
     /// of it for every folder of a deep tree would keep the threads waiting for one another.
     fn reserve_layer(&self, dir: &Path) -> Option<Charge> {
         if self.clock.load(Ordering::Relaxed) < self.starved_until.load(Ordering::Relaxed) {
+            #[cfg(test)]
+            self.refused.fetch_add(1, Ordering::Relaxed);
+
             return None;
         }
 
         let charge = self.reserve(0, LAYER_BYTES + 2 * dir.as_os_str().len(), ROOM);
         if charge.is_none() {
+            #[cfg(test)]
+            self.refused.fetch_add(1, Ordering::Relaxed);
+
             self.starved_until
                 .store(self.clock.load(Ordering::Relaxed) + PATIENCE, Ordering::Relaxed);
         }
 
         charge
-    }
-
-    /// The layer of the folder `dir`, below `parent`; `None` when the folder has no rules and is not a repository, or when
-    /// there is no room for the layer (the folder is counted as left out then, and shares the layer above it).
-    fn read(&self, parent: Option<&Arc<Layer>>, dir: &Path) -> Option<Layer> {
-        let git_entry = fs::symlink_metadata(dir.join(".git")).ok();
-        let repository = git_entry.is_some();
-        let in_repository = repository || parent.is_some_and(|parent| parent.in_repository);
-
-        let ignore = self.file(dir, ".ignore");
-        let git = if in_repository {
-            self.file(dir, ".gitignore")
-        } else {
-            None
-        };
-
-        // Only a `.git` folder holds an exclude file; a `.git` file points elsewhere and is not followed.
-        let exclude = if git_entry.is_some_and(|entry| entry.is_dir()) {
-            self.file(dir, ".git/info/exclude")
-        } else {
-            None
-        };
-
-        if ignore.is_none() && git.is_none() && exclude.is_none() && !repository {
-            return None;
-        }
-
-        // What the layer itself holds is charged as well as its rules, so that no tree can make it hold more than the
-        // budget, however little each folder has. The rules are given up with it.
-        let Some(cost) = self.reserve_layer(dir) else {
-            self.count_left_out(dir, "");
-
-            return None;
-        };
-
-        Some(Layer {
-            parent: parent.cloned(),
-            dir: dir.to_owned(),
-            depth: parent.map_or(0, |parent| parent.depth + 1),
-            ignore,
-            git,
-            exclude,
-            repository,
-            in_repository,
-            cost: Some(cost),
-            used: AtomicU64::new(self.clock.fetch_add(1, Ordering::Relaxed)),
-        })
-    }
-
-    /// The rules in the file `name` (names joined with `/`) of the folder `dir`: `None` when there is none, when it holds
-    /// no rule, or when it cannot be used (which is counted).
-    fn file(&self, dir: &Path, name: &str) -> Option<Rules> {
-        // Most folders have none: one look at the name tells, where opening it step by step costs a call for each folder
-        // on the way (and what is opened is checked as before).
-        if fs::symlink_metadata(dir.join(name)).is_err_and(|error| error.kind() == io::ErrorKind::NotFound) {
-            return None;
-        }
-
-        let opened = match dir.strip_prefix(&self.root) {
-            Ok(below) => match listed(below, name) {
-                Some(listed) => open_listed(&self.root, &listed),
-                None => return self.left_out(dir, name),
-            },
-            Err(_) => open_listed(dir, name),
-        };
-
-        let (file, metadata) = match opened {
-            Ok(opened) => opened,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
-            Err(_) => return self.left_out(dir, name),
-        };
-
-        if metadata.len() > MAX_BYTES {
-            return self.left_out(dir, name);
-        }
-
-        let Some(text) = read_limited(file) else {
-            return self.left_out(dir, name);
-        };
-        let bytes = text.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&text);
-
-        let Some(lines) = count_lines(bytes) else {
-            return self.left_out(dir, name);
-        };
-        let Some(charge) = self.reserve(lines, bytes.len(), 0) else {
-            return self.left_out(dir, name);
-        };
-
-        // The rules of a big file take much memory while they are built: only a few are built at a time.
-        let _turn = (lines > BIG).then(|| self.turns.wait());
-
-        #[cfg(test)]
-        self.compiled.fetch_add(1, Ordering::Relaxed);
-
-        match parse(dir, bytes) {
-            Some(gitignore) if gitignore.is_empty() => None,
-            Some(gitignore) => Some(Rules { gitignore, charge }),
-            None => self.left_out(dir, name),
-        }
-    }
-
-    /// Counts the file `name` of `dir` (or, with no name, the layer of the folder) as left out, the first time only: a
-    /// folder read again (after it was forgotten, or by two threads) counts nothing more.
-    fn count_left_out(&self, dir: &Path, name: &str) {
-        let key = self.hasher.hash_one((dir, name));
-        let first = self.counted.lock().unwrap_or_else(PoisonError::into_inner).insert(key);
-
-        if first {
-            self.skipped.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    /// Counts the file `name` of `dir` as left out; `None`, as there are no rules from it.
-    fn left_out(&self, dir: &Path, name: &str) -> Option<Rules> {
-        self.count_left_out(dir, name);
-
-        None
     }
 }

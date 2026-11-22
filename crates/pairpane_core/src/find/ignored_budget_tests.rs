@@ -405,6 +405,85 @@ fn rules_above_folders_without_rules_are_read_once_however_many_of_those_are_rem
     assert_eq!(ignores.compiles(), 1);
 }
 
+/// A repository `proj` (its `.gitignore` leaves out `*.dat`, its `.ignore` `*.tmp`) with a repository `sub` in it and a
+/// folders `sub/deeper` and `sub/later` with a `.gitignore` of their own that leaves out `*.txt`.
+fn nested() -> (tempfile::TempDir, std::path::PathBuf) {
+    let top = temp();
+    let proj = top.path().join("proj");
+
+    put(&proj, ".git/HEAD", b"x");
+    put(&proj, ".gitignore", b"*.dat\n");
+    put(&proj, ".ignore", b"*.tmp\n");
+    put(&proj, "sub/.git/HEAD", b"x");
+    put(&proj, "sub/deeper/.gitignore", b"*.txt\n");
+    put(&proj, "sub/later/.gitignore", b"*.txt\n");
+
+    (top, proj)
+}
+
+#[test]
+fn a_repository_that_has_no_room_for_its_layer_still_ends_the_rules_above_it() {
+    let (_top, proj) = nested();
+    let (ignores, skipped) = ignores(&proj);
+    ignores.starve(u64::MAX);
+
+    // Nothing is held for `sub`, and still: the `.gitignore` above does not reach it or the folders below it, the `.ignore`
+    // above does, and the `.gitignore` of the folder below it is not read (there is no room for its layer either).
+    assert!(ignores.leaves_out(&proj.join("a.dat"), false));
+    assert!(!ignores.leaves_out(&proj.join("sub/a.dat"), false));
+    assert!(!ignores.leaves_out(&proj.join("sub/deeper/a.dat"), false));
+    assert!(ignores.leaves_out(&proj.join("sub/a.tmp"), false));
+    assert!(!ignores.leaves_out(&proj.join("sub/deeper/a.txt"), false));
+    assert!(ignores.refused() > 0);
+    assert_eq!(skipped.load(std::sync::atomic::Ordering::Relaxed), 1);
+    let (_, bytes) = ignores.peak();
+    assert!(bytes < 4096, "{bytes} bytes");
+
+    // Room again: a folder below the repository that was not asked about is in one still, so its `.gitignore` is read and
+    // applies (the one that was asked about when there was no room shares the layer above, as it did).
+    ignores.starve(0);
+    assert!(ignores.leaves_out(&proj.join("sub/later/a.txt"), false));
+    assert!(!ignores.leaves_out(&proj.join("sub/later/a.dat"), false));
+    assert!(!ignores.leaves_out(&proj.join("sub/a.txt"), false));
+}
+
+#[test]
+fn a_repository_below_a_folder_that_is_none_is_still_one_when_it_has_no_room_for_its_layer() {
+    let (top, proj) = nested();
+    let (ignores, _) = ignores(top.path());
+    ignores.starve(u64::MAX);
+
+    // Nothing above `proj` is a repository, so only the `.git` of `sub` can make the folder below it one.
+    assert!(!ignores.leaves_out(&proj.join("a.dat"), false));
+    assert!(!ignores.leaves_out(&proj.join("sub/deeper/a.txt"), false));
+
+    ignores.starve(0);
+    assert!(ignores.leaves_out(&proj.join("sub/later/a.txt"), false));
+    assert!(!ignores.leaves_out(&proj.join("deeper/a.txt"), false));
+}
+
+#[test]
+fn a_chain_of_git_folders_is_one_layer_and_ends_the_rules_above_it_as_before() {
+    let (_top, proj) = nested();
+    let mut folder = proj.join("sub");
+    for _ in 0..40 {
+        folder.push("d");
+        put(&folder, ".git/HEAD", b"x");
+    }
+
+    let (ignores, skipped) = ignores(&proj);
+    assert!(!ignores.leaves_out(&folder.join("a.dat"), false));
+    assert!(ignores.leaves_out(&folder.join("a.tmp"), false));
+    assert!(!ignores.leaves_out(&proj.join("sub/d/a.dat"), false));
+    assert!(ignores.leaves_out(&proj.join("a.dat"), false));
+
+    // `sub` is the one layer of the chain (the layer of `proj` is the other).
+    let (_, bytes) = ignores.peak();
+    assert!(bytes < 4096, "{bytes} bytes");
+    assert_eq!(ignores.refused(), 0);
+    assert_eq!(skipped.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
 // Chains of folders deeper than macOS (1 024 bytes of path) or Windows (260) allow, made and searched on Linux only.
 #[cfg(target_os = "linux")]
 #[path = "ignored_deep_tests.rs"]

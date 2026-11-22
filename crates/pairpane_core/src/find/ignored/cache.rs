@@ -77,6 +77,8 @@ struct Idle<'a> {
     /// How many layers are above its own (none when it has none).
     depth: usize,
     dir: &'a PathBuf,
+    /// Whether the folder has a layer of its own, that costs nothing when it is a boundary.
+    own: bool,
     lines: usize,
     bytes: usize,
 }
@@ -141,6 +143,7 @@ fn idle(slots: &mut HashMap<PathBuf, Arc<Slot>>) -> Vec<Idle<'_>> {
             age,
             depth,
             dir,
+            own: false,
             lines,
             bytes,
         });
@@ -175,6 +178,7 @@ fn idle(slots: &mut HashMap<PathBuf, Arc<Slot>>) -> Vec<Idle<'_>> {
             age,
             depth: owned.depth,
             dir: owned.dir,
+            own: true,
             lines: owned.lines,
             bytes: owned.bytes,
         });
@@ -188,10 +192,7 @@ fn idle(slots: &mut HashMap<PathBuf, Arc<Slot>>) -> Vec<Idle<'_>> {
 /// Removes the older half of the remembered folders that nothing uses (of those that have a layer of their own only, when
 /// `layers`) and returns them, to be dropped once the lock is released.
 fn forget_older_half(slots: &mut HashMap<PathBuf, Arc<Slot>>, layers: bool) -> Vec<Arc<Slot>> {
-    let idle: Vec<Idle> = idle(slots)
-        .into_iter()
-        .filter(|idle| !layers || idle.lines + idle.bytes > 0)
-        .collect();
+    let idle: Vec<Idle> = idle(slots).into_iter().filter(|idle| !layers || idle.own).collect();
     let half = idle.len().div_ceil(2);
     let gone: Vec<PathBuf> = idle.into_iter().take(half).map(|idle| idle.dir.clone()).collect();
 
@@ -244,7 +245,7 @@ pub(super) fn forget_to_free(
 
     let gone: Vec<PathBuf> = idle
         .into_iter()
-        .filter(|idle| idle.lines + idle.bytes > 0)
+        .filter(|idle| idle.own)
         .take_while(|idle| {
             let enough = freed_lines >= lines && freed_bytes >= bytes;
 

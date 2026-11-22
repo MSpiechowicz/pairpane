@@ -1,7 +1,7 @@
 //! Reading an ignore file within its limits and compiling its lines.
 
 use std::fs;
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::path::Path;
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
@@ -22,6 +22,12 @@ pub(super) fn listed(below: &Path, name: &str) -> Option<String> {
     listed.push_str(name);
 
     Some(listed)
+}
+
+/// Whether the name `name` of the folder `dir` is there, whatever it is (a link is not followed): one look, where opening
+/// it step by step costs a call for each folder on the way.
+pub(super) fn present(dir: &Path, name: &str) -> bool {
+    !fs::symlink_metadata(dir.join(name)).is_err_and(|error| error.kind() == ErrorKind::NotFound)
 }
 
 /// What `file` holds up to [`MAX_BYTES`]; `None` when it holds more, or cannot be read.
