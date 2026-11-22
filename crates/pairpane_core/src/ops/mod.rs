@@ -78,7 +78,8 @@
 //! (counters, speed), `report` (error texts), `hooks` (test switches).
 //!
 //! Extracting an archive: `extract` (the job: open, select, walk the source) and `extract_write` (folders, files, the
-//! disk reserve, modes and times). The archive formats themselves are in [`crate::archive`].
+//! disk reserve, modes and times). Packing files into one: `pack` (the job: plan the entries, ask about a taken name, write
+//! a temporary file, put it in place) over `tree` (the no-follow walk it shares with the checksum file). The archive formats themselves are in [`crate::archive`].
 //!
 //! The file tools: `task` (the start of each and what they share), `digest` (checksums and the checksum-file
 //! format), `checksum`, `checksum_verify` and `listed` (opening the files it lists), `split`, `combine`, `held` (walking a tree by
@@ -113,6 +114,7 @@ mod listed;
 mod meta;
 mod open;
 mod origin;
+mod pack;
 mod partial;
 mod plan;
 mod progress;
@@ -126,6 +128,7 @@ mod split;
 mod task;
 mod transfer;
 mod trash;
+mod tree;
 mod validate;
 mod verify;
 mod volume;
@@ -174,6 +177,12 @@ mod items_tests;
 mod move_tests;
 #[cfg(test)]
 mod origin_tests;
+#[cfg(test)]
+mod pack_conflict_tests;
+#[cfg(test)]
+mod pack_tests;
+#[cfg(all(test, unix))]
+mod pack_unix_tests;
 #[cfg(test)]
 mod plan_tests;
 #[cfg(test)]

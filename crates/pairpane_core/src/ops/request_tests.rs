@@ -5,7 +5,7 @@ use std::sync::Arc;
 use pretty_assertions::assert_eq;
 
 use crate::archive::Password;
-use crate::model::{IpcErrorCode, OpKind, Outcome, PackFormat, PackLevel};
+use crate::model::{OpKind, Outcome, PackFormat, PackLevel};
 
 use super::testing::{Rig, task, temp};
 use super::{ArchiveJob, PackJob, Refused, Request, Task};
@@ -52,8 +52,8 @@ fn submitted(task: Task, names: &[&str]) -> Result<(), Refused> {
     if let Ok(id) = accepted {
         let ended = rig.wait_ended(id);
 
-        // Nothing writes an archive yet: the job fails and says so.
-        assert!(matches!(ended.outcome, Outcome::Failed { ref error } if error.code == IpcErrorCode::Io));
+        // The items are not there: the jobs that are accepted fail, whatever they are.
+        assert!(matches!(ended.outcome, Outcome::Failed { .. }), "{:?}", ended.outcome);
     }
 
     accepted.map(|_| ())

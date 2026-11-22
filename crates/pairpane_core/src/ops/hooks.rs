@@ -51,6 +51,8 @@ pub(super) struct Hooks {
     pub(super) entry_source: Option<SourceHook>,
     /// The free space an extraction leaves on the disk, in place of `MIN_FREE_RESERVE`.
     pub(super) free_reserve: Option<u64>,
+    /// The most entries and the most bytes of names a pack job takes, in place of the limits of the archive readers.
+    pub(super) pack_limits: Option<(usize, usize)>,
 }
 
 impl Hooks {

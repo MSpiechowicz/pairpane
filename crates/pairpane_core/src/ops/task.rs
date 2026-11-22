@@ -1,7 +1,7 @@
 //! The file tools as jobs: how each starts, and what they share (the folders, the copy loop, the no-replace commit).
 //!
 //! A tool job looks at the paths like a copy does, then hands over to its own module: `checksum` and
-//! `checksum_verify`, `split`, `combine`, `attrs`. What a tool creates is a temporary file first (see `partial`),
+//! `checksum_verify`, `split`, `combine`, `attrs`, `pack`. What a tool creates is a temporary file first (see `partial`),
 //! put in place with a rename that refuses to replace, so a name that is taken is never overwritten.
 
 use std::fs::{self, File, OpenOptions};
@@ -37,7 +37,11 @@ impl Run<'_> {
             return self.extract(inner, entries, source);
         }
 
-        if matches!(task, Task::Pack { .. } | Task::AddToArchive { .. }) {
+        if let Task::Pack { name, options } = task {
+            return self.pack(name, options);
+        }
+
+        if matches!(task, Task::AddToArchive { .. }) {
             return Err(refusal(io::ErrorKind::Unsupported, "this job is not available yet").into());
         }
 

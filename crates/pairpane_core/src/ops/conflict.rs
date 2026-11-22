@@ -76,18 +76,40 @@ fn older(existing: &Metadata, source: &Origin<'_>) -> bool {
     }
 }
 
-/// The first free name beside `target`: `a (2).txt`, then `a (3).txt`, and so on. A stem that would make the name
-/// too long for the filesystem is cut short, never in the middle of a char.
+/// The endings of archive names that are made of two extensions: the number goes before them (`a (2).tar.zst`), not
+/// between them. The other archive names (`.zip`, `.7z`, `.tgz`) have the one extension that is told by the rule for any
+/// name.
+const COMPOUND_ENDINGS: [&str; 4] = [".tar.gz", ".tar.xz", ".tar.zst", ".tar.bz2"];
+
+/// `name` as its stem and its extension: the last extension, or the two of a compound archive ending (any case).
+fn split_name(name: &OsStr) -> (&OsStr, Option<&OsStr>) {
+    if let Some(text) = name.to_str() {
+        for ending in COMPOUND_ENDINGS {
+            let cut = text.len().saturating_sub(ending.len());
+
+            if cut > 0 && text.get(cut..).is_some_and(|tail| tail.eq_ignore_ascii_case(ending)) {
+                return (OsStr::new(&text[..cut]), Some(OsStr::new(&text[cut + 1..])));
+            }
+        }
+    }
+
+    let path = Path::new(name);
+
+    (path.file_stem().unwrap_or(name), path.extension())
+}
+
+/// The first free name beside `target`: `a (2).txt`, then `a (3).txt`, and so on (`a (2).tar.zst` for an archive with
+/// two extensions). A stem that would make the name too long for the filesystem is cut short, never in the middle of a
+/// char.
 pub(super) fn free_name(target: &Path) -> io::Result<PathBuf> {
     let (Some(parent), Some(name)) = (target.parent(), target.file_name()) else {
         return Err(refusal(io::ErrorKind::InvalidInput, "the target has no name"));
     };
-    let name = Path::new(name);
-    let stem = name.file_stem().unwrap_or(name.as_os_str());
+    let (stem, extension) = split_name(name);
 
     for number in 2..=MAX_RENAMES {
         let mut ending = format!(" ({number})");
-        if let Some(extension) = name.extension() {
+        if let Some(extension) = extension {
             ending.push('.');
             ending.push_str(&extension.to_string_lossy());
         }
@@ -100,7 +122,7 @@ pub(super) fn free_name(target: &Path) -> io::Result<PathBuf> {
         };
         let mut candidate = shorten(stem, room);
         candidate.push(format!(" ({number})"));
-        if let Some(extension) = name.extension() {
+        if let Some(extension) = extension {
             candidate.push(".");
             candidate.push(extension);
         }

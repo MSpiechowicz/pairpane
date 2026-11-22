@@ -25,7 +25,7 @@ use super::report::refusal;
 use super::transfer::{Run, Stop};
 
 /// Bytes written between two looks at the free space of the disk.
-const CHECK_EVERY: u64 = 64 * 1024 * 1024;
+pub(super) const CHECK_EVERY: u64 = 64 * 1024 * 1024;
 
 /// The permission bits of a file whose archive states none.
 const DEFAULT_FILE_MODE: u32 = 0o644;
@@ -197,7 +197,7 @@ impl Run<'_> {
         while written < limit {
             let slice = CHECK_EVERY.min(limit - written);
 
-            self.keep_reserve(landing, folder, slice)?;
+            self.keep_reserve(&mut landing.unchecked, folder, slice)?;
             let count = self.pump(data, copy, slice, &mut crc)?;
             written += count;
 
@@ -214,10 +214,11 @@ impl Run<'_> {
     }
 
     /// Before `next` more bytes are written into `folder`: fails with "disk full" when the disk would be left with less
-    /// than the reserve. Only looks every [`CHECK_EVERY`] bytes (and where the system cannot tell the free space, never).
-    fn keep_reserve(&mut self, landing: &mut Landing, folder: &Path, next: u64) -> io::Result<()> {
-        if landing.unchecked >= CHECK_EVERY {
-            landing.unchecked = 0;
+    /// than the reserve. Only looks every [`CHECK_EVERY`] bytes (and where the system cannot tell the free space, never);
+    /// `unchecked` counts the bytes written since it looked (start it at [`CHECK_EVERY`] to look before the first).
+    pub(super) fn keep_reserve(&mut self, unchecked: &mut u64, folder: &Path, next: u64) -> io::Result<()> {
+        if *unchecked >= CHECK_EVERY {
+            *unchecked = 0;
             let reserve = self.inner.hooks.free_reserve.unwrap_or(MIN_FREE_RESERVE);
 
             if platform::free_space(folder).is_some_and(|free| free < reserve.saturating_add(next)) {
@@ -228,7 +229,7 @@ impl Run<'_> {
             }
         }
 
-        landing.unchecked = landing.unchecked.saturating_add(next);
+        *unchecked = unchecked.saturating_add(next);
 
         Ok(())
     }
