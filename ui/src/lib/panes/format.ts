@@ -27,11 +27,18 @@ export function formatDate(millis: number | null): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/** Characters that can make one name pass for another: controls and the ones that reorder or hide text around them. */
-const MISLEADING = /[\p{Cc}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu;
+/**
+ * Characters that can make one name pass for another: controls, the ones that reorder text (bidirectional marks and
+ * overrides), and the invisible ones that hide or split it (zero-width space, joiners and the invisible operators,
+ * the soft hyphen, the byte order mark, the line and paragraph separators, the deprecated formatting characters and
+ * the tag characters). The zero-width joiner is escaped too, so an emoji sequence joined with it shows as its parts
+ * and the code: the price of leaving no invisible character in a name.
+ */
+const MISLEADING =
+  /[\p{Cc}\u00AD\u061C\u180E\u200B-\u200F\u2028-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\u{E0000}-\u{E007F}]/gu;
 
 /**
- * A name (or a path) as it is shown: each control and bidirectional-formatting character is written out as `⟨U+202E⟩`,
+ * A name (or a path) as it is shown: each control, bidirectional-formatting and invisible character is written out as `⟨U+202E⟩`,
  * so that a name cannot read as another (`txt.exe` behind a right-to-left override). Only for display: the real name
  * is what goes to the backend.
  */

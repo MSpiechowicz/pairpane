@@ -3,7 +3,7 @@ import { tick } from 'svelte';
 import type { EditOpened } from '$lib/ipc/bindings/EditOpened';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
 import { focusActiveList } from '$lib/panes/focus';
-import { formatSize } from '$lib/panes/format';
+import { displayName, formatSize } from '$lib/panes/format';
 import type { Target, Under } from '$lib/viewer/viewer.svelte';
 
 import { EditSession } from './session.svelte';
@@ -106,9 +106,9 @@ export class Editor {
   /** What was not opened: a file too large for the editor goes to the viewer, binary content is refused. */
   #refuse(target: Target, opened: EditOpened) {
     if (opened.kind === 'tooLarge') {
-      this.#hooks.view(target, `${target.name} is too large to edit (${formatSize(opened.size)}); it is shown here instead.`);
+      this.#hooks.view(target, `${displayName(target.name)} is too large to edit (${formatSize(opened.size)}); it is shown here instead.`);
     } else {
-      this.#hooks.say(`${target.name} is not a text file; F3 views it.`, true);
+      this.#hooks.say(`${displayName(target.name)} is not a text file; F3 views it.`, true);
     }
   }
 

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Answer } from '$lib/ipc/bindings/Answer';
   import type { FileFacts } from '$lib/ipc/bindings/FileFacts';
+  import { displayName } from '$lib/panes/format';
   import Modal from '$lib/shell/Modal.svelte';
 
   import { formatFacts } from './format';
@@ -45,14 +46,14 @@
   </div>
 {/snippet}
 
-<Modal title="“{info.name}” already exists" onClose={skipOnce}>
+<Modal title="“{displayName(info.name)}” already exists" onClose={skipOnce}>
   {@render side('Source', info.source, newer === 'source')}
   {@render side('Target', info.target, newer === 'target')}
 
   <div class="choices">
     <button class="btn" type="button" data-autofocus onclick={() => answer('skip')}>Skip</button>
     <button class="btn" type="button" onclick={() => answer('overwrite')}>Overwrite</button>
-    <button class="btn" type="button" onclick={() => answer('rename')}>Rename → {info.suggested}</button>
+    <button class="btn" type="button" onclick={() => answer('rename')}>Rename → {displayName(info.suggested)}</button>
     <button class="btn" type="button" onclick={() => answer('overwriteOlder')}>Overwrite older</button>
     {#if info.comparable}
       <button class="btn" type="button" disabled={compare !== undefined} onclick={() => answer('compare')}>

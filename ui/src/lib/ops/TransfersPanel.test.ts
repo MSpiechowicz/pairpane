@@ -61,6 +61,23 @@ describe('TransfersPanel', () => {
     expect(screen.getByText('Extracting…')).toBeInTheDocument();
   });
 
+  it('writes out controls and invisible characters of a job’s name, target and errors', async () => {
+    const { transfers, send } = await store();
+    const error = (message: string) => ({ code: 'io' as const, message });
+    send(
+      { kind: 'added', job: job(1, { label: 'a\u202Efdp.exe', kind: 'move', to: '/out\u200B' }) },
+      ended(1, { outcome: { kind: 'failed', error: error('No') }, errors: [{ path: 'd\u202Ex', error: error('Denied') }] }),
+    );
+    render(TransfersPanel, { transfers, onClose: vi.fn() });
+
+    expect(screen.getByText(/a⟨U\+202E⟩fdp\.exe/)).toBeInTheDocument();
+    expect(screen.getByText('→ /out⟨U+200B⟩')).toHaveAttribute('title', '/out⟨U+200B⟩');
+    expect(screen.getByRole('button', { name: 'Dismiss a⟨U+202E⟩fdp.exe' })).toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: /^Failed/ }));
+    expect(screen.getByText('d⟨U+202E⟩x')).toBeInTheDocument();
+  });
+
   it('has a row per job: label, target, progress, speed and time left', async () => {
     const { transfers, send } = await store();
     send({ kind: 'added', job: job(1, { label: '3 items', kind: 'move', to: '/backup' }) });

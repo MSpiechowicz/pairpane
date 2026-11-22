@@ -11,6 +11,8 @@
 use std::ffi::OsString;
 use std::io;
 
+use crate::listing::platform;
+
 use super::plan::Kind;
 use super::transfer::{MAX_DEPTH, Run, Stop};
 
@@ -22,7 +24,6 @@ use std::fs::{File, Metadata};
 use std::path::PathBuf;
 
 use super::open;
-#[cfg(unix)]
 use super::report::refusal;
 
 /// One entry of a folder, as the walk saw it. A link is a link whatever it points at.
@@ -67,6 +68,19 @@ pub(super) struct Entries {
 #[cfg(unix)]
 fn changed() -> io::Error {
     refusal(io::ErrorKind::Other, "it changed while the folder was being walked")
+}
+
+/// Checks that `name` is one name and not a path: a look or an open of a path would follow a link on the way, which the
+/// steps of a walk never do. A nested item is found one name at a time (see `pack_items`).
+fn one_name(name: &str) -> io::Result<()> {
+    if platform::is_plain_name(name) {
+        Ok(())
+    } else {
+        Err(refusal(
+            io::ErrorKind::InvalidInput,
+            "an entry is looked up by one name, not by a path",
+        ))
+    }
 }
 
 /// A folder held open (a path on Windows).
@@ -130,6 +144,7 @@ impl Held {
     pub(super) fn look(&self, name: &str) -> io::Result<Node> {
         use rustix::fs::{AtFlags, statat};
 
+        one_name(name)?;
         let stat = statat(&self.dir, name, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
 
         Ok(Node::of_stat(OsString::from(name), &stat))
@@ -241,6 +256,8 @@ impl Held {
     }
 
     pub(super) fn look(&self, name: &str) -> io::Result<Node> {
+        one_name(name)?;
+
         super::plan::Child::lookup(&self.path, name).map(Node::from)
     }
 

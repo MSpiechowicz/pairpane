@@ -73,6 +73,17 @@ describe('FileActions on search results', () => {
     expect(backend.invoke.mock.calls).toHaveLength(calls);
   });
 
+  it('editing a result is refused until its folder is opened: the card says so, and nothing is opened', async () => {
+    const { backend, files, view } = await world('left');
+    view.setCursor(1);
+    const calls = backend.invoke.mock.calls.length;
+
+    expect(files.refuseEdit()).toBe(true);
+
+    expect(files.toast).toMatchObject({ text: RESULTS_NOTICE, error: true });
+    expect(backend.invoke.mock.calls).toHaveLength(calls);
+  });
+
   it('copy is never extract: the dialog is for the names below the folder searched, into the other pane’s folder', async () => {
     const { files, view } = await world('left');
     select(view, 2, 4);
@@ -164,7 +175,11 @@ describe('removing search results', () => {
       { path: '/work/b', names: ['z.txt'], within: { root: '/work', dir: 'b' } },
       { path: '/work', names: ['top.txt'], within: { root: '/work', dir: '' } },
     ]);
-    expect(files.toast).toMatchObject({ text: 'Moved 4 items to the Trash.', error: false, undo: null });
+    expect(files.toast).toMatchObject({
+      text: 'Moved 4 items to the Trash. Undo is only offered when one folder is affected.',
+      error: false,
+      undo: null,
+    });
     expect(files.removal).toBeUndefined();
     expect(view.selectedShown()).toEqual([]);
     expect(backend.opens).toHaveLength(opens + 1);

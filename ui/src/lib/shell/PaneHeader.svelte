@@ -83,7 +83,7 @@
           </nav>
         </div>
       {:else}
-        {@const label = tabLabel(tab.path, volumes)}
+        {@const label = displayName(tabLabel(tab.path, volumes))}
         <div class="tab">
           <button class="name" type="button" onclick={() => tabs.select(index)} onauxclick={(e) => closeOnMiddle(e, index)}
             >{label}</button

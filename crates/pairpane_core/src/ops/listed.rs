@@ -168,9 +168,11 @@ pub(super) fn check_folder_below(base: &Path, dir: &str) -> io::Result<()> {
     resolve_folder_below(base, dir).map(drop)
 }
 
-/// Checks that the folder `dir` below `base` (see [`check_folder_below`]) is the folder `target`, by identity and not by
-/// name: a folder swapped for a link, or for another folder, since `target` was looked at is refused. Where the check
-/// cannot be made the answer is no.
+/// Checks that the folder `dir` below `base` (see [`check_folder_below`]) is, right now, the folder `target`, by identity
+/// and not by name: it refuses a link or a file on the way, and a `target` that is a different folder from the one `dir`
+/// reaches by names (a link in the path of `target`, say). It does not know which folder the search found its items in:
+/// a real folder put in the place of that one after the search passes, as long as `dir` and `target` agree now. Where the
+/// check cannot be made the answer is no.
 pub(super) fn check_same_folder_below(base: &Path, dir: &str, target: &Path) -> io::Result<()> {
     let folder = resolve_folder_below(base, dir)?;
 

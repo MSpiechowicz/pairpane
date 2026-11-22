@@ -4,12 +4,14 @@
 //! (a copy, the Trash, a delete) by the folder's path. Between the search and the action a folder on the way may have
 //! been swapped for a link that leads somewhere else, and the path would then reach what the search never saw. A command
 //! the page sends with a [`Within`] asks the backend to check first: the folder `dir` below `root` is resolved one name at
-//! a time from `root`, never through a link, and has to be the very folder the command acts on (same identity, not same
-//! spelling). Anything else is refused with the fixed [`CHANGED`] text.
+//! a time from `root`, never through a link or a file, and has to be the same folder (by identity, not by spelling) as
+//! the folder the command acts on. Anything else is refused with the fixed [`CHANGED`] text.
 //!
-//! What stays is the gap between this check and the action that follows, which the action's own folder handling does not
-//! close (it opens its folder by path): a folder swapped inside that gap is the race every pane has, and the check
-//! makes it a matter of microseconds and not of the time the results were on the screen.
+//! What the check does not do: it keeps no identity from the time of the search, so a real folder that was moved into
+//! the place of a result's folder after the search is not noticed (the results then name what is there now). Nor does it
+//! close the gap between the check and the action that follows, which opens its folder by path: a folder swapped inside
+//! that gap is the race every pane has, and the check makes it a matter of microseconds and not of the time the results
+//! were on the screen.
 
 use std::io;
 use std::path::Path;

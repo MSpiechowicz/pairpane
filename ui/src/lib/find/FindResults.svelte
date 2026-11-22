@@ -137,7 +137,7 @@
                 {#if hit.matches !== null}
                   <span class="count">{hit.matches}</span>
                   {#if hit.line !== null}
-                    <span class="line">{hit.lineNumber ?? ''}: {hit.line}</span>
+                    <span class="line">{hit.lineNumber ?? ''}: {displayName(hit.line)}</span>
                   {/if}
                 {/if}
               </span>

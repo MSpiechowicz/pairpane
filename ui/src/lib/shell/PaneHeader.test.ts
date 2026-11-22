@@ -110,6 +110,15 @@ describe('PaneHeader', () => {
     expect(within(path()).getAllByRole('button')).toHaveLength(2); // Home, Projects: the new tab is the path
   });
 
+  it('the other tabs write out a folder name that would pass for another, in the label and the Close button', async () => {
+    const { tabs } = header('/home/me/x\u202Efdp.exe');
+    tabs.add();
+    await tick();
+
+    expect(otherTabs('x⟨U+202E⟩fdp.exe')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Close x⟨U+202E⟩fdp.exe' })).toBeInTheDocument();
+  });
+
   it('clicking another tab shows it; × and the middle button close it', async () => {
     const { backend, tabs } = header('/home/me/Projects');
     tabs.add();

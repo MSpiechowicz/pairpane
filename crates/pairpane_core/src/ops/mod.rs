@@ -145,10 +145,11 @@ pub(crate) fn check_folder_below(base: &std::path::Path, dir: &str) -> std::io::
     listed::check_folder_below(base, dir)
 }
 
-/// [`check_folder_below`], and the folder reached is the folder `target` (same device and inode, or the Windows
-/// equivalent), so an operation on `target` is on the folder a search found its items in: one swapped for a link or
-/// for another folder since is refused, and so is one whose identity cannot be read. The check and the operation are
-/// two steps; what a folder swapped in between them does is the race every pane has.
+/// [`check_folder_below`], and the folder reached is, now, the folder `target` (same device and inode, or the Windows
+/// equivalent): a link or file on the way, and a `target` that is another folder than the one the names reach, are
+/// refused, and so is one whose identity cannot be read. The identity of the folder the search found is not kept, so a
+/// real folder moved into place after the search is not seen. The check and the operation are two steps; what a folder
+/// swapped in between them does is the race every pane has.
 pub fn check_same_folder_below(base: &std::path::Path, dir: &str, target: &std::path::Path) -> std::io::Result<()> {
     listed::check_same_folder_below(base, dir, target)
 }

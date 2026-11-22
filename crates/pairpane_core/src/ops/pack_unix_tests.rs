@@ -154,6 +154,45 @@ fn a_folder_on_the_way_swapped_for_a_link_while_the_items_are_found_fails_its_it
 }
 
 #[test]
+fn a_folder_on_the_way_swapped_for_a_link_after_the_items_were_planned_is_not_read_through() {
+    let root = results();
+    put(root.path(), "outside/b.txt", b"secret");
+    let (folder, aside, outside) = (
+        root.path().join("src/a"),
+        root.path().join("src/a.aside"),
+        root.path().join("outside"),
+    );
+    // The archive is being made: the items are planned and none of them was read yet.
+    let hooks = Hooks {
+        after_temp: Some(Arc::new(move |_| {
+            fs::rename(&folder, &aside).expect("moved aside");
+            symlink(&outside, &folder).expect("link");
+        })),
+        ..Hooks::default()
+    };
+
+    let request = pack(
+        root.path(),
+        &["a/b.txt", "z.txt"],
+        "out.zip",
+        options(PackFormat::Zip, PackLevel::Normal),
+    );
+    let ended = Rig::with(hooks, |_, _| {}).run(request);
+
+    assert!(matches!(ended.outcome, Outcome::Failed { .. }), "{:?}", ended.outcome);
+    let packed = fs::read(root.path().join("dst/out.zip")).ok();
+    assert!(
+        packed.is_none_or(|bytes| !bytes.windows(6).any(|window| window == b"secret")),
+        "what the link leads to was read"
+    );
+    assert_eq!(
+        fs::read_dir(root.path().join("dst")).expect("dir").count(),
+        0,
+        "no archive and no temporary file is left"
+    );
+}
+
+#[test]
 fn the_temporary_file_is_for_its_owner_alone_and_the_archive_gets_the_mode_of_a_new_file() {
     let root = scene();
     // What a plain new file gets here (the umask is the process's).

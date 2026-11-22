@@ -10,7 +10,7 @@ import type { PaneTabs } from '$lib/panes/tabs.svelte';
 import type { PaneView } from '$lib/panes/view.svelte';
 
 import { type FileAction, type Notice, trashName, what } from './dialogs';
-import { chosen, type DialogKind, type OpRequest, READ_ONLY_NOTICE, refusal, requestFor, resultTargets, targets } from './targets';
+import { chosen, type DialogKind, type OpRequest, READ_ONLY_NOTICE, refusal, RESULTS_NOTICE, requestFor, resultTargets, targets } from './targets';
 import { isTool, ItemTools } from './tools.svelte';
 
 /** The copy, move, add to archive, extract, combine, rename, new item or link dialog that is open, and the panes it works between. */
@@ -31,6 +31,9 @@ export interface Removal {
   source: PaneView;
   results?: true;
 }
+
+/** Added to the card about a move to the Trash that took several requests (search results in several folders). */
+const NO_UNDO_NOTICE = 'Undo is only offered when one folder is affected.';
 
 /** The card that says what happened; `undo` is the token that takes a move to the Trash back. */
 export interface ToastState extends Notice {
@@ -107,14 +110,24 @@ export class FileActions {
     this.#settle();
   }
 
-  /** F4 on an archive's entry: says that the archive is read-only, and whether it did. */
+  /**
+   * F4 on an archive's entry (read-only) or on a search result (its folder has to be opened first, so that the edit
+   * is of the file in the folder that is there): says why, and whether it did.
+   */
   refuseEdit(): boolean {
-    if (!this.#panes[this.#active()].view.listing.readonly) {
-      return false;
+    const { readonly, results } = this.#panes[this.#active()].view.listing;
+
+    if (results !== undefined) {
+      this.say(RESULTS_NOTICE, true);
+      return true;
     }
 
-    this.say(READ_ONLY_NOTICE, true);
-    return true;
+    if (readonly) {
+      this.say(READ_ONLY_NOTICE, true);
+      return true;
+    }
+
+    return false;
   }
 
   #open(kind: DialogKind, source: PaneView, other: PaneView) {
@@ -286,12 +299,13 @@ export class FileActions {
   #trashed(moved: string[], undos: number[], failure: string | undefined) {
     const place = `the ${trashName()}`;
     const undo = undos.length === 1 ? undos[0] : null;
+    const why = undos.length > 1 ? ` ${NO_UNDO_NOTICE}` : '';
     if (failure === undefined) {
-      this.say(`Moved ${what(moved)} to ${place}.`, false, undo);
+      this.say(`Moved ${what(moved)} to ${place}.${why}`, false, undo);
     } else if (moved.length === 0 && undos.length === 0) {
       this.say(failure, true);
     } else {
-      this.say(`Some items were moved to ${place}, but not all. ${failure}`, true, undo);
+      this.say(`Some items were moved to ${place}, but not all. ${failure}${why}`, true, undo);
     }
   }
 

@@ -159,6 +159,19 @@ describe('FindDialog', () => {
     expect(options()[0].querySelector('.path')).toHaveAttribute('title', 'invoice⟨U+202E⟩fdp.exe › in⟨U+000A⟩ner');
   });
 
+  it('a line of content and the folder searched are written out too', async () => {
+    const backend = findBackend();
+    const finder = new Finder(backend.ipc);
+    finder.show('/home/\u202Eann');
+    render(FindDialog, { finder, saved: new SavedSearches(), results: { openResults: vi.fn(async () => {}) }, onGoTo: vi.fn() });
+    await start();
+    backend.searches[0].emit({ kind: 'found', hits: [hit('a.txt', { line: 'x\u200Bdone\u202E', matches: 1, lineNumber: 2 })] });
+    await tick();
+
+    expect(screen.getByText('/home/⟨U+202E⟩ann')).toBeInTheDocument();
+    expect(options()[0].querySelector('.line')).toHaveTextContent('2: x⟨U+200B⟩done⟨U+202E⟩');
+  });
+
   it('says it stopped at the limit, and that it was stopped', async () => {
     const s = open();
     await start();

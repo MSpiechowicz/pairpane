@@ -5,11 +5,12 @@
 
   /**
    * The function keys, in key order. Delete is the one destructive key and is marked as such. `needsFolder`: the key
-   * does nothing on search results (they are not a folder), which the dock says.
+   * does nothing on search results (they are not a folder), which the dock says. F4 included: a result is edited
+   * only after its folder has been opened.
    */
   const KEYS: readonly { key: string; label: string; hot?: boolean; needsFolder?: boolean }[] = [
     { key: 'F3', label: 'View' },
-    { key: 'F4', label: 'Edit' },
+    { key: 'F4', label: 'Edit', needsFolder: true },
     { key: 'F5', label: 'Copy' },
     { key: 'F6', label: 'Move', needsFolder: true },
     { key: 'F7', label: 'New folder', needsFolder: true },

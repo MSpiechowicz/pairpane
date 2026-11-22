@@ -2,7 +2,7 @@
   import type { FindHit } from '$lib/ipc/bindings/FindHit';
   import type { Tri } from '$lib/ipc/bindings/Tri';
   import { enterSubmits } from '$lib/ops/submission.svelte';
-  import { formatSize } from '$lib/panes/format';
+  import { displayName, formatSize } from '$lib/panes/format';
   import { isWindowsPlatform } from '$lib/panes/keys';
   import Modal from '$lib/shell/Modal.svelte';
   import { ENCODINGS } from '$lib/viewer/encodings';
@@ -114,7 +114,7 @@
 
 <Modal title="Find files" variant="wide" onClose={() => finder.close()}>
   <div class="find" {@attach enterSubmits(startOrStop)}>
-    <p class="root">Look in <span class="path">{finder.root}</span></p>
+    <p class="root">Look in <span class="path">{displayName(finder.root ?? '')}</span></p>
 
     <SavedBar {saved} {criteria} onLoad={(loaded) => Object.assign(form, toForm(loaded))} />
 
