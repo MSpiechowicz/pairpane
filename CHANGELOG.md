@@ -1,3 +1,10 @@
+# [0.19.0](https://github.com/MSpiechowicz/pairpane/compare/v0.18.0...v0.19.0) (2026-11-22)
+
+
+### Features
+
+* **compare:** compare and synchronize folders (#42) ([6838bcb](https://github.com/MSpiechowicz/pairpane/commit/6838bcbc373143bda3bd7e49a5c4643b40e2b909))
+
 # [0.18.0](https://github.com/MSpiechowicz/pairpane/compare/v0.17.0...v0.18.0) (2026-11-22)
 
 
