@@ -148,6 +148,21 @@ describe('names on the screen', () => {
     expect(shownIn(sources['../src/lib/saved/SavedBar.svelte']).map(({ expression }) => expression)).toContain('displayName(kept)');
   });
 
+  it('the synchronize dialog, its table and its confirmation are among the components it reads', () => {
+    const files = Object.keys(sources).map((path) => path.replace('../src/lib/', ''));
+    const shown = (file: string) => shownIn(sources[`../src/lib/${file}`]).map(({ expression }) => expression);
+
+    expect(files).toEqual(
+      expect.arrayContaining(['compare/SyncDialog.svelte', 'compare/SyncTable.svelte', 'compare/SyncConfirm.svelte', 'compare/CompareTools.svelte']),
+    );
+    // The paths of the rows and of the two folders, what the scan and the job say, and the row marks are shown, so each is written through displayName.
+    expect(shown('compare/SyncTable.svelte')).toEqual(expect.arrayContaining(['displayName(item.row.path)']));
+    expect(shown('compare/SyncDialog.svelte')).toEqual(
+      expect.arrayContaining(['displayName(place(roots.left))', 'displayName(place(roots.right))', 'displayName(syncer.failure)', 'displayName(syncer.notice)']),
+    );
+    expect(shownIn(sources['../src/lib/panes/PaneRow.svelte']).map(({ expression }) => expression)).toContain('MARK_TEXT[mark]');
+  });
+
   it('looks at the components that are there, and every exception is still needed', () => {
     const files = Object.keys(sources).map((path) => path.replace('../src/lib/', ''));
     expect(files.length).toBeGreaterThan(40);

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { type Mark, MARK_TEXT } from '$lib/compare/quick';
   import type { Entry } from '$lib/ipc/bindings/Entry';
 
   import { displayName, formatDate, iconClass, splitName } from './format';
@@ -14,6 +15,7 @@
     selected,
     size,
     edit,
+    mark,
   }: {
     id: string;
     /** The row number, for the list that handles the mouse for all its rows. */
@@ -27,6 +29,8 @@
     size: string | undefined;
     /** Set on the row being renamed in place: its name is a field then. */
     edit?: InlineRename;
+    /** How the entry stands against the other pane's, after a comparison: a tint, and the same in words. */
+    mark?: Mark;
   } = $props();
 
   const parts = $derived(entry ? splitName(entry) : undefined);
@@ -34,15 +38,20 @@
 
 <div
   {id}
-  class="row"
+  class="row {mark ? `mark-${mark}` : ''}"
   class:cursor
   class:selected
   class:d={entry?.kind === 'dir'}
   class:h={entry?.hidden}
+  title={mark && MARK_TEXT[mark]}
+  aria-describedby={mark ? `${id}-mark` : undefined}
   role="option"
   data-row={index}
   aria-selected={selected}
 >
+  {#if mark}
+    <span id="{id}-mark" class="sr-only" aria-hidden="true">{MARK_TEXT[mark]}</span>
+  {/if}
   {#if up}
     <span class="ic up">↰</span><span class="nm">..</span>
   {:else if entry && parts}
@@ -73,6 +82,22 @@
 
   .row:hover {
     background: color-mix(in srgb, var(--text) 4%, transparent);
+  }
+
+  .row.mark-onlyHere {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+
+  .row.mark-newer {
+    background: color-mix(in srgb, var(--ok) 14%, transparent);
+  }
+
+  .row.mark-older {
+    background: color-mix(in srgb, var(--dim) 14%, transparent);
+  }
+
+  .row.mark-differs {
+    background: color-mix(in srgb, var(--sel) 16%, transparent);
   }
 
   .row.cursor {

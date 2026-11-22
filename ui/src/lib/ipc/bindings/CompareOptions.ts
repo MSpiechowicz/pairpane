@@ -9,7 +9,8 @@ export type CompareOptions = {
  */
 subfolders: boolean, 
 /**
- * Files of the same size and about the same time are read and compared by content (not with an archive side).
+ * Files of the same size are read and compared by content: the same bytes make them the same, whatever their times say (not with an
+ * archive side).
  */
 content: boolean, 
 /**

@@ -173,6 +173,8 @@ describe('the Files menu', () => {
       'Split file…',
       'Combine files…',
       'Find files… Alt+F7',
+      'Compare folders',
+      'Synchronize folders…',
       'Pack… Alt+F5',
       'Extract… Alt+F9',
     ]);

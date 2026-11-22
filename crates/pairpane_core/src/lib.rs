@@ -7,9 +7,11 @@
 //! 2. Rules that need no Tauri, tested here: [`listing`] (folder listings and change watching), [`volumes`]
 //!    (the drive list), [`ops`] (copy and move jobs), [`state`] (what is saved between runs), [`settings`] (the file the user edits), [`update`] (in-app updater),
 //!    [`view`] (the file viewer), [`edit`] (the built-in text editor), [`archive`] (reading archives), [`find`] (searching a folder tree),
+//!    [`compare`] (comparing two folder trees),
 //!    [`rename`] (the rule and the preview of a multi-rename).
 
 pub mod archive;
+pub mod compare;
 pub mod edit;
 pub mod find;
 pub mod listing;

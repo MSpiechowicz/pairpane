@@ -1,18 +1,17 @@
+import { CompareMarks } from '$lib/compare/marks.svelte';
 import type { Entry } from '$lib/ipc/bindings/Entry';
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import type { Transport } from '$lib/ipc/transport';
 
 import { archiveFile, above } from './archive';
 import { Listing } from './listing.svelte';
-import { parseMask } from './mask';
+import { type MaskMode, maskedFiles } from './mask';
 import { type SortColumn, viewOrder } from './order';
 import { Selection, summarize } from './selection.svelte';
 import { FolderSizes } from './sizes.svelte';
 
 /** The name the `..` row goes by (no real entry can have it). */
 const UP = '..';
-
-export type MaskMode = 'select' | 'deselect';
 
 /** What the owner of a pane (its tabs) needs to hear about its folders. */
 export interface ViewHooks {
@@ -35,6 +34,8 @@ export interface ViewHooks {
 export class PaneView {
   readonly listing: Listing;
   readonly sizes: FolderSizes;
+  /** What a comparison with the other pane marked here; cleared when the pane lists anything. */
+  readonly marks = new CompareMarks();
 
   #column = $state<SortColumn>('name');
   #desc = $state(false);
@@ -84,6 +85,7 @@ export class PaneView {
         hooks.onOpen?.();
       },
       onStart: (reload) => {
+        this.marks.clear();
         if (!reload) {
           this.#reset();
         }
@@ -353,6 +355,12 @@ export class PaneView {
     this.#selected.remove(names);
   }
 
+  /** Selects exactly the entries named `names` (what a comparison picks): the selection that was there is dropped. */
+  select(names: readonly string[]) {
+    this.#selected.clear();
+    this.#selected.add(names);
+  }
+
   /** Toggles the cursor's entry (never `..`) and returns it. */
   #toggleCursor(): Entry | undefined {
     const entry = this.entryAt(this.cursor);
@@ -439,13 +447,7 @@ export class PaneView {
       return;
     }
 
-    const matches = parseMask(this.maskText);
-    const names: string[] = [];
-    this.#eachVisible((entry) => {
-      if (entry.kind !== 'dir' && matches(entry.name)) {
-        names.push(entry.name);
-      }
-    });
+    const names = maskedFiles((visit) => this.#eachVisible(visit), this.maskText);
 
     if (mode === 'select') {
       this.#selected.add(names);

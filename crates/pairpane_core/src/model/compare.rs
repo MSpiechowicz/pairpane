@@ -26,7 +26,8 @@ pub enum CompareRoot {
 pub struct CompareOptions {
     /// Go into the folders both sides have.
     pub subfolders: bool,
-    /// Files of the same size and about the same time are read and compared by content (not with an archive side).
+    /// Files of the same size are read and compared by content: the same bytes make them the same, whatever their times say (not with an
+    /// archive side).
     pub content: bool,
     /// Look at hidden entries too.
     pub hidden: bool,

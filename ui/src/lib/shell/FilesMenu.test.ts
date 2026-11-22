@@ -18,6 +18,8 @@ describe('FilesMenu', () => {
     expect(screen.getByRole('menuitem', { name: 'Properties' })).toHaveAttribute('aria-keyshortcuts', 'Alt+Enter');
     expect(screen.getByRole('menuitem', { name: 'Change attributes…' })).not.toHaveAttribute('aria-keyshortcuts');
     expect(screen.getByRole('menuitem', { name: 'Find files…' })).toHaveAttribute('aria-keyshortcuts', 'Alt+F7');
+    expect(screen.getByRole('menuitem', { name: 'Compare folders' })).not.toHaveAttribute('aria-keyshortcuts');
+    expect(screen.getByRole('menuitem', { name: 'Synchronize folders…' })).not.toHaveAttribute('aria-keyshortcuts');
     expect(screen.getByRole('menuitem', { name: 'Pack…' })).toHaveAttribute('aria-keyshortcuts', 'Alt+F5');
     expect(screen.getByRole('menuitem', { name: 'Extract…' })).toHaveAttribute('aria-keyshortcuts', 'Alt+F9');
   });
@@ -52,6 +54,8 @@ describe('FilesMenu', () => {
       'Split file…',
       'Combine files…',
       'Find files…',
+      'Compare folders',
+      'Synchronize folders…',
       'Pack…',
       'Extract…',
     ];
@@ -74,6 +78,8 @@ describe('FilesMenu', () => {
       'split',
       'combine',
       'find',
+      'compare',
+      'synchronize',
       'pack',
       'extract',
     ]);

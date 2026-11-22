@@ -19,6 +19,8 @@
     onToggleHidden,
     onFiles,
     onFind,
+    onCompare,
+    onSync,
   }: {
     version: string | undefined;
     failure: string | undefined;
@@ -35,6 +37,10 @@
     onFiles: (action: FilesChoice) => void;
     /** The search box: it opens the Find dialog, as Alt+F7 does. */
     onFind: () => void;
+    /** "⇆ Compare": the two folders are marked for their differences, as Files ▸ Compare folders does. */
+    onCompare: () => void;
+    /** "Sync": the Synchronize dialog, as Files ▸ Synchronize folders… opens it. */
+    onSync: () => void;
   } = $props();
 
   /** The menus that hold nothing yet. */
@@ -126,7 +132,8 @@
   </button>
 
   <div class="tools">
-    <button type="button">⇆ Compare</button>
+    <button type="button" onclick={onCompare}>⇆ Compare</button>
+    <button type="button" onclick={onSync}>⇅ Sync</button>
     <button type="button">Σ Sizes</button>
     <button type="button" class:on={showHidden} aria-pressed={showHidden} onclick={onToggleHidden}>Hidden</button>
     <button type="button" title="Theme: {THEME_LABEL[theme.mode]}" onclick={() => theme.cycle()}>

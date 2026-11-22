@@ -1,0 +1,39 @@
+/*
+ * A table of a dialog: a head and rows of one height in a scroller (the preview of a rename, the differences of a
+ * synchronization). The dialog gives `grid-template-columns` to its `.head` and `.row`, and a height to its `.body`.
+ */
+.dialog-table {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.dialog-table :is(.head, .row) {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+  padding: 0 10px;
+}
+
+.dialog-table .head {
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--dim);
+  font-size: 11.5px;
+}
+
+.dialog-table .row {
+  border-left: 2px solid transparent;
+  font-size: 12.5px;
+}
+
+/* A cell that holds a name or a path: one line, in mono, set apart from the text around it. */
+.dialog-table .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  unicode-bidi: isolate;
+}

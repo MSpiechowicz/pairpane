@@ -48,6 +48,10 @@ pub(super) fn changed() -> io::Error {
     refusal(io::ErrorKind::Other, "the archive changed; open it again")
 }
 
+/// What `write_all` asks before it writes an entry: whether to write it. Given the run, the entry and its path below the target
+/// folder.
+pub(super) type Gate<'g> = dyn FnMut(&mut Run<'_>, &IndexEntry, &str) -> Result<bool, Stop> + 'g;
+
 /// How often the watcher looks whether the job was cancelled.
 const WATCH_EVERY: Duration = Duration::from_millis(50);
 
@@ -119,34 +123,66 @@ impl Run<'_> {
         watched(&job.control, &cancel, || {
             let index = self.indexed(name, source, &print, &input, &cancel)?;
 
-            let selection = index
-                .select(inner, entries)
-                .ok_or_else(|| refusal(io::ErrorKind::NotFound, "the folder or item is not in the archive"))?;
-            self.skipped = self
-                .skipped
-                .saturating_add(selection.skipped)
-                .saturating_add(selection.refused);
-
-            if password.is_none() && selection.any_encrypted() {
-                return Err(archive::password_error(PasswordFault::Needed).into());
-            }
-
-            for item in &selection.items {
-                self.checkpoint()?;
-
-                if item.entry.kind == archive::EntryType::File {
-                    self.found(item.entry.size);
-                }
-            }
+            let selection = self.select_for(&index, (inner, entries), password)?;
 
             self.phase(JobPhase::Extracting);
-            let mut reader: Box<dyn archive::EntrySource + '_> = match &self.inner.hooks.entry_source {
-                Some(make) => make(&index),
-                None => archive::open_source(&index, &input, &cancel, password).map_err(|e| self.stopped(e))?,
-            };
+            let mut reader = self.entry_source(&index, &input, &cancel, password)?;
 
-            self.write_all(&mut *reader, &selection.items, &selection.ordinals(), target, origin)
+            self.write_all(
+                &mut *reader,
+                &selection.items,
+                &selection.ordinals(),
+                (target, origin),
+                &mut |_, _, _| Ok(true),
+            )
         })
+    }
+
+    /// What writing `names` of the folder `inner` of `index` takes: counts what is left out (links, special entries, names that
+    /// are refused) as skipped and the files for the progress, and fails when the names are not in the archive or an entry is
+    /// encrypted and there is no `password`.
+    pub(super) fn select_for<'i>(
+        &mut self,
+        index: &'i ArchiveIndex,
+        (inner, names): (&str, &[String]),
+        password: Option<&archive::Password>,
+    ) -> Result<archive::Selection<'i>, Stop> {
+        let selection = index
+            .select(inner, names)
+            .ok_or_else(|| refusal(io::ErrorKind::NotFound, "the folder or item is not in the archive"))?;
+        self.skipped = self
+            .skipped
+            .saturating_add(selection.skipped)
+            .saturating_add(selection.refused);
+
+        if password.is_none() && selection.any_encrypted() {
+            return Err(archive::password_error(PasswordFault::Needed).into());
+        }
+
+        for item in &selection.items {
+            self.checkpoint()?;
+
+            if item.entry.kind == archive::EntryType::File {
+                self.found(item.entry.size);
+            }
+        }
+
+        Ok(selection)
+    }
+
+    /// The source of the data of the entries of `index`, read from `input` with `password` (the one a test brought, when it
+    /// brought one) and stopped by `cancel`.
+    pub(super) fn entry_source<'a>(
+        &self,
+        index: &'a ArchiveIndex,
+        input: &Input<'a>,
+        cancel: &'a AtomicBool,
+        password: Option<&'a archive::Password>,
+    ) -> Result<Box<dyn archive::EntrySource + 'a>, Stop> {
+        match &self.inner.hooks.entry_source {
+            Some(make) => Ok(make(index)),
+            None => archive::open_source(index, input, cancel, password).map_err(|error| self.stopped(error)),
+        }
     }
 
     /// The index of the archive `name` that the job works on: the one the caller brought when the archive is still in the
@@ -176,20 +212,21 @@ impl Run<'_> {
         }
     }
 
-    /// Hands the entries `items` (ordinals `wanted`) from `reader` to the writing, into `target`.
-    fn write_all(
+    /// Hands the entries `items` (ordinals `wanted`) from `reader` to the writing, into the folder and with the origin of
+    /// `place`. `gate` is asked about each entry (with its path below the folder) first: one it says no to is left alone.
+    pub(super) fn write_all(
         &mut self,
         reader: &mut dyn archive::EntrySource,
         items: &[Selected<'_>],
         wanted: &[u32],
-        target: std::path::PathBuf,
-        origin: Origin,
+        place: (std::path::PathBuf, Origin),
+        gate: &mut Gate<'_>,
     ) -> Result<(), Stop> {
         if wanted.is_empty() {
             return Ok(());
         }
 
-        let mut landing = Landing::new(target, origin);
+        let mut landing = Landing::new(place.0, place.1);
         let mut stopped = None;
 
         let walked = reader.extract(wanted, &mut |entry: &IndexEntry, data: &mut dyn Read| {
@@ -198,7 +235,13 @@ impl Run<'_> {
             };
             let rel = items[at].relative;
 
-            match self.write_item(&mut landing, entry, rel, data) {
+            let written = match gate(self, entry, rel) {
+                Ok(true) => self.write_item(&mut landing, entry, rel, data),
+                Ok(false) => Ok(()),
+                Err(stop) => Err(stop),
+            };
+
+            match written {
                 Ok(()) => Ok(Flow::Continue),
                 Err(Stop::Failed(error)) if !self.ends_job(&error) => {
                     self.fail(rel, &error);
@@ -225,7 +268,7 @@ impl Run<'_> {
 
     /// Whether `error` of one entry ends the job: a cancel (the archive code answers the cancel flag with an error), a
     /// password that is missing or wrong, or no room left on the disk.
-    fn ends_job(&self, error: &io::Error) -> bool {
+    pub(super) fn ends_job(&self, error: &io::Error) -> bool {
         self.job.control.is_cancelled()
             || archive::password_fault(error).is_some()
             || error.kind() == io::ErrorKind::StorageFull
@@ -233,7 +276,7 @@ impl Run<'_> {
 
     /// `stop`, which is a cancel when the job was cancelled (the error that ended the entry was the archive code's reply
     /// to the cancel flag).
-    fn settled(&self, stop: Stop) -> Stop {
+    pub(super) fn settled(&self, stop: Stop) -> Stop {
         match stop {
             Stop::Failed(error) => self.stopped(error),
             cancelled => cancelled,

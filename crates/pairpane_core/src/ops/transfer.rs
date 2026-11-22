@@ -19,7 +19,7 @@ use super::rename;
 use super::report;
 
 /// Folders nested deeper than this are not walked (the walk recurses, so this bounds its stack).
-pub(super) const MAX_DEPTH: usize = 1_024;
+pub(crate) const MAX_DEPTH: usize = 1_024;
 
 /// Item errors reported with their paths; later ones are only counted.
 const MAX_REPORTED_ERRORS: usize = 100;

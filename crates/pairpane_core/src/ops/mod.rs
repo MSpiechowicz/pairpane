@@ -93,6 +93,10 @@
 //! inside a folder held open) and `rename_log` (the pairs it renamed, which an undo reads). The rule that makes the new names
 //! is in [`crate::rename`].
 //!
+//! Synchronizing two compared folders: `sync` (the job: look at every item again, copy it with the checks of a copy) and
+//! `sync_archive` (the items that come out of an archive, extracted by the writing of `extract_write`). What the job promises
+//! is the text of `sync`.
+//!
 //! Outside the engine, single changes that are not jobs: `items` (new folders and files, links, permanent
 //! delete) and `trash` (move to the Trash, put back). Each is a plain blocking function; the caller runs it off the
 //! command thread.
@@ -137,6 +141,8 @@ mod report;
 mod request;
 mod runnable;
 mod split;
+mod sync;
+mod sync_archive;
 mod task;
 mod transfer;
 mod trash;
@@ -235,6 +241,12 @@ mod request_tests;
 #[cfg(test)]
 mod split_tests;
 #[cfg(test)]
+mod sync_archive_tests;
+#[cfg(test)]
+mod sync_refusal_tests;
+#[cfg(test)]
+mod sync_tests;
+#[cfg(test)]
 mod testing;
 #[cfg(test)]
 mod transfer_tests;
@@ -248,8 +260,10 @@ pub use items::{ItemFailure, MAX_FOLDER_DEPTH};
 pub(crate) use open::OPEN_REPARSE_POINT;
 pub(crate) use open::create_new;
 pub(crate) use partial::{Partial, run_token};
+pub(crate) use plan::{Child, Kind, is_inside, read_children, real};
 pub use rename_log::RenameLog;
-pub use request::{AnswerError, PackJob, Refused, Request, Task, UnknownJob};
+pub use request::{AnswerError, PackJob, Refused, Request, SyncPlan, SyncRoot, Task, UnknownJob};
+pub(crate) use transfer::MAX_DEPTH;
 pub use trash::{CAN_UNTRASH, Trashed, UntrashFailure};
 pub(crate) use validate::fold_case;
 pub use validate::{has_nested_names, is_item_path, name_fits};

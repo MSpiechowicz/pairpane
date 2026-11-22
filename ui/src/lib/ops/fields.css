@@ -36,3 +36,29 @@
   margin: 8px 0 0;
   color: var(--dim);
 }
+
+/* A group of related fields of a dialog, with its caption (a `fieldset`). */
+.group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  min-width: 0;
+  margin: 0;
+  padding: 6px 10px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.group > legend {
+  padding: 0 4px;
+  color: var(--dim);
+  font-size: 11.5px;
+}
+
+/* A folder or file named in a dialog: set in mono, apart from the text around it (it may be written right to left). */
+.dialog-path {
+  color: var(--text);
+  font-family: var(--font-mono);
+  unicode-bidi: isolate;
+}

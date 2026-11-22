@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::archive::Password;
-use crate::model::{AttributeChange, HashAlgorithm, IpcError, IpcErrorCode, OpKind, PackFormat, PackLevel};
+use crate::model::{
+    AttributeChange, HashAlgorithm, IpcError, IpcErrorCode, OpKind, PackFormat, PackLevel, SyncDirection, SyncFacts,
+};
 
 use super::{ArchiveJob, RenameLog};
 
@@ -54,6 +56,40 @@ pub enum Task {
         undo: bool,
         log: RenameLog,
     },
+    /// Copies the items between two folders that are compared, each the way its [`SyncPlan`] says (`plans` is one for each
+    /// name, in order; the names are paths below the two roots, see [`super::is_item_path`], none inside another). Nothing
+    /// is ever deleted, an item that is not as the scan saw it is skipped, and only a folder can be copied onto.
+    ///
+    /// Where the folders are: for two folders `from` is the left and `to` the right one. When one side is an archive
+    /// (the other is then written to), `from` is the folder that holds the archive file and `to` the other folder.
+    Sync {
+        left: SyncRoot,
+        right: SyncRoot,
+        plans: Vec<SyncPlan>,
+    },
+}
+
+/// One side of a synchronization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncRoot {
+    /// A folder on disk (see [`Task::Sync`] for which one).
+    Folder,
+    /// The folder `inner` (`""` is the root, `a/b` a folder) of the archive `name`, a file of the request's `from`.
+    /// Only ever copied from.
+    Archive {
+        name: String,
+        inner: String,
+        source: ArchiveJob,
+    },
+}
+
+/// What one item of a synchronization does, and what the scan saw of its two sides (the item is copied only while both are
+/// still so).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncPlan {
+    pub direction: SyncDirection,
+    pub source: SyncFacts,
+    pub target: Option<SyncFacts>,
 }
 
 /// How a pack job writes its archive. The format is the one the archive's `name` must have the extension of.
@@ -113,6 +149,7 @@ impl Task {
             Self::Pack { .. } => Some(OpKind::Pack),
             Self::AddToArchive { .. } => Some(OpKind::AddToArchive),
             Self::Rename { .. } => Some(OpKind::Rename),
+            Self::Sync { .. } => Some(OpKind::Sync),
         }
     }
 }

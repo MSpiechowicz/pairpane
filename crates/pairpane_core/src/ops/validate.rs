@@ -4,10 +4,12 @@ use std::collections::HashSet;
 
 use crate::archive;
 use crate::listing::platform;
-use crate::model::{ArchiveFormat, AttributeChange, ModeChange, OpKind, PackFormat};
+use crate::model::{ArchiveFormat, AttributeChange, EntryKind, ModeChange, OpKind, PackFormat, SyncDirection};
 
 use super::transfer::MAX_DEPTH;
-use super::{MAX_NAME_UNITS, MAX_NAMES, MAX_NAMES_BYTES, MIN_PART_SIZE, PackJob, Refused, Request, Task};
+use super::{
+    MAX_NAME_UNITS, MAX_NAMES, MAX_NAMES_BYTES, MIN_PART_SIZE, PackJob, Refused, Request, SyncPlan, SyncRoot, Task,
+};
 
 /// The Unix permission bits a mask of a mode change may use (with setuid, setgid and sticky).
 const MODE_MASK: u32 = 0o7777;
@@ -45,6 +47,12 @@ pub fn is_item_path(name: &str) -> bool {
     normal && name.split('/').count() <= MAX_DEPTH
 }
 
+/// Whether `name` is an item of a synchronization: a path below the two folders made of plain names, each of which is one
+/// every other job accepts (so no `..`, no absolute path and on Windows no device name).
+fn is_sync_path(name: &str) -> bool {
+    is_item_path(name) && name.split('/').all(platform::is_plain_name)
+}
+
 /// Whether one of `names` is a folder that another is in (`a` and `a/b`): packing both would put the same file in the
 /// archive twice. Where the file system tells `A` from `a` no more than a person does (Windows, macOS) the names are
 /// compared that way too: `a` and `A/x` are the same folder.
@@ -77,6 +85,12 @@ pub(super) fn validate(request: &Request) -> Result<(), Refused> {
 
     if matches!(request.task, Task::Pack { .. }) {
         check_names_with(&request.names, is_item_path)?;
+
+        if has_nested_names(&request.names) {
+            return Err(Refused::InvalidNames);
+        }
+    } else if matches!(request.task, Task::Sync { .. }) {
+        check_names_with(&request.names, is_sync_path)?;
 
         if has_nested_names(&request.names) {
             return Err(Refused::InvalidNames);
@@ -196,6 +210,7 @@ fn validate_task(request: &Request) -> Result<(), Refused> {
 
             true
         }
+        Task::Sync { left, right, plans } => sync_acceptable(left, right, plans, request.names.len()),
     };
 
     if accepted { Ok(()) } else { Err(Refused::InvalidTask) }
@@ -228,6 +243,44 @@ fn check_targets(names: &[String], targets: &[String]) -> Result<(), Refused> {
     }
 
     Ok(())
+}
+
+/// Whether a synchronization can run: at most one side is an archive and it names an archive that is read and a folder
+/// that is normalized, there is one plan for each name, nothing is copied into an archive, and each plan copies a file
+/// over a file (or onto nothing) or a folder onto nothing.
+fn sync_acceptable(left: &SyncRoot, right: &SyncRoot, plans: &[SyncPlan], names: usize) -> bool {
+    let archives = [left, right]
+        .into_iter()
+        .filter(|root| matches!(root, SyncRoot::Archive { .. }));
+    let sound = archives.clone().count() <= 1
+        && archives.into_iter().all(|root| match root {
+            SyncRoot::Archive { name, inner, .. } => {
+                check_extraction(inner, &[]).is_ok()
+                    && platform::is_plain_name(name)
+                    && name_fits(name)
+                    && archive::by_extension(name).is_some()
+            }
+            SyncRoot::Folder => true,
+        });
+
+    sound
+        && plans.len() == names
+        && plans.iter().all(|plan| {
+            let target = match plan.direction {
+                SyncDirection::ToRight => right,
+                SyncDirection::ToLeft => left,
+            };
+
+            matches!(target, SyncRoot::Folder) && plan_fits(plan)
+        })
+}
+
+/// A file onto a file or onto nothing, a folder onto nothing: what a copy can do and what the scan offers.
+fn plan_fits(plan: &SyncPlan) -> bool {
+    matches!(
+        (plan.source.kind, plan.target.map(|target| target.kind)),
+        (EntryKind::File, None | Some(EntryKind::File)) | (EntryKind::Dir, None)
+    )
 }
 
 fn attributes_acceptable(change: &AttributeChange) -> bool {
