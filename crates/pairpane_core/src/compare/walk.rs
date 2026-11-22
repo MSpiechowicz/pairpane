@@ -158,7 +158,11 @@ impl Scan<'_> {
             return self.folder(&left.child(&one.name), &right.child(&other.name), &path, depth + 1);
         }
 
-        let equal = self.content_equal(left, right, (&one, &other));
+        let equal = if one.facts.link && other.facts.link {
+            same_link(left, right, (&one, &other))
+        } else {
+            self.content_equal(left, right, (&one, &other))
+        };
         // A comparison stopped in the middle of a file has no answer for it.
         if self.cancelled() {
             return;
@@ -251,6 +255,11 @@ impl Scan<'_> {
 
         (files, bytes)
     }
+}
+
+/// Whether the two links lead to the same place; `None` when either target cannot be read.
+fn same_link(left: &Cursor<'_>, right: &Cursor<'_>, (one, other): (&Item, &Item)) -> Option<bool> {
+    Some(left.link_target(&one.name)? == right.link_target(&other.name)?)
 }
 
 /// The name of a pair: whichever side has it.

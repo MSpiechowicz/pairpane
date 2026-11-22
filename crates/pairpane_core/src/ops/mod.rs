@@ -143,6 +143,9 @@ mod runnable;
 mod split;
 mod sync;
 mod sync_archive;
+mod sync_terms;
+#[cfg(unix)]
+mod sync_write;
 mod task;
 mod transfer;
 mod trash;
@@ -242,6 +245,8 @@ mod request_tests;
 mod split_tests;
 #[cfg(test)]
 mod sync_archive_tests;
+#[cfg(test)]
+mod sync_race_tests;
 #[cfg(test)]
 mod sync_refusal_tests;
 #[cfg(test)]

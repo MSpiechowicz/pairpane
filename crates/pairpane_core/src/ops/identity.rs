@@ -94,6 +94,24 @@ impl FileId {
 pub(super) struct FolderId((u64, u64));
 
 impl FolderId {
+    /// The identity of an entry whose device and inode were read through a handle.
+    #[cfg(unix)]
+    pub(super) fn of_ids(ids: (u64, u64)) -> Self {
+        Self(ids)
+    }
+
+    /// The identity of what is at `path` as `meta` describes it (read without following a link); on Windows the path is
+    /// opened for it. `None` when it cannot be read. A file has one as well as a folder.
+    #[cfg(unix)]
+    pub(super) fn of_meta(_path: &Path, meta: &Metadata) -> Option<Self> {
+        crate::listing::platform::identity(meta).map(Self)
+    }
+
+    #[cfg(windows)]
+    pub(super) fn of_meta(path: &Path, _meta: &Metadata) -> Option<Self> {
+        Self::of_path(path)
+    }
+
     /// The identity of the folder `path` is right now (a link being its own thing); `None` when it cannot be read. On
     /// Unix a job reads it from the folder it holds open (`Held::identity`), so this is for the tests.
     #[cfg(all(unix, test))]

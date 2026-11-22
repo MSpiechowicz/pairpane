@@ -194,3 +194,26 @@ pub(super) fn index_of(entries: &[(&str, EntryType, u64, i64)]) -> Arc<ArchiveIn
 
     Arc::new(builder.finish(false))
 }
+
+/// The index of a tar-like archive that holds symbolic links: each is a path and where it leads.
+#[cfg(unix)]
+pub(super) fn index_of_links(links: &[(&str, &str)]) -> Arc<ArchiveIndex> {
+    let mut builder = Builder::new(ArchiveFormat::Tar);
+
+    for (name, target) in links {
+        let record = Record {
+            name: (*name).to_owned(),
+            kind: EntryType::Symlink,
+            size: 0,
+            modified: Some(10_000),
+            mode: Some(0o777),
+            link: Some((*target).to_owned()),
+            encrypted: false,
+            place: Place::Walk,
+        };
+
+        assert_eq!(builder.push(record), Flow::Continue);
+    }
+
+    Arc::new(builder.finish(false))
+}

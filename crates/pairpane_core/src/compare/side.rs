@@ -1,6 +1,7 @@
 //! One side of a comparison, and how a folder of it is listed: a folder on disk (read with no link followed) or a folder
 //! inside an archive (read from the index the caller made).
 
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -71,6 +72,14 @@ impl<'a> Cursor<'a> {
         match self {
             Self::Folder(path) => Some(path),
             Self::Archive { .. } => None,
+        }
+    }
+
+    /// Where the link `name` of this folder leads, as text; `None` when it cannot be read or is not text.
+    pub(super) fn link_target(&self, name: &str) -> Option<String> {
+        match self {
+            Self::Folder(path) => fs::read_link(path.join(name)).ok()?.to_str().map(str::to_owned),
+            Self::Archive { index, dir } => index.find(dir, name)?.entry?.link.clone(),
         }
     }
 

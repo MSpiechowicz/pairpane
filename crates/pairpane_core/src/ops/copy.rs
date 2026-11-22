@@ -16,6 +16,7 @@ use super::partial::Partial;
 use super::plan::{Child, Kind};
 use super::rename;
 use super::report::refusal;
+use super::sync_terms::Terms;
 use super::transfer::{MAX_DEPTH, Run, Stop};
 
 /// What became of one item.
@@ -82,6 +83,15 @@ impl Run<'_> {
 
         let target = to_dir.join(&node.name);
         let created = self.make_folder(&target, true)?;
+
+        // A folder that a synchronization copies whole is only copied into a folder made for it: one that is there by now
+        // appeared since the scan, and nothing is merged into it.
+        if !created && depth == 0 && self.terms == Some(Terms::Absent) {
+            self.skipped += 1;
+
+            return Ok(Done::Left);
+        }
+
         let children = self.children_of(node, rel)?;
 
         for child in &children {
@@ -183,6 +193,14 @@ impl Run<'_> {
         }
         self.checkpoint()?;
 
+        self.finish_copy(source, &mut copy, meta)?;
+
+        Ok((temp, guard))
+    }
+
+    /// What is done to the temporary file `copy` once it holds the data of `source`: the checks of a test, the check of its
+    /// content when the job asks for it, and the times and permissions of `meta`.
+    pub(super) fn finish_copy(&mut self, source: &mut File, copy: &mut File, meta: &Metadata) -> Result<(), Stop> {
         if self.inner.hooks.fail_after_data {
             return Err(io::Error::other("the disk failed (a test asked for it)").into());
         }
@@ -191,12 +209,12 @@ impl Run<'_> {
         }
 
         if self.job.request.verify {
-            self.verify(source, &mut copy)?;
+            self.verify(source, copy)?;
         }
 
-        meta::apply_file(&copy, meta)?;
+        meta::apply_file(copy, meta)?;
 
-        Ok((temp, guard))
+        Ok(())
     }
 
     /// Makes the link `node` is copied as in a new temporary file in `dir`, as it is, never followed.
@@ -231,6 +249,7 @@ impl Run<'_> {
         loop {
             let renamed = match place {
                 Place::New(target) => rename::noreplace(temp, target),
+                Place::Replace(target) if !self.may_replace(target) => return Ok(false),
                 Place::Replace(target) => rename::replace(temp, target),
                 Place::Skip => return Ok(false),
             };

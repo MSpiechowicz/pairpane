@@ -99,9 +99,18 @@ fn folders_are_compared_by_presence_and_other_kinds_by_what_they_are() {
     let special = of_kind(EntryKind::Other, false);
 
     assert_eq!(status(&folder, &folder, None), CompareStatus::Equal);
-    assert_eq!(status(&link, &link, None), CompareStatus::Equal);
     assert_eq!(status(&special, &special, None), CompareStatus::Equal);
     assert_eq!(status(&folder, &file(0, None), None), CompareStatus::Differs);
     assert_eq!(status(&link, &file(0, None), None), CompareStatus::Differs);
     assert_eq!(status(&link, &special, None), CompareStatus::Differs);
+}
+
+#[test]
+fn two_links_are_the_same_only_when_they_lead_to_the_same_place() {
+    let link = of_kind(EntryKind::Other, true);
+
+    assert_eq!(status(&link, &link, Some(true)), CompareStatus::Equal);
+    assert_eq!(status(&link, &link, Some(false)), CompareStatus::Differs);
+    // A target that could not be read is no proof of a match.
+    assert_eq!(status(&link, &link, None), CompareStatus::Differs);
 }

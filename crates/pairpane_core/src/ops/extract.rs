@@ -48,9 +48,9 @@ pub(super) fn changed() -> io::Error {
     refusal(io::ErrorKind::Other, "the archive changed; open it again")
 }
 
-/// What `write_all` asks before it writes an entry: whether to write it. Given the run, the entry and its path below the target
-/// folder.
-pub(super) type Gate<'g> = dyn FnMut(&mut Run<'_>, &IndexEntry, &str) -> Result<bool, Stop> + 'g;
+/// What `write_all` asks before it writes an entry: whether to write it. Given the run, where the extraction has written so far,
+/// the entry and its path below the target folder.
+pub(super) type Gate<'g> = dyn FnMut(&mut Run<'_>, &mut Landing, &IndexEntry, &str) -> Result<bool, Stop> + 'g;
 
 /// How often the watcher looks whether the job was cancelled.
 const WATCH_EVERY: Duration = Duration::from_millis(50);
@@ -133,7 +133,7 @@ impl Run<'_> {
                 &selection.items,
                 &selection.ordinals(),
                 (target, origin),
-                &mut |_, _, _| Ok(true),
+                &mut |_, _, _, _| Ok(true),
             )
         })
     }
@@ -235,7 +235,7 @@ impl Run<'_> {
             };
             let rel = items[at].relative;
 
-            let written = match gate(self, entry, rel) {
+            let written = match gate(self, &mut landing, entry, rel) {
                 Ok(true) => self.write_item(&mut landing, entry, rel, data),
                 Ok(false) => Ok(()),
                 Err(stop) => Err(stop),

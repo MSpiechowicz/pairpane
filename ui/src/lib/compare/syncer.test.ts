@@ -365,6 +365,40 @@ describe('Syncer apply', () => {
     ]);
   });
 
+  it('synchronizes only the rows shown: what the filters hide is neither counted nor sent', async () => {
+    const { syncer, calls } = await planned();
+
+    syncer.nameFilter = 'new.*; skip.txt';
+
+    expect(syncer.totals).toEqual({ toRight: { items: 1, bytes: 100 }, toLeft: { items: 0, bytes: 0 }, overwrites: 0 });
+    expect(syncer.withheld).toBe(2);
+
+    await syncer.apply();
+
+    expect(calls('ops_sync')).toHaveLength(1);
+    expect(calls('ops_sync')[0]).toMatchObject({ items: [{ path: 'new.txt', direction: 'toRight' }] });
+  });
+
+  it('counts every hidden row with an action, asks for nothing when all of those are hidden, and none when nothing is', async () => {
+    const { syncer } = await planned();
+
+    syncer.nameFilter = '*.txt';
+    syncer.shown.leftOnly = false;
+    syncer.shown.rightOnly = false;
+    syncer.shown.leftNewer = false;
+
+    expect(syncer.withheld).toBe(3);
+    expect(syncer.ask()).toBe(false);
+
+    syncer.shown.equal = true;
+    syncer.nameFilter = '';
+    syncer.shown.leftOnly = true;
+    syncer.shown.rightOnly = true;
+    syncer.shown.leftNewer = true;
+
+    expect(syncer.withheld).toBe(0);
+  });
+
   it('rejects with the refusal of the backend, so that the dialog can show it', async () => {
     const s = setup({
       ops_sync: () => {
@@ -375,5 +409,64 @@ describe('Syncer apply', () => {
     scan.emit(rows(row('a', 'leftNewer')));
 
     await expect(s.syncer.apply()).rejects.toThrow('too many items');
+  });
+});
+
+describe('Syncer stale rows', () => {
+  async function scanned() {
+    const s = setup();
+    const scan = await started(s);
+    scan.emit(rows(row('a.txt', 'leftNewer')));
+    scan.emit(finished(1));
+    return s;
+  }
+
+  it.each([
+    ['subfolders', (syncer: Syncer) => (syncer.subfolders = false)],
+    ['content', (syncer: Syncer) => (syncer.content = true)],
+    ['hidden', (syncer: Syncer) => (syncer.hidden = true)],
+  ])('are marked when %s changes after the scan: the rows stay, nothing is asked for', async (_name, change) => {
+    const { syncer } = await scanned();
+    expect(syncer.stale).toBe(false);
+
+    change(syncer);
+
+    expect(syncer.stale).toBe(true);
+    expect(paths(syncer)).toEqual(['a.txt']);
+    expect(syncer.ask()).toBe(false);
+    expect(syncer.confirming).toBe(false);
+  });
+
+  it('are not marked when the option is set back, or before there is a scan', async () => {
+    const fresh = setup();
+    fresh.syncer.hidden = true;
+    expect(fresh.syncer.stale).toBe(false);
+
+    const { syncer } = await scanned();
+    syncer.hidden = true;
+    syncer.hidden = false;
+
+    expect(syncer.stale).toBe(false);
+    expect(syncer.ask()).toBe(true);
+  });
+
+  it('are marked when an option changes while the scan runs', async () => {
+    const s = setup();
+    await started(s);
+
+    s.syncer.subfolders = false;
+
+    expect(s.syncer.stale).toBe(true);
+  });
+
+  it('are made fresh by the next Start, with the new options', async () => {
+    const s = await scanned();
+    s.syncer.content = true;
+    expect(s.syncer.stale).toBe(true);
+
+    await started(s);
+
+    expect(s.syncer.stale).toBe(false);
+    expect(s.scans[1].args.options).toEqual({ subfolders: true, content: true, hidden: false });
   });
 });

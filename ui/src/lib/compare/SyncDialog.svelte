@@ -87,6 +87,9 @@
       {:else if syncer.summary}
         <p class="status" role="status">{summary(syncer.summary)}</p>
       {/if}
+      {#if syncer.stale}
+        <p class="status" role="status">The options changed: press Start to compare again.</p>
+      {/if}
     </div>
 
     <fieldset class="group">
@@ -130,7 +133,7 @@
     </p>
   </div>
 
-  <DialogFooter busy={false} disabled={syncer.running || planned === 0} confirm="Synchronize" cancel="Close" onConfirm={() => syncer.ask()} onCancel={() => syncer.close()} />
+  <DialogFooter busy={false} disabled={syncer.running || syncer.stale || planned === 0} confirm="Synchronize" cancel="Close" onConfirm={() => syncer.ask()} onCancel={() => syncer.close()} />
 </Modal>
 
 {#if syncer.confirming}

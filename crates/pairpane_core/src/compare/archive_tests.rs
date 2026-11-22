@@ -9,6 +9,8 @@ use crate::archive::EntryType;
 use crate::model::CompareOptions;
 use crate::model::CompareStatus::{Equal, LeftNewer, LeftOnly, RightOnly};
 
+#[cfg(unix)]
+use super::testing::index_of_links;
 use super::testing::{archive_and, compared, index_of, normal, plain, put, refused, temp};
 
 #[test]
@@ -81,4 +83,25 @@ fn entries_of_an_archive_with_refused_names_are_counted_as_skipped() {
 
     assert_eq!(found.statuses(), [("a.txt".to_owned(), Equal)]);
     assert_eq!(found.done(), (1, 1, false, false));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_of_the_disk_and_one_of_an_archive_are_compared_by_where_they_lead() {
+    use std::os::unix::fs::symlink;
+
+    let other = temp();
+    symlink("target-a", other.path().join("same")).expect("link");
+    symlink("target-b", other.path().join("moved")).expect("link");
+    let index = index_of_links(&[("same", "target-a"), ("moved", "target-a")]);
+
+    let found = compared(archive_and(index, "", other.path()), plain(), normal());
+
+    assert_eq!(
+        found.statuses(),
+        [
+            ("moved".to_owned(), crate::model::CompareStatus::Differs),
+            ("same".to_owned(), Equal)
+        ]
+    );
 }

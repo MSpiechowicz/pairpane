@@ -36,6 +36,13 @@ export interface Roots {
 
 const STATUSES: readonly CompareStatus[] = ['leftOnly', 'rightOnly', 'leftNewer', 'rightNewer', 'differs', 'equal'];
 
+/** The options a scan is asked with. */
+interface ScanOptions {
+  subfolders: boolean;
+  content: boolean;
+  hidden: boolean;
+}
+
 const noCounts = () => Object.fromEntries(STATUSES.map((status) => [status, 0])) as Record<CompareStatus, number>;
 
 /**
@@ -77,6 +84,8 @@ export class Syncer {
   #revision = $state(0);
   #counts = noCounts();
   #archives: Archives = { left: false, right: false };
+  /** The options the rows on the table were scanned with; `undefined` before the first scan. */
+  #scanned = $state.raw<ScanOptions | undefined>();
   #id: CompareId | undefined;
   /** Tells the events of the latest scan from those of one that was dropped. */
   #run = 0;
@@ -97,9 +106,34 @@ export class Syncer {
     return indexes;
   });
 
+  /** The rows shown (what Synchronize applies to) and the rows the filters hide. */
+  readonly #split = $derived.by(() => {
+    const view = this.#view;
+    const shown: SyncRow[] = [];
+    const hidden: SyncRow[] = [];
+    let next = 0;
+
+    this.#rows.forEach((entry, index) => {
+      if (view[next] === index) {
+        shown.push(entry);
+        next += 1;
+      } else {
+        hidden.push(entry);
+      }
+    });
+
+    return { shown, hidden };
+  });
+
   readonly #totals = $derived.by(() => {
     void this.#revision;
-    return totalsOf(this.#rows);
+    return totalsOf(this.#split.shown);
+  });
+
+  readonly #withheld = $derived.by(() => {
+    void this.#revision;
+    const { toRight, toLeft } = totalsOf(this.#split.hidden);
+    return toRight.items + toLeft.items;
   });
 
   constructor(ipc: Transport) {
@@ -148,14 +182,31 @@ export class Syncer {
     return this.#counts;
   }
 
+  /** What the rows shown add up to: the rows the filters hide are not synchronized. */
   get totals(): Totals {
     return this.#totals;
   }
 
-  /** The copies that are asked for. */
+  /** How many rows with an action the filters hide; Synchronize leaves them be. */
+  get withheld(): number {
+    return this.#withheld;
+  }
+
+  /** The options were changed after the rows were scanned (or while they were): the rows are of the old ones. */
+  get stale(): boolean {
+    const scanned = this.#scanned;
+    if (this.status === 'idle' || scanned === undefined) {
+      return false;
+    }
+
+    const now = this.#options();
+    return scanned.subfolders !== now.subfolders || scanned.content !== now.content || scanned.hidden !== now.hidden;
+  }
+
+  /** The copies that are asked for: those of the rows shown. */
   get items(): SyncItem[] {
     void this.#revision;
-    return itemsOf(this.#rows);
+    return itemsOf(this.#split.shown);
   }
 
   /** What is to be done about `entry` (reactive: the rows are plain objects). */
@@ -204,6 +255,7 @@ export class Syncer {
 
     this.#drop();
     this.#clear();
+    this.#scanned = this.#options();
     this.status = 'running';
     const run = this.#run;
     const id = await this.#launch(roots, run);
@@ -223,12 +275,15 @@ export class Syncer {
     }
   }
 
+  /** The options as the scan is asked with them: content is never asked for with an archive on a side. */
+  #options(): ScanOptions {
+    return { subfolders: this.subfolders, content: this.content && this.contentAllowed, hidden: this.hidden };
+  }
+
   /** Asks the backend for the scan: its id, or `undefined` when it refused (the reason is shown, unless the scan was dropped meanwhile). */
   async #launch(roots: Roots, run: number): Promise<CompareId | undefined> {
-    const options = { subfolders: this.subfolders, content: this.content && this.contentAllowed, hidden: this.hidden };
-
     try {
-      return await this.#ipc.invoke('compare_start', { ...roots, options, onEvent: (event) => this.#apply(run, event) });
+      return await this.#ipc.invoke('compare_start', { ...roots, options: this.#options(), onEvent: (event) => this.#apply(run, event) });
     } catch (error) {
       if (run === this.#run) {
         this.status = 'idle';
@@ -288,9 +343,9 @@ export class Syncer {
     this.notice = refused === 0 ? undefined : `${refused.toLocaleString('en-US')} of the rows cannot go that way.`;
   }
 
-  /** Asks for the confirmation of the copies; nothing is asked when there are none. */
+  /** Asks for the confirmation of the copies; nothing is asked when there are none, or when the rows are of other options. */
   ask(): boolean {
-    this.confirming = this.#totals.toRight.items + this.#totals.toLeft.items > 0;
+    this.confirming = !this.stale && this.#totals.toRight.items + this.#totals.toLeft.items > 0;
     return this.confirming;
   }
 
@@ -350,6 +405,7 @@ export class Syncer {
   #clear() {
     this.#rows = [];
     this.#counts = noCounts();
+    this.#scanned = undefined;
     this.#revision += 1;
     this.status = 'idle';
     this.stopping = false;

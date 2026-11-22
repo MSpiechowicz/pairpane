@@ -204,6 +204,30 @@ fn a_link_is_a_row_of_its_own_and_never_followed() {
 
 #[cfg(unix)]
 #[test]
+fn two_links_of_one_name_are_the_same_only_when_they_lead_to_the_same_place() {
+    use std::os::unix::fs::symlink;
+
+    let (left, right) = (temp(), temp());
+    for (side, same, other, dangling) in [(left.path(), "a", "one", "gone"), (right.path(), "a", "two", "gone")] {
+        symlink(same, side.join("same")).expect("link");
+        symlink(other, side.join("other")).expect("link");
+        symlink(dangling, side.join("dangling")).expect("link");
+    }
+
+    let found = compare(left.path(), right.path(), plain());
+
+    assert_eq!(
+        found.statuses(),
+        [
+            ("dangling".to_owned(), Equal),
+            ("other".to_owned(), Differs),
+            ("same".to_owned(), Equal)
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn a_link_to_a_folder_against_a_real_folder_differs_and_is_not_entered() {
     let (left, right, elsewhere) = (temp(), temp(), temp());
     link_to_real(elsewhere.path(), left.path(), "same-name");
@@ -326,7 +350,8 @@ fn rows_are_sent_in_batches_with_progress_and_one_done_last() {
     assert_eq!(found.done(), (600, 0, false, false));
 }
 
-#[cfg(unix)]
+// Linux only: APFS refuses a name that is not UTF-8, so the case cannot be made on macOS.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_name_that_is_not_text_is_skipped_and_counted() {
     use std::ffi::OsStr;

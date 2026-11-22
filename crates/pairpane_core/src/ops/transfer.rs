@@ -17,6 +17,7 @@ use super::plan::Child;
 use super::progress::Progress;
 use super::rename;
 use super::report;
+use super::sync_terms::Terms;
 
 /// Folders nested deeper than this are not walked (the walk recurses, so this bounds its stack).
 pub(crate) const MAX_DEPTH: usize = 1_024;
@@ -114,6 +115,8 @@ pub(super) struct Run<'a> {
     pub(super) progress: Progress,
     /// The answer kept for every conflict that is left ("apply to all").
     pub(super) policy: Option<Answer>,
+    /// What the item of a synchronization that is being written may do at its target (see `sync_terms`).
+    pub(super) terms: Option<Terms>,
     pub(super) skipped: u32,
     errors: Vec<ItemError>,
     more_errors: u32,
@@ -136,6 +139,7 @@ pub(super) fn execute(inner: &Inner, job: &Job) -> Finish {
         job,
         progress: Progress::new(),
         policy: None,
+        terms: None,
         skipped: 0,
         errors: Vec::new(),
         more_errors: 0,

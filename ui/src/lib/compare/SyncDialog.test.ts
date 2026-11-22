@@ -156,6 +156,24 @@ describe('SyncDialog', () => {
     expect(names()).toEqual([expect.stringContaining('a.txt'), expect.stringContaining('c.txt')]);
   });
 
+  it('after an option changes, says the rows are old and does not synchronize until Start', async () => {
+    const s = open();
+    await scanned(s, row('a.txt', 'leftNewer'));
+    expect(button('Synchronize')).toBeEnabled();
+    expect(screen.queryByText('The options changed: press Start to compare again.')).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Hidden files' }));
+
+    expect(screen.getByText('The options changed: press Start to compare again.')).toHaveAttribute('role', 'status');
+    expect(button('Synchronize')).toBeDisabled();
+    expect(table().queryAllByRole('row')).toHaveLength(2);
+
+    await fireEvent.click(button('Start'));
+
+    expect(screen.queryByText('The options changed: press Start to compare again.')).not.toBeInTheDocument();
+    expect(s.scans[1].args.options.hidden).toBe(true);
+  });
+
   it('says how the scan went, and what it could not do', async () => {
     const s = open();
     await fireEvent.click(button('Start'));
@@ -214,6 +232,27 @@ describe('SyncDialog confirmation', () => {
     expect(within(confirm()).getByText(/Nothing is deleted\./)).toBeInTheDocument();
     expect(within(confirm()).getByRole('button', { name: 'Cancel' })).toHaveFocus();
     expect(s.calls('ops_sync')).toEqual([]);
+  });
+
+  it('says how many rows with an action the filters hide, and sends only the rows shown', async () => {
+    const s = await ready();
+    await fireEvent.click(within(confirm()).getByRole('button', { name: 'Cancel' }));
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Names' }), { target: { value: 'new.*; back.*' } });
+
+    await fireEvent.click(button('Synchronize'));
+
+    const asked = screen.getByRole('dialog', { name: 'Synchronize 2 items?' });
+    expect(within(asked).getByText('1 row with an action is hidden by the filters and will not be synchronized.')).toBeInTheDocument();
+    await fireEvent.click(within(asked).getByRole('button', { name: 'Synchronize' }));
+
+    await waitFor(() => expect(s.calls('ops_sync')).toHaveLength(1));
+    expect(s.calls('ops_sync')[0]).toMatchObject({ items: [{ path: 'new.txt' }, { path: 'back.txt' }] });
+  });
+
+  it('says nothing of hidden rows when the filters hide none', async () => {
+    await ready();
+
+    expect(within(confirm()).queryByText(/hidden by the filters/)).not.toBeInTheDocument();
   });
 
   it('Cancel goes back to the table', async () => {

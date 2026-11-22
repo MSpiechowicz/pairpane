@@ -8,20 +8,25 @@
 //! folder that is copied whole is copied as a link, as a copy does), and a special file is skipped.
 //!
 //! Every folder on the way to an item is entered one name at a time with no link followed, in the source and in the target,
-//! and the folders missing in the target are made. A file replaces what is at its target (the way every copy does: a
-//! temporary file, then a rename, with the time kept), because the page asked for it with the confirmation it showed.
-//! Items from an archive are in `sync_archive`.
+//! and the folders missing in the target are made. A file is written to a temporary file and renamed into place, with its
+//! time kept; what it may replace is decided for the item, not for the job (see `sync_terms`): a file the scan saw at the
+//! target is replaced only while it is still that very file, and where the scan saw nothing nothing is replaced.
+//!
+//! On Unix a file's target folders are entered, and its temporary file made and renamed, through the handle of each folder
+//! (see `sync_write`), so a folder swapped for a link meanwhile leads nowhere. On Windows, and for a folder that is copied
+//! whole, the steps go by path, the race the other copies document. Items from an archive are in `sync_archive`.
 
 use std::fs::{self, Metadata};
 use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::listing::{modified_millis, platform};
-use crate::model::{Answer, EntryKind, JobPhase, SyncDirection, SyncFacts};
+use crate::model::{EntryKind, JobPhase, SyncDirection, SyncFacts};
 
 use super::extract::ArchiveJob;
-use super::plan::{Child, is_inside, real};
+use super::plan::{Child, Kind, is_inside, real};
 use super::report::refusal;
+use super::sync_terms::{Terms, seen_at};
 use super::transfer::{Run, Stop};
 use super::{SyncPlan, SyncRoot};
 
@@ -71,9 +76,6 @@ impl Run<'_> {
         if let (Side::Disk(one), Side::Disk(other)) = (&left, &right) {
             refuse_nested(one, other)?;
         }
-
-        // The page confirmed the overwrites: a file that is at its target (and still the file the scan saw) is replaced.
-        self.policy = Some(Answer::Overwrite);
 
         let items: Vec<(&str, &SyncPlan, &Side<'_>, &Path)> = request
             .names
@@ -163,12 +165,30 @@ impl Run<'_> {
             return self.changed();
         }
 
-        let Some((existing, missing)) = target_place(target_root, rel, plan.target.as_ref())? else {
+        let done = match child.kind {
+            // A folder is copied whole to where there is none: one at the target, then or by now, is left alone.
+            Kind::Dir if plan.target.is_some() => self.changed(),
+            Kind::Dir => self.sync_by_path(&child, target_root, rel, plan),
+            #[cfg(unix)]
+            _ => self.sync_file(&child, target_root, rel, plan),
+            #[cfg(not(unix))]
+            _ => self.sync_by_path(&child, target_root, rel, plan),
+        };
+        self.set_terms(None);
+
+        done
+    }
+
+    /// The steps of [`Run::sync_item`] that go by path: the target is looked at, the folders missing are made, and `child` is
+    /// copied on the terms the look gave.
+    fn sync_by_path(&mut self, child: &Child, target_root: &Path, rel: &str, plan: &SyncPlan) -> Result<(), Stop> {
+        let Some(spot) = target_place(target_root, rel, plan.target.as_ref())? else {
             return self.changed();
         };
 
-        self.create_folders(&existing, &missing)?;
-        self.copy_node(&existing.join(&missing), &child, rel, 0)?;
+        self.set_terms(Some(spot.terms));
+        self.create_folders(&spot.existing, &spot.missing)?;
+        self.copy_node(&spot.existing.join(&spot.missing), child, rel, 0)?;
 
         Ok(())
     }
@@ -265,14 +285,17 @@ fn lookup_below(root: &Path, rel: &str) -> io::Result<Option<Child>> {
     }
 }
 
-/// Where the item `rel` lands below `root`: the deepest folder on the way that exists and the names below it that do not,
-/// when the target is what `wanted` says (`None`: not there). `Ok(None)` when it is not. A link or a file where a folder
-/// should be is an error: nothing is made through it.
-pub(super) fn target_place(
-    root: &Path,
-    rel: &str,
-    wanted: Option<&SyncFacts>,
-) -> io::Result<Option<(PathBuf, PathBuf)>> {
+/// Where an item lands: the deepest folder on the way that exists, the names below it that do not, and the terms the item is
+/// written on.
+pub(super) struct Spot {
+    pub(super) existing: PathBuf,
+    pub(super) missing: PathBuf,
+    pub(super) terms: Terms,
+}
+
+/// Where the item `rel` lands below `root`, when the target is what `wanted` says (`None`: not there). `Ok(None)` when it is
+/// not. A link or a file where a folder should be is an error: nothing is made through it.
+pub(super) fn target_place(root: &Path, rel: &str, wanted: Option<&SyncFacts>) -> io::Result<Option<Spot>> {
     let (parents, name) = split_item(rel);
     let mut existing = root.to_owned();
     let mut missing = PathBuf::new();
@@ -298,14 +321,14 @@ pub(super) fn target_place(
     }
 
     let seen = if missing.as_os_str().is_empty() {
-        match fs::symlink_metadata(existing.join(name)) {
-            Ok(meta) => Some(facts(&meta)),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error),
-        }
+        seen_at(&existing.join(name))?
     } else {
         None
     };
 
-    Ok(same_facts(seen.as_ref(), wanted).then_some((existing, missing)))
+    Ok(Terms::judge(wanted, seen).map(|terms| Spot {
+        existing,
+        missing,
+        terms,
+    }))
 }

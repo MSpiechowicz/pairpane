@@ -36,7 +36,7 @@
   }
 </script>
 
-<div class="dialog-table" role="table" aria-label="Differences" aria-busy={syncer.running}>
+<div class="dialog-table" class:stale={syncer.stale} role="table" aria-label="Differences" aria-busy={syncer.running}>
   <div class="head" role="row">
     <span role="columnheader">
       <input type="checkbox" aria-label="Pick every row shown" checked={allPicked} onchange={(event) => syncer.pickAll(event.currentTarget.checked)} />
@@ -91,6 +91,10 @@
 
   .body {
     height: 230px;
+  }
+
+  .stale .body {
+    opacity: 0.5;
   }
 
   .row.picked {

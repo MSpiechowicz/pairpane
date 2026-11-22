@@ -7,9 +7,10 @@ use std::path::Path;
 use pretty_assertions::assert_eq;
 
 use crate::archive::testing::MOMENT;
-use crate::model::{EntryKind, SyncDirection, SyncFacts};
+use crate::model::{EntryKind, OpsEvent, SyncDirection, SyncFacts};
 
 use super::extract_tests::{add, fixture, scene, tar_by};
+use super::hooks::Hooks;
 use super::sync::facts;
 use super::sync_tests::{file, is_done, moment};
 use super::testing::{Ended, Rig, modified, read, task, tree};
@@ -213,4 +214,62 @@ fn a_synchronization_the_other_way_takes_the_archive_from_the_right() {
 
     is_done(&ended, 0);
     assert_eq!(read(&root.path().join("dst/a.txt")), b"alpha");
+}
+
+/// A rig whose sink, once the file `current` is being written, puts a file with the contents `mine` at `mine`.
+fn rig_putting_when(current: &'static str, mine: std::path::PathBuf) -> Rig {
+    let appeared = std::sync::atomic::AtomicBool::new(false);
+    let hooks = Hooks {
+        every_chunk: true,
+        ..Hooks::default()
+    };
+
+    Rig::with(hooks, move |_, event| {
+        if let OpsEvent::Progress {
+            current: Some(writing), ..
+        } = event
+            && writing == current
+            && !appeared.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            file(&mine, b"mine", 200);
+        }
+    })
+}
+
+#[test]
+fn a_folder_that_appears_during_the_extraction_is_left_alone_and_counted_once() {
+    let root = scene("x.tar", &fixture());
+    fs::create_dir_all(root.path().join("dst")).expect("dst");
+    let request = job(
+        root.path(),
+        &["a.txt", "docs"],
+        vec![
+            plan(entry(EntryKind::File, 5), None),
+            plan(entry(EntryKind::Dir, 0), None),
+        ],
+    );
+
+    // While `a.txt` is written the user makes `docs` and puts a file in it that an entry of the archive has the name of.
+    let mut rig = rig_putting_when("a.txt", root.path().join("dst/docs/b.txt"));
+    let ended = rig.run(request);
+
+    is_done(&ended, 1);
+    assert_eq!(tree(&root.path().join("dst")), ["a.txt", "docs/", "docs/b.txt"]);
+    assert_eq!(read(&root.path().join("dst/docs/b.txt")), b"mine");
+    assert_eq!(read(&root.path().join("dst/a.txt")), b"alpha");
+}
+
+#[test]
+fn a_file_that_appears_inside_an_extracted_folder_is_kept() {
+    let root = scene("x.tar", &fixture());
+    fs::create_dir_all(root.path().join("dst")).expect("dst");
+    let request = job(root.path(), &["docs"], vec![plan(entry(EntryKind::Dir, 0), None)]);
+
+    // While `docs/b.txt` is written the user puts a file at the name of `docs/deep/c.txt`.
+    let mut rig = rig_putting_when("docs/b.txt", root.path().join("dst/docs/deep/c.txt"));
+    let ended = rig.run(request);
+
+    is_done(&ended, 1);
+    assert_eq!(read(&root.path().join("dst/docs/deep/c.txt")), b"mine");
+    assert_eq!(read(&root.path().join("dst/docs/b.txt")), b"beta");
 }

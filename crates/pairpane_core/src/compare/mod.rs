@@ -18,7 +18,10 @@
 //!   two files of one size on disk are read and compared by their bytes: equal bytes make them the same, whatever their
 //!   times say, and different bytes make the later one newer, or, at equal times, make them differ. Folders are compared
 //!   by presence only.
-//! - A link is never followed: it is a row of kind `other` with `link` set. A name that is not text, one the system reads
+//! - A link is never followed: it is a row of kind `other` with `link` set. Two links of one name are the same when they lead
+//!   to the same place (the text each holds, the target the index states for one in an archive), otherwise they differ,
+//!   as when a target cannot be read. Two special files (a pipe, a device) of one kind are the same: nothing about one is
+//!   compared. A name that is not text, one the system reads
 //!   as something else, an entry that cannot be read and a folder nested more than 1024 levels are counted as
 //!   skipped.
 //! - A folder only one side has is one row with the number of files in it and their bytes (hidden ones too: a copy of the
@@ -175,7 +178,8 @@ fn skipped_by_archives(scan: &mut Scan<'_>, sides: [&Side; 2]) -> bool {
     cut
 }
 
-/// How a pair of entries that both sides have stands. `content_equal` is what reading both files said (`None`: not read).
+/// How a pair of entries that both sides have stands. `content_equal` is what reading said (`None`: not read or not told):
+/// for two files, whether their bytes are the same; for two links, whether they lead to the same place.
 #[must_use]
 pub fn status(left: &CompareFacts, right: &CompareFacts, content_equal: Option<bool>) -> CompareStatus {
     let both_files = left.kind == EntryKind::File && right.kind == EntryKind::File && !left.link && !right.link;
@@ -184,7 +188,17 @@ pub fn status(left: &CompareFacts, right: &CompareFacts, content_equal: Option<b
         return file_status(left, right, content_equal);
     }
 
-    // Folders by presence, links and special files by what they are: a file and a folder, or a link and a file, differ.
+    // Two links are the same when they lead to the same place, which the caller read: no answer is no proof.
+    if left.link && right.link {
+        return if content_equal == Some(true) {
+            CompareStatus::Equal
+        } else {
+            CompareStatus::Differs
+        };
+    }
+
+    // Folders by presence, special files by their kind (a pipe is a pipe: nothing about one can be compared): a file and a
+    // folder, or a link and a file, differ.
     if left.kind == right.kind && left.link == right.link {
         CompareStatus::Equal
     } else {
