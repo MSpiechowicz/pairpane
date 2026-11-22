@@ -6,7 +6,7 @@ import { focusActiveList } from '$lib/panes/focus';
 import { displayName, formatSize } from '$lib/panes/format';
 import type { Target, Under } from '$lib/viewer/viewer.svelte';
 
-import { type Question, SaveFlow } from './saveFlow.svelte';
+import { type Discard, type Question, SaveFlow } from './saveFlow.svelte';
 import { EditSession } from './session.svelte';
 import { Unsaved } from './unsaved';
 
@@ -17,6 +17,8 @@ export interface EditorHooks {
   say: (text: string, error: boolean) => void;
   /** Shows a file in the viewer (when it is too large to edit). */
   view: (target: Target, notice: string) => void;
+  /** Whether another overlay (the diff) is being opened or is open: only one at a time. */
+  blocked?: () => boolean;
 }
 
 /**
@@ -56,6 +58,11 @@ export class Editor {
     return this.session?.dirty === true;
   }
 
+  /** An editor is being opened or is open (what keeps the diff from opening beside it). */
+  get busy(): boolean {
+    return this.#opening || this.session !== undefined;
+  }
+
   /** F4 on the active cursor: a folder, `..` and an empty pane have nothing to edit. */
   edit(builtin = false) {
     const target = this.#hooks.under();
@@ -66,7 +73,7 @@ export class Editor {
 
   /** Opens `target`: in the external editor unless `builtin` (or none is set up), else in the overlay. */
   async open(target: Target, { builtin }: { builtin: boolean }) {
-    if (this.#opening || this.session !== undefined) {
+    if (this.busy || this.#hooks.blocked?.() === true) {
       return;
     }
 
@@ -153,9 +160,14 @@ export class Editor {
    * changed, else when the user chose Save (and it saved) or Don't save. A question replaced by another is not a yes.
    */
   async confirmDiscard(): Promise<boolean> {
+    return (await this.discard()) === 'go';
+  }
+
+  /** The question about the buffer's changes (none to ask about is a `go`); see {@link SaveFlow.discard}. */
+  async discard(): Promise<Discard> {
     const session = this.session;
 
-    return session === undefined || (await this.#flow.discard([session])) === 'go';
+    return session === undefined ? 'go' : this.#flow.discard([session]);
   }
 
   /** Closes the overlay; the list that had the focus takes it back. */
@@ -170,8 +182,11 @@ export class Editor {
     void tick().then(focusActiveList);
   }
 
-  /** The window was asked to close while a buffer has changes: it closes once the user has dealt with them. */
-  async onCloseRequested() {
-    await this.#flow.closeRequested(this.session === undefined ? [] : [this.session]);
+  /**
+   * The window was asked to close while a buffer has changes: it closes once the user has dealt with them (and with
+   * whatever `next` asks about after them).
+   */
+  async onCloseRequested(next?: () => Promise<Discard>) {
+    await this.#flow.closeRequested(this.session === undefined ? [] : [this.session], next);
   }
 }

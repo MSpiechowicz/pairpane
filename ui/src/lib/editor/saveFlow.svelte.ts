@@ -212,11 +212,16 @@ export class SaveFlow {
   /**
    * The window was asked to close while something has changes: it closes once the user has dealt with them. The
    * backend is told it is being asked (the question may take as long as the user wants), then the answer is acted on.
+   * `next` asks about what another owner of changes holds, once these are dealt with (a Cancel stops there).
    */
-  async closeRequested(sessions: readonly EditSession[]) {
+  async closeRequested(sessions: readonly EditSession[], next?: () => Promise<Discard>) {
     this.#ipc.invoke('editor_close_ack', undefined).catch(() => {});
 
-    const discard = await this.discard(sessions);
+    let discard = await this.discard(sessions);
+    if (discard === 'go' && next !== undefined) {
+      discard = await next();
+    }
+
     if (discard === 'replaced') {
       // A later close request has its own question; only that one's answer acts.
       return;

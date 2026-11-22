@@ -9,7 +9,7 @@ vi.mock('$lib/editor/cmMerge', () => import('../tests/diff'));
 import type { MenuCommand } from '$lib/ipc/bindings/MenuCommand';
 
 import { type Answers, appShown, key, listbox } from '../tests/app';
-import { diffAnswers, merges } from '../tests/diff';
+import { diffAnswers, merges, next } from '../tests/diff';
 import { FakeFile, viewAnswers } from '../tests/view';
 
 const shown = (answers: Answers = {}, documents = {}) => appShown(invoke, diffAnswers(documents, answers));
@@ -30,6 +30,7 @@ beforeEach(() => {
   window.localStorage.clear();
   vi.restoreAllMocks();
   merges.length = 0;
+  next.slow = false;
 });
 
 describe('Shift+F2', () => {
@@ -134,6 +135,26 @@ describe('the text diff', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Previous difference' }));
 
     expect(merges.at(-1)?.calls).toEqual(['expand', 'focus left', 'next', 'previous', 'next', 'previous']);
+  });
+
+  it('F7 does not move between the changes while a question is on the screen', async () => {
+    await open();
+    await fireEvent.input(left(), { target: { value: 'changed\n' } });
+    await key(document.body, 'Escape');
+    await screen.findByRole('dialog', { name: 'Save changes to a.pdf?' });
+
+    await key(window, 'F7');
+    await key(window, 'F7', { shiftKey: true });
+
+    expect(merges.at(-1)?.calls).toEqual(['expand', 'focus left']);
+  });
+
+  it('a comparison that is slow to diff starts with the unchanged lines folded', async () => {
+    next.slow = true;
+    await open();
+
+    expect(screen.getByRole('button', { name: 'Collapse unchanged' })).toHaveAttribute('aria-pressed', 'true');
+    expect(merges.at(-1)?.calls).toEqual(['collapse', 'focus left']);
   });
 
   it('the Collapse unchanged toggle folds and unfolds', async () => {

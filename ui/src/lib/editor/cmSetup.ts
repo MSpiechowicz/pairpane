@@ -3,7 +3,7 @@ import { type LanguageSupport, LanguageDescription } from '@codemirror/language'
 import { languages } from '@codemirror/language-data';
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search';
 import { Compartment, EditorState, type Extension } from '@codemirror/state';
-import { drawSelection, EditorView, highlightActiveLine, keymap, lineNumbers } from '@codemirror/view';
+import { drawSelection, EditorView, highlightActiveLine, highlightSpecialChars, keymap, lineNumbers } from '@codemirror/view';
 
 import { theme } from './cmTheme';
 import type { EditorSurface } from './surface';
@@ -30,6 +30,11 @@ export interface Side {
   bind(view: EditorView, ends: Ends): EditorSurface;
 }
 
+/** Characters that draw as nothing or reorder the text around them (bidi controls, zero-width marks): shown as a mark, so a difference made of them is seen. */
+// Bidi controls and invisible characters are shown as marks so a difference made of one is visible. The zero-width
+// joiners U+200C and U+200D are left alone: emoji sequences and several scripts need them.
+const INVISIBLE = /[\u061C\u200B\u200E\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/;
+
 /** The editing setup shared by the single editor and each side of the diff: keys, search, history, language, read-only. */
 export function sideSetup(options: SideOptions): Side {
   const language = new Compartment();
@@ -43,6 +48,7 @@ export function sideSetup(options: SideOptions): Side {
 
   const base: Extension[] = [
     lineNumbers(),
+    highlightSpecialChars({ addSpecialChars: INVISIBLE }),
     past.of(history()),
     drawSelection(),
     highlightActiveLine(),

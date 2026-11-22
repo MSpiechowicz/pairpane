@@ -7,8 +7,16 @@ import type { MergeOptions, MergeSide, MergeSurface } from './surface';
 /** Long stretches of the same lines fold away, three lines of them stay around each change. */
 const COLLAPSE = { margin: 3, minSize: 4 };
 
-/** Two long files that differ everywhere give up the fine diff (and show whole lines changed) rather than freeze the window. */
-const DIFF = { scanLimit: 10_000, timeout: 500 };
+/**
+ * Two long files that differ everywhere give up the fine diff (and show whole lines changed) rather than freeze the
+ * window. The merge view halves the scan limit; above about 4000 a repetitive text (one letter, a data file of
+ * equal records) takes minutes, as the fallback for a large changed region never looks at the timeout. At 1000 the
+ * worst such pairs of 100 KiB to 2 MiB build in tens of milliseconds.
+ */
+const DIFF = { scanLimit: 1000, timeout: 500 };
+
+/** A comparison of texts this long (a side), or one that took this long to build, starts with the unchanged lines folded: every edit diffs again at about that cost. */
+const SLOW = { chars: 2 * 1024 * 1024, buildMs: 300 };
 
 /** The marks of a change, in the app's colours (the merge view's own are fixed light and dark ones). */
 const marks = EditorView.theme({
@@ -44,6 +52,7 @@ export function createMergeSurface(options: MergeOptions): MergeSurface {
       }
     });
 
+  const started = performance.now();
   const view = new MergeView({
     parent: options.parent,
     a: { doc: options.left.text, extensions: [...setups.left.extensions(), marks, watch('left')] },
@@ -52,6 +61,7 @@ export function createMergeSurface(options: MergeOptions): MergeSurface {
     gutter: true,
     diffConfig: DIFF,
   });
+  const slow = Math.max(options.left.text.length, options.right.text.length) > SLOW.chars || performance.now() - started > SLOW.buildMs;
   merge = view;
   options.onChunks(view.chunks.length);
 
@@ -72,6 +82,7 @@ export function createMergeSurface(options: MergeOptions): MergeSurface {
   return {
     left,
     right,
+    slow,
     next: () => void goToNextChunk(editors[focused()]),
     previous: () => void goToPreviousChunk(editors[focused()]),
     setCollapsed: (collapsed) => view.reconfigure({ collapseUnchanged: collapsed ? COLLAPSE : undefined }),

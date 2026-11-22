@@ -1,48 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { Unsaved } from '$lib/editor/unsaved';
 import type { EditOpened } from '$lib/ipc/bindings/EditOpened';
-import type { EditSaveOptions } from '$lib/ipc/bindings/EditSaveOptions';
 import type { EditSaved } from '$lib/ipc/bindings/EditSaved';
-import type { ViewKind } from '$lib/ipc/bindings/ViewKind';
 
+import { answer, world } from '../../../tests/diff';
 import { editDocument } from '../../../tests/editor';
-import { fakeBackend } from '../../../tests/panes';
-import { FileDiff } from './fileDiff.svelte';
-import type { Picked } from './pick';
-
-const PICKED: Picked = { left: { path: '/one', name: 'a.txt' }, right: { path: '/two', name: 'b.txt' } };
-
-type Answers = Parameters<typeof fakeBackend>[0];
-
-/** A diff on a fake backend: `a.txt` and `b.txt` open as text unless `opened` says what a name opens as. */
-function world(opened: Record<string, EditOpened> = {}, answers: Answers = {}) {
-  let session = 0;
-  const kinds: Record<string, ViewKind> = {};
-  const backend = fakeBackend({
-    edit_open: ((args: { name: string; encoding: string | null }) =>
-      opened[args.name] ?? {
-        kind: 'text',
-        document: editDocument({ name: args.name, text: `text of ${args.name}\n`, revision: `r-${args.name}`, encoding: args.encoding ?? 'UTF-8' }),
-      }) as never,
-    edit_save: (() => ({ kind: 'saved', size: 1, revision: 'next' }) satisfies EditSaved) as never,
-    view_open: ((args: { name: string }) => {
-      session += 1;
-      return { session, name: args.name, size: 10, modified: null, kind: kinds[args.name] ?? { kind: 'binary' }, encoding: '' };
-    }) as never,
-    ...answers,
-  });
-  const say = vi.fn();
-  const pick = vi.fn((): Picked | string => PICKED);
-  const diff = new FileDiff(backend.ipc, new Unsaved(backend.ipc), { pick, say });
-  const sent = (name: string) => backend.invoke.mock.calls.filter(([command]) => command === name).map(([, args]) => args as never as Record<string, unknown>);
-  const saves = () => sent('edit_save').map((args) => ({ name: args.name, text: args.text, options: args.options as EditSaveOptions }));
-
-  return { backend, diff, say, pick, sent, saves };
-}
-
-/** The question on the screen, answered. */
-const answer = (diff: FileDiff, choice: 'confirm' | 'alternate' | 'cancel') => diff.question?.answer(choice);
 
 describe('opening a comparison', () => {
   it('shows two text files as a text diff, each in a session of its own', async () => {
@@ -224,6 +186,71 @@ describe('saving', () => {
 
     expect(diff.modal).toBe(false);
     expect(say).toHaveBeenCalledWith('a.txt is no longer a text file.', true);
+  });
+});
+
+describe('a side that is read again and is no longer text, while the other side has changes', () => {
+  /** The left file turns binary when read again (its save is refused as changed, and the user answers Reload); the right file has changes. */
+  async function leftTurnsBinary() {
+    let opens = 0;
+    const turned = world(
+      {},
+      {
+        edit_open: ((args: { name: string }) => {
+          opens += 1;
+          return opens > 2 && args.name === 'a.txt'
+            ? { kind: 'binary' }
+            : { kind: 'text', document: editDocument({ name: args.name, revision: 'r' }) };
+        }) as never,
+        edit_save: ((args: { name: string }) =>
+          args.name === 'a.txt' ? { kind: 'changed', gone: false } : { kind: 'saved', size: 1, revision: 'next' }) as never,
+      },
+    );
+    turned.diff.open();
+    await vi.waitFor(() => expect(turned.diff.mode).toBe('text'));
+    turned.diff.pair?.right.setLineEnding('crlf');
+
+    const saving = turned.diff.save('left');
+    await vi.waitFor(() => expect(turned.diff.question?.title).toBe('The file changed on disk'));
+    answer(turned.diff, 'alternate');
+    await vi.waitFor(() => expect(turned.diff.question?.title).toBe('Save changes to b.txt?'));
+
+    return { ...turned, saving };
+  }
+
+  it("asks about the other side's changes first, and Don't save closes without writing them", async () => {
+    const { diff, say, saves, saving } = await leftTurnsBinary();
+    expect(diff.modal).toBe(true);
+
+    answer(diff, 'alternate');
+    await saving;
+
+    expect(diff.modal).toBe(false);
+    expect(saves().map(({ name }) => name)).toEqual(['a.txt']);
+    expect(say).toHaveBeenCalledWith('a.txt is no longer a text file.', true);
+  });
+
+  it('writes the other side on Save, then closes', async () => {
+    const { diff, saves, saving } = await leftTurnsBinary();
+
+    answer(diff, 'confirm');
+    await saving;
+
+    await vi.waitFor(() => expect(diff.modal).toBe(false));
+    expect(saves().map(({ name }) => name)).toEqual(['a.txt', 'b.txt']);
+  });
+
+  it('stays open on Cancel with the other side kept, and the file that is no longer text locked', async () => {
+    const { diff, say, saving } = await leftTurnsBinary();
+
+    answer(diff, 'cancel');
+    await saving;
+
+    expect(diff.modal).toBe(true);
+    expect(say).not.toHaveBeenCalled();
+    expect(diff.pair?.right.dirty).toBe(true);
+    expect(diff.pair?.left).toMatchObject({ unavailable: true, readOnly: true, failure: 'This file can no longer be compared as text.' });
+    expect(await diff.save('left')).toBe(false);
   });
 });
 

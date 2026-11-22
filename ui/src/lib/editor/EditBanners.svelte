@@ -6,7 +6,7 @@
   let { session }: { session: EditSession } = $props();
 </script>
 
-{#if session.readOnly}
+{#if session.readOnly && !session.unavailable}
   <p class="banner" role="status">This file is read-only: it cannot be changed or saved here.</p>
 {/if}
 {#if session.mixedEndings}

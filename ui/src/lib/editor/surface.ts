@@ -56,6 +56,11 @@ export interface MergeOptions {
 export interface MergeSurface {
   left: EditorSurface;
   right: EditorSurface;
+  /**
+   * The texts are so long, or so costly to compare, that every edit takes a noticeable time to diff again. The merge
+   * view diffs synchronously on each edit and cannot defer it, so the caller can only lighten what is drawn.
+   */
+  slow: boolean;
   /** Moves to the next (previous) changed block, round the end, and scrolls to it. */
   next(): void;
   previous(): void;

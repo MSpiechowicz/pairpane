@@ -114,6 +114,7 @@
       under: () => viewer.under,
       say: (text, error) => files.say(text, error),
       view: (target, notice) => viewer.openAt(target, notice),
+      blocked: (): boolean => diff.busy,
     },
     unsaved,
   );
@@ -121,6 +122,7 @@
     pick: () =>
       pickFiles({ active: panes[active].view, other: panes[active === 'left' ? 'right' : 'left'].view, side: active, quick: viewer.quick }),
     say: (text, error) => files.say(text, error),
+    blocked: (): boolean => editor.busy,
   });
   const question = $derived(transfers.question);
   /** A dialog (or the viewer's or editor's overlay) has the keyboard: the shortcuts and Tab are its own then. */
@@ -317,7 +319,8 @@
           if (command === 'checkForUpdates') {
             void updates.check(true);
           } else if (command === 'closeRequested') {
-            void (diff.dirty ? diff : editor).onCloseRequested();
+            // Each overlay with changes is asked about, one after the other.
+            void editor.onCloseRequested(() => diff.discard());
           }
         },
       });

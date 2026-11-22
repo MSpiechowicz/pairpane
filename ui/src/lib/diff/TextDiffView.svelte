@@ -45,6 +45,8 @@
         });
         pair.left.attach(surface.left);
         pair.right.attach(surface.right);
+        // A comparison that is slow to diff starts folded: less is drawn at each edit.
+        collapsed = collapsed || surface.slow;
         surface.setCollapsed(collapsed);
         merge = surface;
         surface.focus('left');
@@ -80,6 +82,10 @@
       }
     } else if (event.key === 'F7' && !event.ctrlKey) {
       event.preventDefault();
+      if (diff.question !== undefined) {
+        return;
+      }
+
       if (event.shiftKey) {
         merge?.previous();
       } else {

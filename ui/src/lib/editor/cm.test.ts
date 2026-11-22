@@ -82,4 +82,10 @@ describe('the CodeMirror surface', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(parent.querySelectorAll('.cm-line span')).toHaveLength(0);
   });
+
+  it('draws a zero-width or text-reversing character as a mark, so that it is seen', () => {
+    make('pay\u202Aalice\u2060\nplain');
+
+    expect(parent.querySelectorAll('.cm-specialChar')).toHaveLength(2);
+  });
 });

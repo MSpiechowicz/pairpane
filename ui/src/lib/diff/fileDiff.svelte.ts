@@ -1,6 +1,6 @@
 import { tick } from 'svelte';
 
-import { type Question, SaveFlow } from '$lib/editor/saveFlow.svelte';
+import { type Discard, type Question, SaveFlow } from '$lib/editor/saveFlow.svelte';
 import { ENDING_LABELS, EditSession } from '$lib/editor/session.svelte';
 import type { Unsaved } from '$lib/editor/unsaved';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
@@ -18,6 +18,8 @@ export interface DiffHooks {
   pick: () => Picked | string;
   /** Tells the user something in a card. */
   say: (text: string, error: boolean) => void;
+  /** Whether another overlay (the editor) is being opened or is open: only one at a time. */
+  blocked?: () => boolean;
 }
 
 /** The two files of a text diff, each in an {@link EditSession} of its own. */
@@ -72,6 +74,11 @@ export class FileDiff {
     return this.pair?.left.dirty === true || this.pair?.right.dirty === true;
   }
 
+  /** A comparison is being opened or is open (what keeps the editor from opening beside it). */
+  get busy(): boolean {
+    return this.#opening || this.mode !== undefined;
+  }
+
   /** The question on the screen: about a file that changed on disk, or about changes that would be lost. */
   get question(): Question | undefined {
     return this.#flow.question;
@@ -110,7 +117,7 @@ export class FileDiff {
 
   /** Opens `picked`: as text when both files read as text, else as bytes. */
   async openPicked(picked: Picked) {
-    if (this.#opening || this.mode !== undefined) {
+    if (this.busy || this.#hooks.blocked?.() === true) {
       return;
     }
 
@@ -155,11 +162,24 @@ export class FileDiff {
     try {
       const opened = await session.open(session.encoding);
       if (opened.kind === 'tooLarge' || opened.kind === 'binary') {
-        this.close();
-        this.#hooks.say(`${displayName(session.name)} is no longer a text file.`, true);
+        await this.#leave(session, side === 'left' ? 'right' : 'left');
       }
     } catch (error) {
       session.failure = IpcFailure.from(error).message;
+    }
+  }
+
+  /**
+   * `session` can no longer be compared as text, which ends the comparison. The other side's changes are asked
+   * about first; on Cancel the comparison stays, with `session` shown as it was but locked.
+   */
+  async #leave(session: EditSession, other: DiffSide) {
+    session.retire('This file can no longer be compared as text.');
+
+    const kept = this.pair?.[other];
+    if (kept === undefined || (await this.#flow.discard([kept])) === 'go') {
+      this.close();
+      this.#hooks.say(`${displayName(session.name)} is no longer a text file.`, true);
     }
   }
 
@@ -172,12 +192,20 @@ export class FileDiff {
 
   /** Whether whatever is about to throw the changes away (a restart) may go on; see {@link SaveFlow.discard}. */
   async confirmDiscard(): Promise<boolean> {
-    return (await this.#flow.discard(this.#sessions)) === 'go';
+    return (await this.discard()) === 'go';
   }
 
-  /** The window was asked to close while a side has changes: it closes once the user has dealt with them. */
-  async onCloseRequested() {
-    await this.#flow.closeRequested(this.#sessions);
+  /** The question about the changes of both sides (none to ask about is a `go`); see {@link SaveFlow.discard}. */
+  discard(): Promise<Discard> {
+    return this.#flow.discard(this.#sessions);
+  }
+
+  /**
+   * The window was asked to close while a side has changes: it closes once the user has dealt with them (and with
+   * whatever `next` asks about after them).
+   */
+  async onCloseRequested(next?: () => Promise<Discard>) {
+    await this.#flow.closeRequested(this.#sessions, next);
   }
 
   /** Closes the overlay; the list that had the focus takes it back. */

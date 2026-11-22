@@ -20,6 +20,10 @@ function make(left: MergeFile, right: MergeFile) {
 /** The editor of a side. */
 const editor = (side: MergeSide) => EditorView.findFromDOM(parent.querySelector<HTMLElement>(side === 'left' ? '.cm-merge-a' : '.cm-merge-b')!)!;
 
+/** A data file of identical records, a few of them changed: what a line diff of a long repetitive stretch is worst at. */
+const records = (count: number, changed: boolean) =>
+  Array.from({ length: count }, (_, index) => (changed && index % 211 === 0 ? '0,0,0,1,0,0,0,0' : '0,0,0,0,0,0,0,0')).join('\n');
+
 const lines = (count: number, change: Record<number, string> = {}) =>
   Array.from({ length: count }, (_, index) => change[index] ?? `line ${index}`).join('\n');
 
@@ -135,5 +139,37 @@ describe('the merge surface', () => {
 
     await vi.waitFor(() => expect(parent.querySelectorAll('.cm-changedLine')).toHaveLength(2));
     expect(parent.querySelectorAll('.cm-changedText').length).toBeGreaterThan(0);
+  });
+
+  it('compares a long repetitive stretch at once (the fine diff is given up, not waited for)', () => {
+    const started = performance.now();
+    const { counts } = make(file(records(12_000, false)), file(records(12_000, true)));
+
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(counts[0]).toBeGreaterThan(0);
+  });
+
+  it('starts a long comparison folded, and a short one not', () => {
+    const { surface: short } = make(file(lines(60, { 30: 'x' })), file(lines(60, { 30: 'X' })));
+    expect(short.slow).toBe(false);
+    short.destroy();
+
+    const long = createMergeSurface({
+      parent,
+      left: file('x\n'.repeat(1_100_000)),
+      right: file('x\n'.repeat(1_100_000)),
+      onSave: () => {},
+      onChunks: () => {},
+    });
+    expect(long.slow).toBe(true);
+    long.destroy();
+  });
+
+  it('draws the characters that are invisible or turn the text around as marks, in each side', () => {
+    make(file('a\u202Ab\u2060c'), file('plain'));
+
+    for (const side of ['left', 'right'] as const) {
+      expect(editor(side).dom.querySelectorAll('.cm-specialChar')).toHaveLength(side === 'left' ? 2 : 0);
+    }
   });
 });
