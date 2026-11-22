@@ -25,9 +25,13 @@ pub(super) fn listed(below: &Path, name: &str) -> Option<String> {
 }
 
 /// Whether the name `name` of the folder `dir` is there, whatever it is (a link is not followed): one look, where opening
-/// it step by step costs a call for each folder on the way.
+/// it step by step costs a call for each folder on the way. An empty file holds no rule, so it is as good as not there:
+/// it takes no room and is never counted as left out.
 pub(super) fn present(dir: &Path, name: &str) -> bool {
-    !fs::symlink_metadata(dir.join(name)).is_err_and(|error| error.kind() == ErrorKind::NotFound)
+    match fs::symlink_metadata(dir.join(name)) {
+        Ok(found) => !(found.is_file() && found.len() == 0),
+        Err(error) => error.kind() != ErrorKind::NotFound,
+    }
 }
 
 /// What `file` holds up to [`MAX_BYTES`]; `None` when it holds more, or cannot be read.

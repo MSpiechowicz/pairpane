@@ -39,6 +39,8 @@ impl Ignores {
         // budget, however little each folder has; and before the files are read, so that a search with no room does not
         // read and compile rules only to give them up.
         let Some(cost) = self.reserve_layer(dir) else {
+            // What was not read is counted unseen, so a file with only comments in it counts too: the count is at most
+            // what was lost.
             if files {
                 self.count_left_out(dir, "");
             }
