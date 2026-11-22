@@ -31,7 +31,7 @@ struct Step {
 
 impl Trail {
     /// This trail with the folder `folder` below it.
-    fn below(&self, folder: &Node) -> Self {
+    pub(super) fn below(&self, folder: &Node) -> Self {
         Self(Some(Arc::new(Step {
             up: self.clone(),
             folder: folder.clone(),
@@ -123,14 +123,28 @@ impl Run<'_> {
         let top = Trail::default();
 
         for item in items {
-            self.checkpoint()?;
             let rel = item.rel();
+            let at = Spot {
+                parent,
+                node: item,
+                rel: &rel,
+                trail: &top,
+            };
 
-            let done = self.walk_node(parent, item, &rel, &top, 0, visitor);
-            self.settle_walked(&rel, done, visitor)?;
+            self.walk_spot(&at, 0, visitor)?;
         }
 
         Ok(())
+    }
+
+    /// Walks the item `at`, which is `depth` folders below the root of the walk, giving it and what is below it to `visitor`.
+    /// A failure is reported against its path and the walk goes on (unless the visitor calls it fatal).
+    pub(super) fn walk_spot(&mut self, at: &Spot<'_>, depth: usize, visitor: &mut impl Visitor) -> Result<(), Stop> {
+        self.checkpoint()?;
+
+        let done = self.walk_node(at.parent, at.node, at.rel, at.trail, depth, visitor);
+
+        self.settle_walked(at.rel, done, visitor)
     }
 
     fn walk_node(

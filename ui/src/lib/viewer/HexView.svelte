@@ -1,6 +1,8 @@
 <script lang="ts">
   import { untrack } from 'svelte';
 
+  import { displayName } from '$lib/panes/format';
+
   import { hexRow, offsetDigits, ROW_BYTES } from './hex';
   import { HexModel, ROW_HEIGHT } from './hexWindow.svelte';
   import ScrollTrack from './ScrollTrack.svelte';
@@ -50,7 +52,7 @@
     role="textbox"
     aria-readonly="true"
     aria-multiline="true"
-    aria-label="Bytes of {session.name}"
+    aria-label="Bytes of {displayName(session.name)}"
     tabindex="0"
     data-autofocus={focus ? '' : undefined}
     bind:clientHeight={height}

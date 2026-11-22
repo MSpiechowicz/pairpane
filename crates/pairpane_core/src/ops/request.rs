@@ -33,7 +33,9 @@ pub enum Task {
         entries: Vec<String>,
         source: ArchiveJob,
     },
-    /// Packs the items of `from` into the new archive `name` (a plain file name) in `to`.
+    /// Packs the items of `from` into the new archive `name` (a plain file name) in `to`. The one task whose items may be
+    /// paths below `from` (`a/b.txt`, see [`super::is_item_path`]; none inside another): each is stored under that
+    /// path, and the folders on the way are not entries of their own unless they are items.
     Pack { name: String, options: PackJob },
     /// Adds the items of `from` to the archive (the one item, a file of `to`) under its folder `inner` (`""` is its
     /// root, `a/b` a folder), by writing a new archive and replacing the old one when it is complete. `source` is
@@ -106,15 +108,15 @@ impl Task {
 }
 
 /// A job to start. Paths are what the webview sent, already checked for syntax by the caller
-/// (`check_folder` for the folders, `is_plain_name` for every name); the engine resolves them on its worker.
+/// (`check_folder` for the folders, `is_plain_name` for every name, `is_item_path` for those of a pack); the engine resolves them on its worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
     /// Copy or move for a [`Task::Transfer`]; the kind of the task otherwise (`submit` refuses a mismatch).
     pub kind: OpKind,
     /// The folder the items are in.
     pub from: PathBuf,
-    /// The items, as plain names inside `from`. At least 1 and at most [`super::MAX_NAMES`], without duplicates; exactly 1
-    /// for a verify, a split and a combine.
+    /// The items, as plain names inside `from` (for a [`Task::Pack`] also relative paths below it). At least 1 and at most
+    /// [`super::MAX_NAMES`], without duplicates; exactly 1 for a verify, a split and a combine.
     pub names: Vec<String>,
     /// The folder to put the items into; created when missing. For a task that works in place (checksum, verify,
     /// attributes) it is `from`.
@@ -145,7 +147,8 @@ impl Request {
 pub enum Refused {
     /// [`super::MAX_JOBS`] jobs exist already; trying again later may work.
     Busy,
-    /// The request has no names, more than [`super::MAX_NAMES`], a name twice, or a name that is not a plain file name.
+    /// The request has no names, more than [`super::MAX_NAMES`], a name twice, or a name that is not a plain file name (for
+    /// a pack: nor a relative path of plain names, or one inside another).
     InvalidNames,
     /// A name is longer than [`super::MAX_NAME_UNITS`], or the names together take more than [`super::MAX_NAMES_BYTES`].
     NamesTooLarge,

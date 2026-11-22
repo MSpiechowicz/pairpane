@@ -4,7 +4,7 @@ use serde_json::json;
 use super::*;
 use crate::model::{PaneId, SortColumn};
 
-fn folder(name: &str) -> String {
+pub(super) fn folder(name: &str) -> String {
     let root = if cfg!(windows) { "C:\\data" } else { "/data" };
 
     Path::new(root).join(name).to_string_lossy().into_owned()
@@ -30,7 +30,7 @@ fn pane(names: &[&str], active: u32) -> SavedPane {
     }
 }
 
-fn state() -> SavedState {
+pub(super) fn state() -> SavedState {
     SavedState {
         active: PaneId::Right,
         left: SavedPane {
@@ -46,10 +46,11 @@ fn state() -> SavedState {
         },
         right: pane(&["c"], 0),
         hotlist: vec![folder("fav"), folder("other")],
+        searches: Vec::new(),
     }
 }
 
-fn written(file: &Path, contents: &[u8]) {
+pub(super) fn written(file: &Path, contents: &[u8]) {
     fs::write(file, contents).expect("write");
 }
 
@@ -143,7 +144,7 @@ fn repeated_favourites_are_kept_once_in_their_first_place() {
 }
 
 /// The JSON of a state file saved from `state()`, to edit and write back.
-fn saved_json(file: &Path) -> serde_json::Value {
+pub(super) fn saved_json(file: &Path) -> serde_json::Value {
     save(file, state()).expect("saved");
 
     serde_json::from_slice(&fs::read(file).expect("read")).expect("json")

@@ -27,6 +27,25 @@ export function formatDate(millis: number | null): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+/**
+ * Characters that can make one name pass for another: controls, the ones that reorder text (bidirectional marks and
+ * overrides), and the invisible ones that hide or split it (zero-width space, joiners and the invisible operators,
+ * the soft hyphen, the byte order mark, the line and paragraph separators, the deprecated formatting characters and
+ * the tag characters). The zero-width joiner is escaped too, so an emoji sequence joined with it shows as its parts
+ * and the code: the price of leaving no invisible character in a name.
+ */
+const MISLEADING =
+  /[\p{Cc}\u00AD\u061C\u180E\u200B-\u200F\u2028-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\u{E0000}-\u{E007F}]/gu;
+
+/**
+ * A name (or a path) as it is shown: each control, bidirectional-formatting and invisible character is written out as `⟨U+202E⟩`,
+ * so that a name cannot read as another (`txt.exe` behind a right-to-left override). Only for display: the real name
+ * is what goes to the backend.
+ */
+export function displayName(name: string): string {
+  return name.replace(MISLEADING, (char) => `⟨U+${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}⟩`);
+}
+
 /** Name and extension as the columns show them. Folders and dot files (`.bashrc`) have no extension. */
 export function splitName(entry: Entry): { base: string; ext: string } {
   const dot = entry.name.lastIndexOf('.');

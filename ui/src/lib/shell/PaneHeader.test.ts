@@ -56,6 +56,30 @@ describe('PaneHeader', () => {
     expect(backend.last().args).toMatchObject({ path: '/home/me/Projects', child: null });
   });
 
+  it('search results end the path with a mark; the folder searched stays a button that opens it', async () => {
+    const { backend, tabs } = header('/home/me/Projects');
+
+    void tabs.view.listing.openResults(4);
+    backend.last().emit({
+      kind: 'start',
+      path: '/home/me/Projects',
+      parent: '/home/me',
+      crumbs: [
+        { name: '/', path: '/' },
+        { name: 'Projects', path: '/home/me/Projects' },
+      ],
+      total: 0,
+      results: 4,
+    });
+    await tick();
+
+    expect(path()).toHaveTextContent('Search results');
+    expect(within(path()).queryByRole('button', { name: 'Search results' })).not.toBeInTheDocument();
+
+    await fireEvent.click(within(path()).getByRole('button', { name: 'Projects' }));
+    expect(backend.last().args).toMatchObject({ path: '/home/me/Projects', child: null });
+  });
+
   it('a path outside every volume starts at the root, named System', () => {
     header('/etc', []);
 
@@ -84,6 +108,15 @@ describe('PaneHeader', () => {
 
     expect(otherTabs('Projects')).toHaveLength(1); // the first tab, now inactive
     expect(within(path()).getAllByRole('button')).toHaveLength(2); // Home, Projects: the new tab is the path
+  });
+
+  it('the other tabs write out a folder name that would pass for another, in the label and the Close button', async () => {
+    const { tabs } = header('/home/me/x\u202Efdp.exe');
+    tabs.add();
+    await tick();
+
+    expect(otherTabs('x⟨U+202E⟩fdp.exe')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Close x⟨U+202E⟩fdp.exe' })).toBeInTheDocument();
   });
 
   it('clicking another tab shows it; × and the middle button close it', async () => {

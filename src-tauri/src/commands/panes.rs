@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use pairpane_core::listing::{FolderWatch, platform};
-use pairpane_core::model::{IpcError, IpcErrorCode, ListEvent, PaneId};
+use pairpane_core::model::{FindId, IpcError, IpcErrorCode, ListEvent, PaneId};
 use tauri::State;
 use tauri::async_runtime;
 use tauri::ipc::Channel;
@@ -50,10 +50,10 @@ type Slots = Arc<Mutex<HashMap<PaneId, Slot>>>;
 
 /// What an open of a pane holds from the moment it is the latest: its place of the listing cap, its generation, the flag
 /// the next open raises and whether the pane's watch was kept.
-struct Claim {
-    permit: Permit,
-    generation: u64,
-    cancel: Arc<AtomicBool>,
+pub(super) struct Claim {
+    pub(super) permit: Permit,
+    pub(super) generation: u64,
+    pub(super) cancel: Arc<AtomicBool>,
     watched: bool,
 }
 
@@ -93,6 +93,25 @@ impl Panes {
             cancel,
             watched,
         })
+    }
+
+    /// [`Self::claim`] for the listing of the results of the search `id`. Its slot is keyed by a path that is not
+    /// absolute, so never a folder: no folder's watch is kept and the pane's size jobs stop, as for an archive.
+    pub(super) fn claim_results(
+        &self,
+        pane: PaneId,
+        id: FindId,
+        on_event: &Channel<ListEvent>,
+    ) -> CommandResult<Claim> {
+        self.claim(pane, &results_key(id), on_event)
+    }
+
+    /// What to call once the listing of the results of `id`, opened as `generation`, starts (see [`claim_sizing`]).
+    pub(super) fn results_listed(&self, pane: PaneId, generation: u64, id: FindId) -> impl FnOnce() + Send + use<> {
+        let slots = Arc::clone(&self.slots);
+        let key = results_key(id);
+
+        move || claim_sizing(&slots, pane, generation, &key)
     }
 
     fn listings(&self, pane: PaneId) -> &ThreadCap {
@@ -197,6 +216,12 @@ fn claim_sizing(slots: &Slots, pane: PaneId, generation: u64, folder: &Path) {
     {
         slot.sizing.move_to(folder);
     }
+}
+
+/// What a pane's slot is keyed by while it shows the results of the search `id`: a relative path, which no folder
+/// that was opened (`resolve` refuses one) can equal.
+fn results_key(id: FindId) -> PathBuf {
+    PathBuf::from(format!("find:{}", id.0))
 }
 
 fn lock(slots: &Slots) -> std::sync::MutexGuard<'_, HashMap<PaneId, Slot>> {
@@ -325,6 +350,14 @@ mod tests {
         if let Some(home) = std::env::home_dir() {
             assert_eq!(resolve(None, None).expect("home"), home);
         }
+    }
+
+    #[test]
+    fn the_key_of_a_pane_showing_results_is_never_a_folder_that_can_be_opened() {
+        let key = results_key(FindId(7));
+
+        assert!(resolve(Some(key.to_string_lossy().into_owned()), None).is_err());
+        assert_ne!(results_key(FindId(7)), results_key(FindId(8)));
     }
 
     #[test]

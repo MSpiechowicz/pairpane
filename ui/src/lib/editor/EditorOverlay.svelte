@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
 
+  import { displayName } from '$lib/panes/format';
   import ChoiceDialog from '$lib/shell/ChoiceDialog.svelte';
   import Modal from '$lib/shell/Modal.svelte';
   import { encodingChoices } from '$lib/viewer/encodings';
@@ -62,13 +63,13 @@
 
 <svelte:window {onkeydown} />
 
-<Modal title={session.name} variant="full" onClose={() => void editor.requestClose()}>
+<Modal title={displayName(session.name)} variant="full" onClose={() => void editor.requestClose()}>
   <div class="editor">
     <EditorToolbar {editor} {session} />
 
     {#if session.status === 'undecodable'}
       <div class="picker">
-        <p role="alert">{session.name} is not valid {session.unreadable} text.</p>
+        <p role="alert">{displayName(session.name)} is not valid {session.unreadable} text.</p>
         <label>
           Reopen as
           <select data-autofocus value={chosen} onchange={(event) => (chosen = event.currentTarget.value)}>
@@ -79,7 +80,7 @@
         </label>
         <button class="btn btn-primary" type="button" onclick={() => void editor.changeEncoding(chosen)}>Reopen</button>
         {#if session.failure}
-          <p role="alert">{session.failure}</p>
+          <p role="alert">{displayName(session.failure)}</p>
         {/if}
       </div>
     {:else}
@@ -92,10 +93,10 @@
         </p>
       {/if}
       {#if session.note}
-        <p class="banner" role="status">{session.note}</p>
+        <p class="banner" role="status">{displayName(session.note)}</p>
       {/if}
       {#if session.failure}
-        <p class="banner error" role="alert">{session.failure}</p>
+        <p class="banner error" role="alert">{displayName(session.failure)}</p>
       {/if}
 
       <div class="host" {@attach mount}></div>

@@ -28,6 +28,15 @@ const options = () => screen.queryAllByRole('option').map((option) => option.tex
 const toggle = () => screen.getByRole('button', { name: /current folder$/ });
 
 describe('HotlistMenu', () => {
+  it('shows a favourite folder that reorders text with its characters written out, and opens the real one', async () => {
+    const { backend } = await menu(['/home/me/txt\u202Eexe']);
+
+    expect(options()).toEqual(['/home/me/txt⟨U+202E⟩exe']);
+
+    await fireEvent.click(screen.getByRole('option'));
+    expect(backend.last().args).toMatchObject({ path: '/home/me/txt\u202Eexe' });
+  });
+
   it('lists the favourites in the order they were added; the filter field has the focus', async () => {
     await menu();
 
@@ -162,5 +171,15 @@ describe('HotlistMenu', () => {
 
     expect(toggle()).toBeDisabled();
     expect(toggle()).toHaveAttribute('title', 'A folder inside an archive can’t be a favourite.');
+  });
+
+  it('cannot add search results either, and says why', async () => {
+    const { backend, tabs } = await menu();
+    await tabs.view.listing.openResults(3);
+    backend.last().emit({ kind: 'start', path: '/home/me/Projects', parent: '/home/me', crumbs: [], total: 0, results: 3 });
+    await tick();
+
+    expect(toggle()).toBeDisabled();
+    expect(toggle()).toHaveAttribute('title', 'Search results are not a folder — open a file’s folder first.');
   });
 });

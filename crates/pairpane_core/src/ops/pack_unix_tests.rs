@@ -12,6 +12,7 @@ use pretty_assertions::assert_eq;
 use crate::model::{ArchiveFormat, Outcome, PackFormat, PackLevel};
 
 use super::hooks::Hooks;
+use super::pack_items_tests::{packed, results};
 use super::pack_tests::{ITEMS, archived, at, expected, options, pack, scene, the_paths, zip};
 use super::testing::{Rig, make_fifo, put, set_times, temp_mode_hooks};
 
@@ -98,6 +99,97 @@ fn a_folder_swapped_for_a_link_while_the_tree_is_walked_is_refused_and_nothing_i
     );
     let seen = archived(&root, "out.zip", ArchiveFormat::Zip);
     assert_eq!(the_paths(&seen), ["a.txt", "empty", "z.bin"]);
+}
+
+#[test]
+fn a_link_on_the_way_to_an_item_fails_that_item_and_the_job_goes_on() {
+    let root = results();
+    let src = root.path().join("src");
+    symlink(src.join("c"), src.join("link")).expect("link");
+    symlink("b.txt", src.join("a/to-b")).expect("link");
+
+    let (ended, paths) = packed(&root, &["link/f.txt", "a/to-b", "link/d/e.txt", "a/b.txt"]);
+
+    assert_eq!(ended.outcome, Outcome::Done);
+    assert_eq!(ended.skipped, 1, "a link as the item itself is skipped");
+    let failed = ended.errors.iter().map(|error| error.path.as_str()).collect::<Vec<_>>();
+    assert_eq!(failed, ["link/d/e.txt", "link/f.txt"]);
+    assert_eq!(paths, ["a/b.txt"]);
+}
+
+#[test]
+fn a_folder_on_the_way_swapped_for_a_link_while_the_items_are_found_fails_its_items() {
+    let root = results();
+    put(root.path(), "outside/d/e.txt", b"secret");
+    let (folder, aside, outside) = (
+        root.path().join("src/c"),
+        root.path().join("src/c.aside"),
+        root.path().join("outside"),
+    );
+    let hooks = Hooks {
+        before_open: Some(Arc::new(move |now| {
+            if now == "c" {
+                fs::rename(&folder, &aside).expect("moved aside");
+                symlink(&outside, &folder).expect("link");
+            }
+        })),
+        ..Hooks::default()
+    };
+
+    let request = pack(
+        root.path(),
+        &["c/d/e.txt", "a/b.txt"],
+        "out.zip",
+        options(PackFormat::Zip, PackLevel::Normal),
+    );
+    let ended = Rig::with(hooks, |_, _| {}).run(request);
+
+    assert_eq!(ended.outcome, Outcome::Done);
+    assert_eq!(
+        ended.errors.iter().map(|error| error.path.as_str()).collect::<Vec<_>>(),
+        ["c/d/e.txt"]
+    );
+    let seen = archived(&root, "out.zip", ArchiveFormat::Zip);
+    assert_eq!(the_paths(&seen), ["a/b.txt"]);
+}
+
+#[test]
+fn a_folder_on_the_way_swapped_for_a_link_after_the_items_were_planned_is_not_read_through() {
+    let root = results();
+    put(root.path(), "outside/b.txt", b"secret");
+    let (folder, aside, outside) = (
+        root.path().join("src/a"),
+        root.path().join("src/a.aside"),
+        root.path().join("outside"),
+    );
+    // The archive is being made: the items are planned and none of them was read yet.
+    let hooks = Hooks {
+        after_temp: Some(Arc::new(move |_| {
+            fs::rename(&folder, &aside).expect("moved aside");
+            symlink(&outside, &folder).expect("link");
+        })),
+        ..Hooks::default()
+    };
+
+    let request = pack(
+        root.path(),
+        &["a/b.txt", "z.txt"],
+        "out.zip",
+        options(PackFormat::Zip, PackLevel::Normal),
+    );
+    let ended = Rig::with(hooks, |_, _| {}).run(request);
+
+    assert!(matches!(ended.outcome, Outcome::Failed { .. }), "{:?}", ended.outcome);
+    let packed = fs::read(root.path().join("dst/out.zip")).ok();
+    assert!(
+        packed.is_none_or(|bytes| !bytes.windows(6).any(|window| window == b"secret")),
+        "what the link leads to was read"
+    );
+    assert_eq!(
+        fs::read_dir(root.path().join("dst")).expect("dir").count(),
+        0,
+        "no archive and no temporary file is left"
+    );
 }
 
 #[test]

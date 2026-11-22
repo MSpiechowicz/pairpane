@@ -173,6 +173,20 @@ fn a_folder_that_is_swapped_for_a_link_or_another_folder_cannot_be_opened() {
 }
 
 #[test]
+fn an_entry_is_looked_up_by_one_name_and_never_by_a_path_that_could_go_through_a_link() {
+    let root = temp();
+    put(root.path(), "src/z", b"x");
+    put(root.path(), "outside/b.txt", b"secret");
+    symlink(root.path().join("outside"), root.path().join("src/a")).expect("link");
+    let held = Held::root(&root.path().join("src")).expect("root");
+
+    assert!(held.look("a/b.txt").is_err(), "a link on the way is not followed");
+    assert!(held.look("../outside").is_err());
+    assert!(held.look("z").is_ok());
+    assert_eq!(held.look("a").expect("the link itself").kind, Kind::Link);
+}
+
+#[test]
 fn a_file_swapped_for_a_link_or_another_file_cannot_be_opened() {
     let root = temp();
     put(root.path(), "src/f", b"abc");

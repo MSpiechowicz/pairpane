@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::PaneId;
+use super::{PaneId, SavedSearch};
 
 /// The column a pane sorts by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -37,7 +37,7 @@ pub struct SavedPane {
     pub active: u32,
 }
 
-/// What comes back on the next start: both panes' tabs, the active pane and the hotlist.
+/// What comes back on the next start: both panes' tabs, the active pane, the hotlist and the saved searches.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -48,4 +48,9 @@ pub struct SavedState {
     pub right: SavedPane,
     /// The hotlist (favourite folders), in the order they were added.
     pub hotlist: Vec<String>,
+    /// The saved searches, in the order they were saved. A state file from before they existed, or a state sent without them,
+    /// has none: whoever saves must send the searches it has, or they are lost.
+    #[serde(default)]
+    #[ts(as = "Option<Vec<SavedSearch>>", optional)]
+    pub searches: Vec<SavedSearch>,
 }

@@ -120,10 +120,16 @@ export function viewAnswers(
   };
 }
 
-/** A fake backend serving `file`, and a session opened on it (waited for). */
-export async function openedSession(file: FakeFile, kind?: (name: string) => ViewKind, extra: Answers = {}) {
+/** A fake backend serving `file`, and a session opened on it (waited for); it is named `name` and starts with `notice`. */
+export async function openedSession(
+  file: FakeFile,
+  kind?: (name: string) => ViewKind,
+  extra: Answers = {},
+  name = 'file.txt',
+  notice?: string,
+) {
   const backend = fakeBackend(viewAnswers(file, kind, extra) as Partial<Record<CommandName, (args: never) => unknown>>);
-  const session = new ViewSession(backend.ipc, '/dir', 'file.txt');
+  const session = new ViewSession(backend.ipc, '/dir', name, notice);
   await vi.waitFor(() => expect(session.status).toBe('ready'));
 
   /** The arguments of every call of a command. */

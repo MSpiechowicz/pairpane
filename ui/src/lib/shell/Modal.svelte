@@ -16,6 +16,8 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
 
+  import { displayName } from '$lib/panes/format';
+
   let {
     title,
     variant = 'dialog',
@@ -23,8 +25,8 @@
     children,
   }: {
     title: string;
-    /** `full` fills the window (the viewer); its title is for assistive technology only. */
-    variant?: 'dialog' | 'full';
+    /** `full` fills the window (the viewer); its title is for assistive technology only. `wide` is a dialog that holds a list. */
+    variant?: 'dialog' | 'wide' | 'full';
     /** Escape. Without it the dialog can only be left by one of its own buttons. */
     onClose?: () => void;
     children: Snippet;
@@ -88,9 +90,9 @@
 
 <svelte:window {onkeydown} />
 
-<div class="backdrop fade-in" class:full={variant === 'full'}>
+<div class="backdrop fade-in" class:full={variant === 'full'} class:wide={variant === 'wide'}>
   <div class="popup modal" role="dialog" aria-modal="true" aria-labelledby={titleId} tabindex="-1" bind:this={dialog} {@attach wire}>
-    <h2 id={titleId}>{title}</h2>
+    <h2 id={titleId}>{displayName(title)}</h2>
     {@render children()}
   </div>
 </div>
@@ -110,6 +112,16 @@
   .modal {
     width: min(520px, calc(100vw - 32px));
     padding: 16px;
+  }
+
+  .wide {
+    padding-top: 6vh;
+  }
+
+  .wide .modal {
+    width: min(880px, calc(100vw - 32px));
+    max-height: calc(94vh - 16px);
+    overflow-y: auto;
   }
 
   .full {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte';
 
+  import { displayName } from '$lib/panes/format';
   import Modal from '$lib/shell/Modal.svelte';
 
   import { ViewSearch } from './search.svelte';
@@ -31,11 +32,11 @@
 
 <svelte:window {onkeydown} />
 
-<Modal title={session.name} variant="full" {onClose}>
+<Modal title={displayName(session.name)} variant="full" {onClose}>
   <div class="viewer">
     <ViewerToolbar {session} {search} {onClose} />
     {#if session.notice}
-      <p class="notice" role="status">{session.notice}</p>
+      <p class="notice" role="status">{displayName(session.notice)}</p>
     {/if}
     <ViewBody {session} {search} focus />
   </div>

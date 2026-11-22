@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { MdInline as Inline } from '$lib/ipc/bindings/MdInline';
+  import { displayName } from '$lib/panes/format';
 
   import MdInline from './MdInline.svelte';
 
@@ -19,7 +20,7 @@
   {:else if inline.kind === 'strike'}
     <del><MdInline inlines={inline.children} /></del>
   {:else if inline.kind === 'link'}
-    <span class="link" title={inline.href ?? undefined}><MdInline inlines={inline.children} /></span>
+    <span class="link" title={inline.href === null ? undefined : displayName(inline.href)}><MdInline inlines={inline.children} /></span>
   {:else if inline.kind === 'image'}
     <span class="alt">{inline.alt}</span>
   {:else}

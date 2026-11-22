@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { displayName } from '$lib/panes/format';
   import type { Hotlist } from '$lib/panes/hotlist.svelte';
   import type { PaneTabs } from '$lib/panes/tabs.svelte';
 
@@ -16,6 +17,19 @@
 
   const listing = $derived(tabs.view.listing);
   const here = $derived(listing.path);
+
+  /** Why the current folder cannot be added, when it cannot. */
+  const unaddable = $derived.by(() => {
+    if (listing.readonly) {
+      return 'A folder inside an archive can’t be a favourite.';
+    }
+
+    if (listing.results !== undefined) {
+      return 'Search results are not a folder — open a file’s folder first.';
+    }
+
+    return undefined;
+  });
 
   let field = $state<HTMLInputElement>();
   let query = $state('');
@@ -71,7 +85,7 @@
   {/snippet}
 
   {#snippet row(index)}
-    <span class="fit">{matches[index]}</span>
+    <span class="fit">{displayName(matches[index])}</span>
   {/snippet}
 
   {#snippet footer()}
@@ -79,7 +93,7 @@
       class="here"
       type="button"
       disabled={here === undefined}
-      title={listing.readonly ? 'A folder inside an archive can’t be a favourite.' : undefined}
+      title={unaddable}
       onclick={toggleHere}
     >
       {here !== undefined && hotlist.has(here) ? 'Remove current folder' : 'Add current folder'}

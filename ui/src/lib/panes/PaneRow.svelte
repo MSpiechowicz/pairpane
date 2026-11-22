@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Entry } from '$lib/ipc/bindings/Entry';
 
-  import { formatDate, iconClass, splitName } from './format';
+  import { displayName, formatDate, iconClass, splitName } from './format';
   import type { InlineRename } from './inlineRename.svelte';
   import RenameField from './RenameField.svelte';
 
@@ -50,8 +50,8 @@
     {#if edit}
       <RenameField rename={edit} />
     {:else}
-      <span class="nm" title={entry.linkTarget ? `${entry.name} → ${entry.linkTarget}` : undefined}>{parts.base}</span>
-      <span class="ex">{parts.ext}</span>
+      <span class="nm" title={entry.linkTarget ? displayName(`${entry.name} → ${entry.linkTarget}`) : undefined}>{displayName(parts.base)}</span>
+      <span class="ex">{displayName(parts.ext)}</span>
     {/if}
     <span class="sz">{#if size !== undefined}{size}{:else}<span class="dirtag">DIR</span>{/if}</span>
     <span class="dt">{formatDate(entry.modified)}</span>

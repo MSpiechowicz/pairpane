@@ -1,11 +1,12 @@
 //! Tests of `ops_pack`: the job it asks the engine for, and what is refused before any job exists.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use pairpane_core::archive::Password;
 use pairpane_core::model::OpKind;
 
 use super::*;
+use crate::commands::ops::checked_names;
 use crate::commands::ops::tests::{added_job, running, wait_for_end};
 use crate::commands::testing::{elsewhere, names, root};
 
@@ -96,7 +97,6 @@ fn the_source_folder_and_the_names_are_checked_like_a_copy_checks_them() {
     for (from, chosen) in [
         ("relative".to_owned(), names(&["a"])),
         (root(), Vec::new()),
-        (root(), names(&["a/b"])),
         (root(), names(&[".."])),
     ] {
         let error =
@@ -107,6 +107,47 @@ fn the_source_folder_and_the_names_are_checked_like_a_copy_checks_them() {
 
     let request = pack_request(root(), names(&["a", "b", "a"]), archive, options(PackFormat::Zip)).expect("valid");
     assert_eq!(request.names, names(&["a", "b"]), "duplicates are dropped");
+}
+
+#[test]
+fn relative_paths_below_the_folder_are_items_of_a_pack_and_of_nothing_else() {
+    let archive = archive_named("out.zip");
+    let request = pack_request(
+        root(),
+        names(&["a/b.txt", "c/d/e.txt", "a/b.txt", "f"]),
+        archive.clone(),
+        options(PackFormat::Zip),
+    )
+    .expect("valid");
+    assert_eq!(
+        request.names,
+        names(&["a/b.txt", "c/d/e.txt", "f"]),
+        "duplicates are dropped"
+    );
+
+    for chosen in ["a/b.txt", "c/d/e.txt"] {
+        let error = checked_names(Path::new(&root()), names(&[chosen])).expect_err(chosen);
+
+        assert_eq!(error.code(), IpcErrorCode::InvalidInput, "{chosen}");
+    }
+
+    for chosen in [
+        names(&["../x"]),
+        names(&["a/../x"]),
+        names(&["/abs"]),
+        names(&["a//b"]),
+        names(&["a/./b"]),
+        names(&["a/"]),
+        names(&["a/b\\c"]),
+        names(&["a", "a/b"]),
+        names(&["a/b/c", "x", "a/b"]),
+        vec![format!("a/{}", "x".repeat(300))],
+    ] {
+        let error =
+            pack_request(root(), chosen.clone(), archive.clone(), options(PackFormat::Zip)).expect_err("refused");
+
+        assert_eq!(error.code(), IpcErrorCode::InvalidInput, "{chosen:?}");
+    }
 }
 
 #[test]

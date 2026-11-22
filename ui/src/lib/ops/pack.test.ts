@@ -8,6 +8,10 @@ describe('packPath', () => {
     expect(packPath('/backup', ['notes.txt'], '/home/ann', 'sevenZ')).toBe('/backup/notes.txt.7z');
   });
 
+  it('names a single search result after the file, not the folders it is found in', () => {
+    expect(packPath('/backup', ['docs/deep/notes.txt'], '/home/ann', 'zip')).toBe('/backup/notes.txt.zip');
+  });
+
   it('names several items after the folder they are in', () => {
     expect(packPath('/backup', ['a', 'b'], '/home/ann/docs', 'tarZst')).toBe('/backup/docs.tar.zst');
   });

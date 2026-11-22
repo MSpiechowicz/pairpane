@@ -60,7 +60,8 @@ const extensionOf = (format: PackFormat) => PACK_FORMATS.find((one) => one.forma
  * items are in for several (`archive` at a root), with the format's extension.
  */
 export function packPath(folder: string, names: readonly string[], source: string, format: PackFormat): string {
-  const base = names.length === 1 ? names[0] : (folderName(source) ?? 'archive');
+  // A name of search results is a path below `source`: the archive is named after the file, not its folders.
+  const base = names.length === 1 ? (names[0].split('/').at(-1) ?? names[0]) : (folderName(source) ?? 'archive');
   return joinPath(folder, base + extensionOf(format));
 }
 

@@ -1,3 +1,4 @@
+import { deselectResults, withoutNested } from '$lib/find/results';
 import type { Entry } from '$lib/ipc/bindings/Entry';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
 import type { PaneView } from '$lib/panes/view.svelte';
@@ -15,7 +16,7 @@ export type ToolDialog =
   /** The parts go into the folder `to` to begin with: the other pane's. */
   | { kind: 'split'; path: string; entry: Entry; to: string; source: PaneView }
   /** The archive is made in the folder `to` to begin with: the other pane's (the folder of the items when that pane is in an archive). */
-  | { kind: 'pack'; path: string; names: string[]; to: string; source: PaneView };
+  | { kind: 'pack'; path: string; names: string[]; to: string; source: PaneView; results?: true };
 
 const TOOLS: ReadonlySet<string> = new Set<ToolAction>(['properties', 'attributes', 'checksum', 'verifyChecksum', 'split', 'pack']);
 
@@ -51,10 +52,11 @@ export class ItemTools {
   /**
    * Does what the tool asks on `source`'s items; nothing when there is nothing to act on. Properties, splitting and
    * checking act on the entry under the cursor (the others on the selection, as copying does); the parts of a split
-   * and the archive go to the other pane's folder.
+   * and the archive go to the other pane's folder. Search results are packed with their folders kept (from the
+   * folder searched); the other tools do not take them.
    */
   run(action: ToolAction, source: PaneView, other: PaneView) {
-    const path = source.listing.path;
+    const path = this.#folderOf(action, source);
     const under = source.entryAt(source.cursor);
     const entries = chosen(source);
     if (path === undefined || entries.length === 0) {
@@ -69,7 +71,7 @@ export class ItemTools {
         this.dialog = { kind: 'checksum', path, names: entries.map((entry) => entry.name), source };
         break;
       case 'pack':
-        this.dialog = { kind: 'pack', path, names: entries.map((entry) => entry.name), to: other.listing.path ?? path, source };
+        this.#pack(path, entries, source, other);
         break;
       case 'properties':
         if (under !== undefined) {
@@ -81,6 +83,27 @@ export class ItemTools {
           this.#oneFile(action, path, under, source, other);
         }
     }
+  }
+
+  /** Search results are packed as the names below the folder searched, the ones inside another chosen result left out. */
+  #pack(path: string, entries: Entry[], source: PaneView, other: PaneView) {
+    const results = source.listing.results !== undefined;
+    const names = entries.map((entry) => entry.name);
+
+    this.dialog = {
+      kind: 'pack',
+      path,
+      names: results ? withoutNested(names) : names,
+      to: other.listing.path ?? path,
+      source,
+      results: results ? true : undefined,
+    };
+  }
+
+  /** The folder the items are in. Search results have none: only a pack takes them, as names below the folder searched. */
+  #folderOf(action: ToolAction, source: PaneView): string | undefined {
+    const { path, folder, results } = source.listing;
+    return action === 'pack' && results !== undefined ? folder : path;
   }
 
   #oneFile(action: 'verifyChecksum' | 'split', path: string, entry: Entry, source: PaneView, other: PaneView) {
@@ -115,6 +138,8 @@ export class ItemTools {
     if (dialog?.kind === 'checksum' && output !== undefined) {
       dialog.source.deselect(dialog.names);
       dialog.source.pointAt(output);
+    } else if (dialog?.kind === 'pack' && dialog.results) {
+      deselectResults(dialog.source, dialog.names);
     } else if (dialog?.kind === 'pack') {
       dialog.source.deselect(dialog.names);
     }

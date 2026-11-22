@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { displayName } from '$lib/panes/format';
+
   let {
     failure,
     busy,
@@ -32,7 +34,7 @@
 </script>
 
 {#if failure}
-  <p class="failure" role="alert">{failure}</p>
+  <p class="failure" role="alert">{displayName(failure)}</p>
 {/if}
 <div class="mt-3 flex justify-end gap-2">
   <button class="btn" type="button" disabled={busy} data-autofocus={focus === 'cancel' ? '' : undefined} onclick={onCancel}>{cancel}</button>

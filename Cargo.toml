@@ -139,6 +139,17 @@ sha1 = { version = "0.11.0", default-features = false }
 pbkdf2 = { version = "0.13.0", default-features = false, features = ["hmac"] }
 # Archive passwords are kept in memory only and overwritten when dropped; already in the lockfile.
 zeroize = "1.9.2"
+# Find files (pairpane_core::find), ripgrep's own libraries, all safe APIs: `ignore` walks a folder tree on threads of its
+# own (`build_parallel`; a link is never followed, `.gitignore` files are read by `globset`), `grep-searcher` searches a
+# file's content with a bounded heap (`heap_limit`, binary files quit on the first NUL, a decoder for UTF-16 and the
+# encodings of the viewer) and `grep-regex` builds its matcher on `regex-automata` with a size limit. `regex` is named here
+# for the name patterns of a search, built with the same limits; it is the copy the lockfile has (one copy of
+# `regex-automata` and `regex-syntax`). Memory-mapped files are never used (`MmapChoice` stays `never`; mapping a file
+# that changes is `unsafe`). The three ripgrep crates are Unlicense OR MIT, `regex` is MIT OR Apache-2.0.
+ignore = "0.4.34"
+grep-searcher = "0.1.17"
+grep-regex = "0.1.14"
+regex = "1.13.2"
 # Dev dependencies
 pretty_assertions = "1.4"
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }

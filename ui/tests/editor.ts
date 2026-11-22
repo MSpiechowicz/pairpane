@@ -97,11 +97,11 @@ export function editAnswers(document: Partial<EditDocument> = {}, extra: Answers
 export const TARGET = { path: '/dir', name: 'notes.txt' };
 
 /** An editor on a fake backend, with its overlay on screen; nothing is opened yet. */
-export function startEditor(answers: Answers = {}, document: Partial<EditDocument> = {}) {
+export function startEditor(answers: Answers = {}, document: Partial<EditDocument> = {}, target = TARGET) {
   const backend = fakeBackend(editAnswers(document, answers) as Partial<Record<CommandName, (args: never) => unknown>>);
   const say = vi.fn();
   const view = vi.fn();
-  const editor = new Editor(backend.ipc, { under: () => TARGET, say, view });
+  const editor = new Editor(backend.ipc, { under: () => target, say, view });
   render(EditorHost, { editor });
 
   /** The arguments of every call of a command. */
@@ -110,7 +110,7 @@ export function startEditor(answers: Answers = {}, document: Partial<EditDocumen
   /** The options of every save. */
   const options = () => sent('edit_save').map((args) => args.options as EditSaveOptions);
 
-  return { backend, editor, say, view, sent, options, open: () => editor.open(TARGET, { builtin: true }) };
+  return { backend, editor, say, view, sent, options, open: () => editor.open(target, { builtin: true }) };
 }
 
 /** The same, opened on {@link TARGET} and waited for. */

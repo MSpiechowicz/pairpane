@@ -17,7 +17,9 @@ use std::time::Duration;
 
 use pairpane_core::listing::platform;
 use pairpane_core::model::{Answer, ControlAction, IpcError, IpcErrorCode, JobId, OpKind, OpsEvent};
-use pairpane_core::ops::{Engine, MAX_NAMES, MAX_NAMES_BYTES, Request, Task, name_fits, rename_in};
+use pairpane_core::ops::{
+    Engine, MAX_NAMES, MAX_NAMES_BYTES, Request, Task, has_nested_names, is_item_path, name_fits, rename_in,
+};
 use tauri::State;
 use tauri::async_runtime;
 use tauri::ipc::Channel;
@@ -25,11 +27,16 @@ use tauri::ipc::Channel;
 use self::extractions::Extractions;
 use super::limit::{Permit, ThreadCap};
 use super::panes::resolve;
+use super::within::{Within, confirm};
 use crate::error::{CommandError, CommandResult};
 
 /// Rename threads the app may have at once: a stuck one is stepped around by the other, and two stuck ones refuse
 /// renames as busy without ever taking more of the thread pool.
 const RENAME_THREADS: usize = 2;
+
+/// Threads the app may have at once to check that the folder of search results is still the one searched (see
+/// `within.rs`): the same stuck-folder rule as the renames, with places of their own.
+const GUARD_THREADS: usize = 2;
 
 /// How long quitting waits for the transfers to clean up after themselves (partial files, folders they made).
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
@@ -37,13 +44,14 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 /// The latest channel the UI registered; `None` until it does.
 type Listener = Arc<Mutex<Option<Channel<OpsEvent>>>>;
 
-/// The transfer engine, the channel its events go to, the extraction jobs that run with a password and the cap on rename
-/// threads.
+/// The transfer engine, the channel its events go to, the extraction jobs that run with a password and the caps on rename
+/// and check threads.
 pub struct Ops {
     engine: Engine,
     listener: Listener,
     extractions: Arc<Extractions>,
     renames: ThreadCap,
+    guards: ThreadCap,
 }
 
 impl Default for Ops {
@@ -66,6 +74,7 @@ impl Default for Ops {
             listener,
             extractions,
             renames: ThreadCap::default(),
+            guards: ThreadCap::default(),
         }
     }
 }
@@ -90,9 +99,19 @@ impl Ops {
         self.engine.shutdown(SHUTDOWN_WAIT);
     }
 
-    /// Validates the request, then queues it. Touches no disk.
-    fn start(&self, kind: OpKind, from: String, names: Vec<String>, to: String, verify: bool) -> CommandResult<JobId> {
+    /// Validates the request, checks the folder of search results when `within` says so, then queues it. Touches no disk
+    /// otherwise.
+    async fn start(
+        &self,
+        kind: OpKind,
+        from: String,
+        names: Vec<String>,
+        to: String,
+        verify: bool,
+        within: Option<Within>,
+    ) -> CommandResult<JobId> {
         let request = request(kind, from, names, to, verify)?;
+        confirm(&self.guards, GUARD_THREADS, within, &request.from.to_string_lossy()).await?;
 
         self.engine.submit(request).map_err(failed)
     }
@@ -146,7 +165,8 @@ pub fn ops_subscribe(ops: State<'_, Ops>, on_event: Channel<OpsEvent>) {
 
 /// Queues a copy or move of the `names` in the folder `from` into the folder `to` and returns its id at once.
 /// Nothing is read from the disk here: a folder that does not exist, or one copied into itself, ends the job with
-/// a failed `ended` event.
+/// a failed `ended` event. The one exception is a request with `within` (the folder `from` of search results): it is
+/// first checked to be the folder that was searched (see `within.rs`) and refused when it is not.
 #[tauri::command]
 pub async fn ops_start(
     ops: State<'_, Ops>,
@@ -155,8 +175,9 @@ pub async fn ops_start(
     names: Vec<String>,
     to: String,
     verify: bool,
+    within: Option<Within>,
 ) -> CommandResult<JobId> {
-    ops.start(kind, from, names, to, verify)
+    ops.start(kind, from, names, to, verify, within).await
 }
 
 /// Pauses, resumes or cancels a job.
@@ -204,16 +225,36 @@ fn request(kind: OpKind, from: String, names: Vec<String>, to: String, verify: b
 /// names together take at most [`MAX_NAMES_BYTES`], counted before duplicates are dropped); duplicates are dropped
 /// (first one kept) and what is left is between 1 and [`MAX_NAMES`].
 pub(super) fn checked_names(folder: &Path, names: Vec<String>) -> CommandResult<Vec<String>> {
+    unique_names(names, |name| check_name(folder, name))
+}
+
+/// [`checked_names`] for the items of a pack, which may also be paths below `folder` (`a/b.txt`, each part a plain
+/// name that fits): none may be inside another (`a` and `a/b`).
+pub(super) fn checked_item_paths(folder: &Path, names: Vec<String>) -> CommandResult<Vec<String>> {
+    let names = unique_names(names, |name| check_item_path(folder, name))?;
+
+    if has_nested_names(&names) {
+        return Err(CommandError::new(
+            IpcErrorCode::InvalidInput,
+            "an item cannot be chosen together with a folder that holds it",
+        ));
+    }
+
+    Ok(names)
+}
+
+/// The names of `names` that are not repeated, each passing `check` and every part of it short enough.
+fn unique_names(names: Vec<String>, check: impl Fn(&str) -> CommandResult<()>) -> CommandResult<Vec<String>> {
     let mut seen = HashSet::new();
     let mut unique = Vec::new();
     let mut bytes = 0_usize;
     for name in names {
         // First: the size of a name bounds the work on it, and the total bounds the work on the list.
         bytes = bytes.saturating_add(name.len());
-        if !name_fits(&name) || bytes > MAX_NAMES_BYTES {
+        if !name.split('/').all(name_fits) || bytes > MAX_NAMES_BYTES {
             return Err(names_too_large());
         }
-        check_name(folder, &name)?;
+        check(&name)?;
 
         if seen.contains(&name) {
             continue;
@@ -230,6 +271,18 @@ pub(super) fn checked_names(folder: &Path, names: Vec<String>) -> CommandResult<
     }
 
     Ok(unique)
+}
+
+/// An item of a pack is a plain name or a relative path of them whose path inside `folder` passes the folder rules.
+fn check_item_path(folder: &Path, name: &str) -> CommandResult<()> {
+    if !is_item_path(name) {
+        return Err(CommandError::new(
+            IpcErrorCode::InvalidInput,
+            "an item must be a plain name or a path of plain names below the folder",
+        ));
+    }
+
+    platform::check_folder(&folder.join(name)).map_err(|reason| CommandError::new(IpcErrorCode::InvalidInput, reason))
 }
 
 /// A name is a single plain name whose path inside `folder` passes the folder rules.
@@ -310,3 +363,5 @@ pub mod tasks;
 mod tasks_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod within_tests;

@@ -26,6 +26,12 @@ describe('Toast', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('writes out the controls and invisible characters of a name in the text', () => {
+    render(Toast, { text: 'Moved “a\u202Efdp.exe” and “b\u200B.txt”.', onUndo: vi.fn(), onClose: vi.fn() });
+
+    expect(screen.getByText('Moved “a⟨U+202E⟩fdp.exe” and “b⟨U+200B⟩.txt”.')).toBeInTheDocument();
+  });
+
   it('Undo is there only when it can be, does not take the focus, and asks for the undo', async () => {
     const { onUndo } = show({ undoable: true });
     const undo = screen.getByRole('button', { name: 'Undo' });

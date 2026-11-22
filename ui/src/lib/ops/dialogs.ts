@@ -1,5 +1,7 @@
+import { groupResults, type Within } from '$lib/find/results';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
 import { archiveName } from '$lib/panes/archive';
+import { displayName } from '$lib/panes/format';
 import { isWindowsPlatform } from '$lib/panes/keys';
 
 import { type OpRequest, stemLength } from './targets';
@@ -28,9 +30,9 @@ export type FileAction =
 /** What the OS calls the place deleted items go to. */
 export const trashName = () => (isWindowsPlatform() ? 'Recycle Bin' : 'Trash');
 
-/** `“a.pdf”` for one item, `3 items` for more. */
+/** `“a.pdf”` for one item (shown safely, see {@link displayName}), `3 items` for more. */
 export function what(names: readonly string[]): string {
-  return names.length === 1 ? `“${names[0]}”` : `${names.length} items`;
+  return names.length === 1 ? `“${displayName(names[0])}”` : `${names.length} items`;
 }
 
 /** How a dialog looks: its title, the field's name and start, how much of it is selected, its button. */
@@ -149,12 +151,27 @@ async function makeFile(ipc: Transport, path: string, name: string): Promise<Don
   }
 }
 
+/**
+ * The folders a copy or move takes its items from, and the names in each. For search results `within` says where the
+ * folder is below the one searched, so that the backend can tell it is still the one that was searched.
+ */
+function folders(request: Extract<OpRequest, { kind: 'copy' | 'move' }>): { folder: string; names: string[]; within?: Within }[] {
+  if (!request.results) {
+    return [{ folder: request.from, names: request.names }];
+  }
+
+  return groupResults(request.from, request.names).map(({ folder, names, dir }) => ({ folder, names, within: { root: request.from, dir } }));
+}
+
 /** Asks the backend for what the dialog stands for; a refusal rejects. */
 export async function perform(ipc: Transport, request: OpRequest, value: string, verify: boolean): Promise<Done> {
   switch (request.kind) {
     case 'copy':
     case 'move':
-      await ipc.invoke('ops_start', { kind: request.kind, from: request.from, names: request.names, to: value, verify });
+      // Search results are in many folders: one job for each, in the order their folders first appear; one that is refused stops the rest.
+      for (const { folder, names, within } of folders(request)) {
+        await ipc.invoke('ops_start', { kind: request.kind, from: folder, names, to: value, verify, within });
+      }
       return { name: value };
     case 'add':
       await ipc.invoke('ops_add_to_archive', { archive: request.archive, dir: request.dir, from: request.from, names: request.names });

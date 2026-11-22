@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { JobId } from '$lib/ipc/bindings/JobId';
+  import { displayName } from '$lib/panes/format';
 
   import { formatRate, percentDone } from './format';
   import type { JobResult, JobRow, Transfers } from './transfers.svelte';
@@ -111,16 +112,16 @@
     {@const percent = job.result?.outcome.kind === 'done' ? 100 : percentDone(job)}
     {@const result = job.result}
     <div class="job" class:leaving={job.leaving}>
-      <span class="name" title={job.label}><span class="dim">{KINDS[job.kind]}</span> {job.label}</span>
+      <span class="name" title={displayName(job.label)}><span class="dim">{KINDS[job.kind]}</span> {displayName(job.label)}</span>
       {#if TARGETED.has(job.kind)}
-        <span class="to dim" title={job.to}>→ {job.to}</span>
+        <span class="to dim" title={displayName(job.to)}>→ {displayName(job.to)}</span>
       {:else}
         <span></span>
       {/if}
       <div
         class="h-1 overflow-hidden rounded bg-line"
         role="progressbar"
-        aria-label="Progress of {job.label}"
+        aria-label="Progress of {displayName(job.label)}"
         aria-valuemin="0"
         aria-valuemax="100"
         aria-valuenow={percent}
@@ -141,12 +142,12 @@
       {/if}
       <span class="actions">
         {#if result}
-          <button class="btn" type="button" aria-label="Dismiss {job.label}" onclick={() => transfers.dismiss(job.id)}>×</button>
+          <button class="btn" type="button" aria-label="Dismiss {displayName(job.label)}" onclick={() => transfers.dismiss(job.id)}>×</button>
         {:else}
           <button
             class="btn"
             type="button"
-            aria-label="{job.paused ? 'Resume' : 'Pause'} {job.label}"
+            aria-label="{job.paused ? 'Resume' : 'Pause'} {displayName(job.label)}"
             onclick={() => transfers.control(job.id, job.paused ? 'resume' : 'pause')}
           >
             {job.paused ? 'Resume' : 'Pause'}
@@ -154,7 +155,7 @@
           <button
             class="btn"
             type="button"
-            aria-label="Cancel {job.label}"
+            aria-label="Cancel {displayName(job.label)}"
             disabled={job.phase === 'cancelling'}
             onclick={() => transfers.control(job.id, 'cancel')}
           >
@@ -166,10 +167,10 @@
     {#if result && expanded === job.id}
       <ul class="errors">
         {#if result.outcome.kind === 'failed'}
-          <li>{result.outcome.error.message}</li>
+          <li>{displayName(result.outcome.error.message)}</li>
         {/if}
         {#each result.errors as item (item.path)}
-          <li><span class="dim">{item.path}</span> {item.error.message}</li>
+          <li><span class="dim">{displayName(item.path)}</span> {displayName(item.error.message)}</li>
         {/each}
         {#if result.moreErrors > 0}
           <li class="dim">and {result.moreErrors} more</li>

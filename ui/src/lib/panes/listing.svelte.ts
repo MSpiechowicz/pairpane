@@ -1,6 +1,8 @@
+import { joinResult } from '$lib/find/results';
 import type { ArchiveSpot } from '$lib/ipc/bindings/ArchiveSpot';
 import type { Crumb } from '$lib/ipc/bindings/Crumb';
 import type { Entry } from '$lib/ipc/bindings/Entry';
+import type { FindId } from '$lib/ipc/bindings/FindId';
 import type { ListEvent } from '$lib/ipc/bindings/ListEvent';
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
@@ -12,8 +14,8 @@ export const SPINNER_DELAY_MS = 150;
 
 export type ListingStatus = 'loading' | 'ready' | 'error';
 
-/** What an open asks for: a real folder (`null`: home) and one of its folders, or a place inside an archive. */
-type Target = { folder: string | null; child: string | null } | { spot: ArchiveSpot };
+/** What an open asks for: a real folder (`null`: home) and one of its folders, a place inside an archive, or the results of a search. */
+type Target = { folder: string | null; child: string | null } | { spot: ArchiveSpot } | { results: FindId };
 
 /** What a pane's view needs to hear about a listing besides its (reactive) state. */
 export interface ListingHooks {
@@ -32,13 +34,18 @@ export interface ListingHooks {
 /**
  * One pane's folder as the backend streams it: `start` sizes the list, batches fill it in order, `done` adds the
  * summary. Only the latest `open` of a pane may change its state; events of an earlier one are dropped. A folder
- * inside an archive is listed the same way (`openArchive`); the archive is then read-only and has no `path`.
+ * inside an archive is listed the same way (`openArchive`); the archive is then read-only and has no `path`. The
+ * results of a search are listed the same way too (`openResults`): the entries are named by their path below the
+ * folder searched, so the pane has no `path` either (nothing may treat those names as one folder's), and `enter`
+ * opens the real folder.
  */
 export class Listing {
   /** The real folder listed, or the folder that holds the archive shown. */
   #folder = $state<string | undefined>();
   /** Set while the pane shows a folder inside an archive. */
   archive = $state.raw<ArchiveSpot | undefined>();
+  /** Set while the pane shows the results of a search; `folder` is then the folder searched. */
+  results = $state<FindId | undefined>();
   parent = $state<string | null>(null);
   crumbs = $state.raw<Crumb[]>([]);
   /**
@@ -71,12 +78,12 @@ export class Listing {
   /** Whether the latest open has delivered its `start`. */
   #started = false;
 
-  /** The real folder shown; `undefined` before the first listing and inside an archive (nothing there is a path). */
+  /** The real folder shown; `undefined` before the first listing, inside an archive and in search results (their names are no plain names of one folder). */
   get path(): string | undefined {
-    return this.archive === undefined ? this.#folder : undefined;
+    return this.archive === undefined && this.results === undefined ? this.#folder : undefined;
   }
 
-  /** The real folder shown, or inside an archive the folder that holds it. */
+  /** The real folder shown, the folder that holds the archive shown, or the folder searched. */
   get folder(): string | undefined {
     return this.#folder;
   }
@@ -86,8 +93,12 @@ export class Listing {
     return this.archive !== undefined;
   }
 
-  /** Tells one listed place from another: a folder, or a folder inside an archive. */
+  /** Tells one listed place from another: a folder, a folder inside an archive, or the results of a search. */
   get location(): string {
+    if (this.results !== undefined) {
+      return `${this.#folder}\0\0${this.results}`;
+    }
+
     return this.archive === undefined ? (this.#folder ?? '') : `${this.archive.archive}\0${this.archive.dir}`;
   }
 
@@ -118,22 +129,39 @@ export class Listing {
     return this.#open({ spot: { archive: spot.archive, dir } }, false);
   }
 
+  /** Lists the results of the search `id` (the backend keeps them under it); `..` leads to the folder searched. */
+  openResults(id: FindId): Promise<void> {
+    return this.#open({ results: id }, false);
+  }
+
   /** What is shown now, as an open that lists it again. */
   #here(): Target {
+    if (this.results !== undefined) {
+      return { results: this.results };
+    }
+
     return this.archive === undefined ? { folder: this.#folder ?? null, child: null } : { spot: this.archive };
   }
 
   /** Whether `target` is the place shown (a reload), not another one. */
   #isHere(target: Target): boolean {
+    if ('results' in target) {
+      return target.results === this.results;
+    }
+
     if ('spot' in target) {
       return sameSpot(target.spot, this.archive);
     }
 
-    return this.archive === undefined && target.child === null && target.folder === (this.#folder ?? null);
+    return this.archive === undefined && this.results === undefined && target.child === null && target.folder === (this.#folder ?? null);
   }
 
   #request(target: Target, onEvent: (event: ListEvent) => void, signal: AbortSignal) {
     const showHidden = this.#showHidden;
+    if ('results' in target) {
+      return this.#ipc.invoke('find_open', { pane: this.#pane, id: target.results, onEvent });
+    }
+
     if ('spot' in target) {
       const { archive, dir } = target.spot;
       return this.#ipc.invoke('archive_open', { pane: this.#pane, archive, dir, showHidden, onEvent }, { signal });
@@ -208,8 +236,12 @@ export class Listing {
     return this.reload();
   }
 
-  /** Opens the folder named `name` inside the current one (inside an archive too). */
+  /** Opens the folder named `name` inside the current one (inside an archive too); in search results it is the path below the folder searched. */
   enter(name: string): Promise<void> {
+    if (this.results !== undefined) {
+      return this.open(joinResult(this.#folder ?? '', name));
+    }
+
     return this.archive === undefined ? this.open(this.#folder ?? null, name) : this.openArchive(this.archive, name);
   }
 
@@ -218,7 +250,8 @@ export class Listing {
       case 'start': {
         // A reload of the same folder keeps showing the previous rows (and summary) until the new ones replace
         // them, so a live update does not flash empty rows.
-        const reload = event.path === this.#folder && sameSpot(event.archive, this.archive) && this.error === undefined;
+        const reload =
+          event.path === this.#folder && sameSpot(event.archive, this.archive) && event.results === this.results && this.error === undefined;
         const next = new Array<Entry | undefined>(event.total);
         if (reload) {
           this.#rows.slice(0, event.total).forEach((entry, index) => (next[index] = entry));
@@ -229,6 +262,7 @@ export class Listing {
         this.error = undefined;
         this.#folder = event.path;
         this.archive = event.archive;
+        this.results = event.results;
         this.parent = event.parent;
         this.crumbs = event.crumbs;
         this.#setRows(next);

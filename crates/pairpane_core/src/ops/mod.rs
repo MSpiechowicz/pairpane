@@ -118,6 +118,7 @@ mod meta;
 mod open;
 mod origin;
 mod pack;
+mod pack_items;
 mod partial;
 mod plan;
 mod progress;
@@ -137,6 +138,21 @@ mod verify;
 mod volume;
 #[cfg(any(windows, test))]
 mod win_attrs;
+
+/// Checks that the folder `dir` (names joined with `/`, `""` for `base` itself) can be reached below `base` one name at a
+/// time with no link and no file on the way (the search results of a folder are read through it).
+pub(crate) fn check_folder_below(base: &std::path::Path, dir: &str) -> std::io::Result<()> {
+    listed::check_folder_below(base, dir)
+}
+
+/// [`check_folder_below`], and the folder reached is, now, the folder `target` (same device and inode, or the Windows
+/// equivalent): a link or file on the way, and a `target` that is another folder than the one the names reach, are
+/// refused, and so is one whose identity cannot be read. The identity of the folder the search found is not kept, so a
+/// real folder moved into place after the search is not seen. The check and the operation are two steps; what a folder
+/// swapped in between them does is the race every pane has.
+pub fn check_same_folder_below(base: &std::path::Path, dir: &str, target: &std::path::Path) -> std::io::Result<()> {
+    listed::check_same_folder_below(base, dir, target)
+}
 
 /// Opens the regular file `listed` below `base` for reading, with its metadata, the way a checksum check opens the files
 /// it lists (no link followed, no pipe waited on); the file viewer opens its file through this.
@@ -180,6 +196,8 @@ mod extract_scripted_tests;
 mod extract_tests;
 #[cfg(test)]
 mod failure_tests;
+#[cfg(test)]
+mod folder_below_tests;
 #[cfg(all(test, unix))]
 mod held_tests;
 #[cfg(test)]
@@ -190,6 +208,8 @@ mod move_tests;
 mod origin_tests;
 #[cfg(test)]
 mod pack_conflict_tests;
+#[cfg(test)]
+mod pack_items_tests;
 #[cfg(test)]
 mod pack_tests;
 #[cfg(all(test, unix))]
@@ -218,7 +238,7 @@ pub(crate) use open::create_new;
 pub(crate) use partial::{Partial, run_token};
 pub use request::{AnswerError, PackJob, Refused, Request, Task, UnknownJob};
 pub use trash::{CAN_UNTRASH, Trashed, UntrashFailure};
-pub use validate::name_fits;
+pub use validate::{has_nested_names, is_item_path, name_fits};
 
 use std::io;
 use std::path::{Path, PathBuf};

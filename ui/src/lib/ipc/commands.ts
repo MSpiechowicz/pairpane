@@ -6,6 +6,9 @@ import type { EditOpened } from './bindings/EditOpened';
 import type { EditSaved } from './bindings/EditSaved';
 import type { EditSaveOptions } from './bindings/EditSaveOptions';
 import type { ExternalEdit } from './bindings/ExternalEdit';
+import type { FindEvent } from './bindings/FindEvent';
+import type { FindId } from './bindings/FindId';
+import type { FindQuery } from './bindings/FindQuery';
 import type { ItemProperties } from './bindings/ItemProperties';
 import type { JobId } from './bindings/JobId';
 import type { JobTask } from './bindings/JobTask';
@@ -32,6 +35,12 @@ import type { VolumeEvent } from './bindings/VolumeEvent';
 import { cmd } from './command-spec';
 import type { EventSink } from './transport';
 
+/**
+ * Where the folder of search results is, for the backend to check on the way to it (see `within.rs`): `dir` is its path
+ * below the folder searched `root`, names joined with `/` (`''` is the root itself).
+ */
+type ResultFolder = { root: string; dir: string };
+
 /** Every backend command with its argument and result types; the key is the Rust `#[tauri::command]` name. */
 export const commands = {
   app_info: cmd<undefined, AppInfo>(),
@@ -55,9 +64,13 @@ export const commands = {
   >(),
   archive_password: cmd<{ archive: string; password: string }, boolean>(),
   pane_folder_size: cmd<{ pane: PaneId; path: string; name: string; onEvent: EventSink<SizeEvent> }, null>(),
+  find_start: cmd<{ query: FindQuery; onEvent: EventSink<FindEvent> }, FindId>(),
+  find_cancel: cmd<{ id: FindId }, null>(),
+  find_forget: cmd<{ id: FindId }, null>(),
+  find_open: cmd<{ pane: PaneId; id: FindId; onEvent: EventSink<ListEvent> }, null>(),
   volumes_list: cmd<{ onEvent: EventSink<VolumeEvent> }, null>(),
   ops_subscribe: cmd<{ onEvent: EventSink<OpsEvent> }, null>(),
-  ops_start: cmd<{ kind: OpKind; from: string; names: string[]; to: string; verify: boolean }, JobId>(),
+  ops_start: cmd<{ kind: OpKind; from: string; names: string[]; to: string; verify: boolean; within?: ResultFolder }, JobId>(),
   ops_extract: cmd<{ archive: string; dir: string; names: string[]; to: string }, JobId>(),
   ops_task: cmd<{ from: string; names: string[]; task: JobTask }, JobId>(),
   ops_pack: cmd<
@@ -76,9 +89,9 @@ export const commands = {
   ops_control: cmd<{ job: JobId; action: ControlAction }, null>(),
   ops_answer: cmd<{ job: JobId; question: number; answer: Answer; all: boolean }, null>(),
   ops_rename: cmd<{ path: string; from: string; to: string }, null>(),
-  ops_trash: cmd<{ path: string; names: string[] }, TrashOutcome>(),
+  ops_trash: cmd<{ path: string; names: string[]; within?: ResultFolder }, TrashOutcome>(),
   ops_untrash: cmd<{ token: number }, number>(),
-  ops_delete: cmd<{ path: string; names: string[] }, null>(),
+  ops_delete: cmd<{ path: string; names: string[]; within?: ResultFolder }, null>(),
   ops_mkdir: cmd<{ path: string; name: string }, string>(),
   ops_mkfile: cmd<{ path: string; name: string }, boolean>(),
   ops_properties: cmd<{ path: string; name: string }, ItemProperties>(),

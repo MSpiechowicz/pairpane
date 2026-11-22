@@ -4,6 +4,7 @@
 pub mod app;
 pub mod archives;
 pub mod edit;
+pub mod find;
 pub mod items;
 mod limit;
 pub mod ops;
@@ -13,6 +14,7 @@ pub mod state;
 pub mod updates;
 pub mod view;
 pub mod volumes;
+mod within;
 
 #[cfg(test)]
 mod testing;

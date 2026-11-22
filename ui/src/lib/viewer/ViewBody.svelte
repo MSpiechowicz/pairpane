@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { displayName } from '$lib/panes/format';
+
   import HexView from './HexView.svelte';
   import { PREVIEWS } from './previews';
   import type { ViewSearch } from './search.svelte';
@@ -22,7 +24,7 @@
 
 <div class="body">
   {#if session.status === 'failed'}
-    <p class="message" role="alert">{session.error}</p>
+    <p class="message" role="alert">{displayName(session.error ?? '')}</p>
   {:else if session.status === 'opening'}
     <p class="message" role="status">Opening…</p>
   {:else if session.shown === 'text'}

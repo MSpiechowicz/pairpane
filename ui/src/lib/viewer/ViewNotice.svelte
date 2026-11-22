@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { displayName } from '$lib/panes/format';
+
   let {
     error,
     text,
@@ -11,9 +13,9 @@
 </script>
 
 {#if error}
-  <p class="notice" role="alert">{error}</p>
+  <p class="notice" role="alert">{displayName(error)}</p>
 {:else if text}
-  <p class="notice">{text}</p>
+  <p class="notice">{displayName(text)}</p>
 {/if}
 
 <style>

@@ -2,6 +2,7 @@
   import type { Crumb } from '$lib/ipc/bindings/Crumb';
   import type { Volume } from '$lib/ipc/bindings/Volume';
   import { crumbKey } from '$lib/panes/archive';
+  import { displayName } from '$lib/panes/format';
   import { anchored, tabLabel } from '$lib/panes/crumbs';
   import type { PaneTabs } from '$lib/panes/tabs.svelte';
 
@@ -71,14 +72,18 @@
               {#if position > 0}<i>/</i>{/if}
               <button
                 type="button"
-                class:last={position === crumbs.length - 1}
-                onclick={() => goTo(crumb)}>{crumb.name}</button
+                class:last={position === crumbs.length - 1 && listing.results === undefined}
+                onclick={() => goTo(crumb)}>{displayName(crumb.name)}</button
               >
             {/each}
+            <!-- The crumbs are the folder searched; the results are what is listed in it. -->
+            {#if listing.results !== undefined}
+              <i>/</i><span class="found">Search results</span>
+            {/if}
           </nav>
         </div>
       {:else}
-        {@const label = tabLabel(tab.path, volumes)}
+        {@const label = displayName(tabLabel(tab.path, volumes))}
         <div class="tab">
           <button class="name" type="button" onclick={() => tabs.select(index)} onauxclick={(e) => closeOnMiddle(e, index)}
             >{label}</button
@@ -216,9 +221,15 @@
     padding: 2px 5px;
   }
 
-  .crumbs button.last {
+  .crumbs button.last,
+  .crumbs .found {
     color: var(--text);
     font-weight: 600;
+  }
+
+  .crumbs .found {
+    flex: none;
+    padding: 2px 5px;
   }
 
   .crumbs i {

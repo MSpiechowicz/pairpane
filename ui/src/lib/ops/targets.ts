@@ -1,3 +1,4 @@
+import { withoutNested } from '$lib/find/results';
 import type { Entry } from '$lib/ipc/bindings/Entry';
 import { type ArchiveSpot, archiveFile, archiveName, isWritableArchive } from '$lib/panes/archive';
 import type { PaneView } from '$lib/panes/view.svelte';
@@ -10,7 +11,8 @@ import type { FileAction } from './dialogs';
  * folder of an archive.
  */
 export type OpRequest =
-  | { kind: 'copy' | 'move'; from: string; names: string[]; to: string }
+  /** `results`: the names are paths below `from` (the folder searched), as the rows of a search-results pane have them. */
+  | { kind: 'copy' | 'move'; from: string; names: string[]; to: string; results?: true }
   /** The parts that go with `name` (its `.001`) are joined into a file in the folder `to`. */
   | { kind: 'combine'; from: string; name: string; to: string }
   | { kind: 'rename'; path: string; name: string; dir: boolean }
@@ -63,14 +65,39 @@ export const CANT_ADD_NOTICE = 'Files can’t be added to this kind of archive.'
 /** What the card says when an archive's items would be extracted into another archive. */
 export const EXTRACT_INTO_ARCHIVE_NOTICE = 'Can’t extract into an archive.';
 
+/** What the card says when an action needs the plain names of one folder, which search results are not. */
+export const RESULTS_NOTICE = 'Open the file’s folder first.';
+
+/** What the card says when something would be written into a pane that shows search results. */
+export const INTO_RESULTS_NOTICE = 'Can’t write into search results.';
+
+/** What the card says when search results would be copied into an archive. */
+export const RESULTS_TO_ARCHIVE_NOTICE = 'Search results can’t be copied into an archive — open the file’s folder first.';
+
+/** The actions that work on search results: they take the names below the folder searched, one folder at a time. */
+const FROM_RESULTS: ReadonlySet<FileAction> = new Set(['copy', 'trash', 'deletePermanently', 'pack']);
+
 /** The actions that write into the other pane's folder. */
 const WRITES_TO_OTHER: ReadonlySet<FileAction> = new Set(['copy', 'move', 'symlink', 'hardlink', 'split', 'combine', 'extract']);
 
 /**
  * Why `action` cannot run between these panes, or `undefined` when it can: nothing changes an archive (copying out
  * of one is extracting), and only copying from a folder is written into one, when it is of a kind that can be.
+ * Search results are only copied, removed and packed, and nothing is written into them.
  */
 export function refusal(action: FileAction, source: PaneView, other: PaneView): string | undefined {
+  if (source.listing.results !== undefined && !FROM_RESULTS.has(action)) {
+    return RESULTS_NOTICE;
+  }
+
+  if (other.listing.results !== undefined && WRITES_TO_OTHER.has(action)) {
+    return INTO_RESULTS_NOTICE;
+  }
+
+  if (source.listing.results !== undefined && action === 'copy' && other.listing.archive !== undefined) {
+    return RESULTS_TO_ARCHIVE_NOTICE;
+  }
+
   if (source.listing.readonly && action !== 'copy' && action !== 'extract') {
     return READ_ONLY_NOTICE;
   }
@@ -102,6 +129,10 @@ export const isFirstPart = (name: string) => name.endsWith('.001');
  * archives that are selected in a folder). Copying into a pane that shows an archive adds the items to it.
  */
 export function requestFor(kind: DialogKind, source: PaneView, other: PaneView): OpRequest | undefined {
+  if (kind === 'copy' && source.listing.results !== undefined) {
+    return resultsRequest(source, other.listing.path ?? '');
+  }
+
   if (kind === 'extract' || (kind === 'copy' && source.listing.readonly)) {
     return extractRequest(source, other.listing.path ?? '');
   }
@@ -143,6 +174,18 @@ export function requestFor(kind: DialogKind, source: PaneView, other: PaneView):
   }
 
   return { kind, from: path, names, to: other.listing.path ?? '' };
+}
+
+/** The names of the chosen results, as paths below the folder searched; those inside another chosen one are left out. */
+export function resultTargets(view: PaneView): string[] {
+  return withoutNested(targets(view));
+}
+
+/** Copying the chosen results of a search into the folder `to`: their names are paths below the folder searched. */
+function resultsRequest(source: PaneView, to: string): OpRequest | undefined {
+  const from = source.listing.folder;
+  const names = resultTargets(source);
+  return from !== undefined && names.length > 0 ? { kind: 'copy', from, names, to, results: true } : undefined;
 }
 
 /** The archives to extract from `source`: the open archive's selection, or the archives chosen in its folder. */

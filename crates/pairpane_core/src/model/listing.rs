@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::{ArchiveSpot, IpcError};
+use super::{ArchiveSpot, FindId, IpcError};
 
 /// Which of the two panes a command is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -79,6 +79,11 @@ pub enum ListEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         archive: Option<ArchiveSpot>,
+        /// Set when the listing is the results of a search: then `path` is the folder searched and every entry's name is
+        /// its path below it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        results: Option<FindId>,
     },
     /// Entries `offset..offset + entries.len()`.
     Batch { offset: u32, entries: Vec<Entry> },

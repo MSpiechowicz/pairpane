@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { MdDocument } from '$lib/ipc/bindings/MdDocument';
   import { IpcFailure } from '$lib/ipc/transport';
+  import { displayName } from '$lib/panes/format';
 
   import MdBlock from './MdBlock.svelte';
   import type { PreviewProps } from './previews';
@@ -42,7 +43,7 @@
 
 <div class="markdown">
   <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scrolling region takes the keyboard to be scrolled by it) -->
-  <div class="page" role="document" aria-label="Rendered {session.name}" tabindex="0" {@attach takeFocus(focus)}>
+  <div class="page" role="document" aria-label="Rendered {displayName(session.name)}" tabindex="0" {@attach takeFocus(focus)}>
     {#if doc}
       <MdBlock blocks={doc.blocks} />
     {/if}

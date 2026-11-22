@@ -1,5 +1,6 @@
 <script lang="ts">
   import DialogFooter from '$lib/ops/DialogFooter.svelte';
+  import { displayName } from '$lib/panes/format';
 
   import Modal from './Modal.svelte';
 
@@ -29,7 +30,7 @@
 
 <Modal {title} onClose={onCancel}>
   {#if message}
-    <p class="message">{message}</p>
+    <p class="message">{displayName(message)}</p>
   {/if}
   <DialogFooter busy={false} {confirm} {alternate} {danger} focus={danger ? 'cancel' : 'confirm'} {onConfirm} {onAlternate} {onCancel} />
 </Modal>

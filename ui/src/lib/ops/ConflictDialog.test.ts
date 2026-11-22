@@ -28,6 +28,21 @@ describe('ConflictDialog', () => {
     expect(screen.getByText(/^4\.0 KB/).parentElement).toHaveTextContent('newer');
   });
 
+  it('writes out a name that would pass for another, in the title and on the Rename button', async () => {
+    await asked(conflict(1, 2, { name: 'invoice\u202Efdp.exe', suggested: 'invoice\u202Efdp (2).exe' }));
+
+    expect(screen.getByRole('dialog', { name: '“invoice⟨U+202E⟩fdp.exe” already exists' })).toBeInTheDocument();
+    expect(button('Rename → invoice⟨U+202E⟩fdp (2).exe')).toBeInTheDocument();
+  });
+
+  it('answers with the real names: nothing but the choice goes to the backend', async () => {
+    const { calls } = await asked(conflict(5, 3, { name: 'a\u202Eb.pdf', suggested: 'a\u202Eb (2).pdf' }));
+
+    await fireEvent.click(button(/^Rename/));
+
+    expect(calls('ops_answer')).toEqual([{ job: 5, question: 3, answer: 'rename', all: false }]);
+  });
+
   it('marks nothing when the dates are equal or unknown', async () => {
     const same = conflict(1);
     await asked({ ...same, target: { ...same.target, modified: same.source.modified } });

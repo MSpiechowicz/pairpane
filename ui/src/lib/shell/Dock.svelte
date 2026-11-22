@@ -1,13 +1,19 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
 
-  /** The function keys, in key order. Delete is the one destructive key and is marked as such. */
-  const KEYS: readonly { key: string; label: string; hot?: boolean }[] = [
+  import { RESULTS_NOTICE } from '$lib/ops/targets';
+
+  /**
+   * The function keys, in key order. Delete is the one destructive key and is marked as such. `needsFolder`: the key
+   * does nothing on search results (they are not a folder), which the dock says. F4 included: a result is edited
+   * only after its folder has been opened.
+   */
+  const KEYS: readonly { key: string; label: string; hot?: boolean; needsFolder?: boolean }[] = [
     { key: 'F3', label: 'View' },
-    { key: 'F4', label: 'Edit' },
+    { key: 'F4', label: 'Edit', needsFolder: true },
     { key: 'F5', label: 'Copy' },
-    { key: 'F6', label: 'Move' },
-    { key: 'F7', label: 'New folder' },
+    { key: 'F6', label: 'Move', needsFolder: true },
+    { key: 'F7', label: 'New folder', needsFolder: true },
     { key: 'F8', label: 'Delete', hot: true },
   ];
 
@@ -16,11 +22,14 @@
 
   let {
     inArchive = false,
+    inResults = false,
     onKey,
     children,
   }: {
     /** The active pane shows a folder inside an archive: there F5 extracts the selection instead of copying it. */
     inArchive?: boolean;
+    /** The active pane shows search results: moving and making a folder are not possible there (the key says why when used). */
+    inResults?: boolean;
     /** A function key was clicked; it does what pressing it does. */
     onKey?: (key: string) => void;
     /** Between the command line and the keys. */
@@ -37,9 +46,19 @@
   </label>
   {@render children?.()}
   <div class="keys">
-    {#each KEYS as { key, label: plain, hot } (key)}
+    {#each KEYS as { key, label: plain, hot, needsFolder } (key)}
       {@const label = labelOf(key, plain)}
-      <button class="dock-key fk" class:hot type="button" aria-label="{label} ({key})" onclick={() => onKey?.(key)}>
+      {@const unavailable = inResults && needsFolder}
+      <button
+        class="dock-key fk"
+        class:hot
+        class:unavailable
+        type="button"
+        aria-label="{label} ({key})"
+        aria-disabled={unavailable || undefined}
+        title={unavailable ? RESULTS_NOTICE : undefined}
+        onclick={() => onKey?.(key)}
+      >
         <kbd>{key}</kbd><span class="label">{label}</span>
       </button>
     {/each}
@@ -103,6 +122,11 @@
     background: color-mix(in srgb, var(--accent) 12%, transparent);
     color: var(--accent-2);
     text-align: center;
+  }
+
+  /* Still clickable: the click says why it does nothing. */
+  .fk.unavailable {
+    opacity: 0.45;
   }
 
   .fk.hot {

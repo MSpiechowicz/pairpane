@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { displayName } from '$lib/panes/format';
+
   let {
     text,
     error = false,
@@ -6,6 +8,7 @@
     onUndo,
     onClose,
   }: {
+    /** Shown as it is said, with controls and invisible characters of any name in it written out. */
     text: string;
     /** A failure: shown in the danger colour. */
     error?: boolean;
@@ -47,7 +50,7 @@
   onfocusin={() => (focused = true)}
   onfocusout={(event) => (focused = event.currentTarget.contains(event.relatedTarget as Node | null))}
 >
-  <p class="m-0" class:text-danger={error}>{text}</p>
+  <p class="m-0" class:text-danger={error}>{displayName(text)}</p>
   <div class="mt-3 flex justify-end gap-2">
     {#if undoable}
       <button class="btn" type="button" onclick={onUndo}>Undo</button>

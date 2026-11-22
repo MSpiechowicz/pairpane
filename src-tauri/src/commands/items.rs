@@ -24,6 +24,7 @@ use tauri_plugin_opener::OpenerExt;
 use super::limit::{Permit, ThreadCap};
 use super::ops::{check_name, checked_names, failed, names_too_large};
 use super::panes::resolve;
+use super::within::{Within, confirm};
 use crate::error::{CommandError, CommandResult};
 
 /// Threads the app may have at once for creating, linking and moving to the Trash: a stuck one is stepped around by
@@ -67,6 +68,26 @@ struct Undo {
 }
 
 impl Items {
+    /// [`Items::trash`], after `within` (when given) has been checked to name the folder `path` (see `within.rs`; the
+    /// check takes a place of the quick cap for as long as it runs).
+    async fn trash_checked(
+        &self,
+        path: String,
+        names: Vec<String>,
+        within: Option<Within>,
+    ) -> CommandResult<TrashOutcome> {
+        confirm(&self.quick, QUICK_THREADS, within, &path).await?;
+
+        self.trash(path, names).await
+    }
+
+    /// [`Items::delete`], after `within` (when given) has been checked to name the folder `path`.
+    async fn delete_checked(&self, path: String, names: Vec<String>, within: Option<Within>) -> CommandResult<()> {
+        confirm(&self.quick, QUICK_THREADS, within, &path).await?;
+
+        self.delete(path, names).await
+    }
+
     /// Moves the `names` in the folder `path` to the Trash, on a blocking thread. A move that stopped at an item
     /// still succeeds: the outcome says so, and holds the token for the items that did go.
     async fn trash(&self, path: String, names: Vec<String>) -> CommandResult<TrashOutcome> {
@@ -257,10 +278,16 @@ impl Items {
 }
 
 /// Moves the `names` in the folder `path` to the Trash (the Recycle Bin on Windows); a move that stopped at an item
-/// still returns, with the token for the items that went and the failure.
+/// still returns, with the token for the items that went and the failure. With `within` (the folder of search results)
+/// the folder is first checked to be the one that was searched (see `within.rs`).
 #[tauri::command]
-pub async fn ops_trash(items: State<'_, Items>, path: String, names: Vec<String>) -> CommandResult<TrashOutcome> {
-    items.trash(path, names).await
+pub async fn ops_trash(
+    items: State<'_, Items>,
+    path: String,
+    names: Vec<String>,
+    within: Option<Within>,
+) -> CommandResult<TrashOutcome> {
+    items.trash_checked(path, names, within).await
 }
 
 /// Puts back the items of the move to the Trash that `token` stands for and returns how many came back.
@@ -269,10 +296,16 @@ pub async fn ops_untrash(items: State<'_, Items>, token: u32) -> CommandResult<u
     items.untrash(token).await
 }
 
-/// Deletes the `names` in the folder `path` for good. A folder goes with what is in it; a link goes alone.
+/// Deletes the `names` in the folder `path` for good. A folder goes with what is in it; a link goes alone. With `within`
+/// (the folder of search results) the folder is first checked to be the one that was searched (see `within.rs`).
 #[tauri::command]
-pub async fn ops_delete(items: State<'_, Items>, path: String, names: Vec<String>) -> CommandResult<()> {
-    items.delete(path, names).await
+pub async fn ops_delete(
+    items: State<'_, Items>,
+    path: String,
+    names: Vec<String>,
+    within: Option<Within>,
+) -> CommandResult<()> {
+    items.delete_checked(path, names, within).await
 }
 
 /// Creates the folder `name` in the folder `path`; `a/b/c` creates the three one inside the other. Returns the first
@@ -415,3 +448,5 @@ pub mod props;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod within_tests;

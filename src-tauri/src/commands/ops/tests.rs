@@ -197,9 +197,8 @@ fn an_invalid_start_is_refused_before_the_engine_is_asked() {
         (root(), &["a/b"][..], elsewhere()),
         (root(), &["a"][..], "../x".to_owned()),
     ] {
-        let error = ops
-            .start(OpKind::Copy, from.clone(), names(selection), to, false)
-            .expect_err(&from);
+        let error =
+            block_on(ops.start(OpKind::Copy, from.clone(), names(selection), to, false, None)).expect_err(&from);
 
         assert_eq!(error.code(), IpcErrorCode::InvalidInput, "{from}");
     }
@@ -419,15 +418,15 @@ fn start_copy(names_to_copy: &[&str], existing: Option<&str>) -> Started {
     let (channel, events) = collecting_channel();
     ops.subscribe(channel);
 
-    let id = ops
-        .start(
-            OpKind::Copy,
-            from.path().to_string_lossy().into_owned(),
-            names(names_to_copy),
-            to.path().to_string_lossy().into_owned(),
-            false,
-        )
-        .expect("accepted");
+    let id = block_on(ops.start(
+        OpKind::Copy,
+        from.path().to_string_lossy().into_owned(),
+        names(names_to_copy),
+        to.path().to_string_lossy().into_owned(),
+        false,
+        None,
+    ))
+    .expect("accepted");
 
     Started {
         _from: from,
@@ -439,7 +438,7 @@ fn start_copy(names_to_copy: &[&str], existing: Option<&str>) -> Started {
 }
 
 /// Waits (up to 20 seconds) until an event that `wanted` accepts has been received.
-fn wait_for(events: &Arc<Mutex<Vec<OpsEvent>>>, wanted: impl Fn(&OpsEvent) -> bool) {
+pub(super) fn wait_for(events: &Arc<Mutex<Vec<OpsEvent>>>, wanted: impl Fn(&OpsEvent) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(20);
 
     while !received(events).iter().any(&wanted) {

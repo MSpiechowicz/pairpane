@@ -8,9 +8,11 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::listing::platform;
 
+use super::Task;
 use super::identity::FileId;
 use super::report::refusal;
 use super::transfer::{MAX_DEPTH, Run, Stop};
+use super::validate::is_item_path;
 use super::volume;
 
 /// What an entry of a folder is. A link is a link whatever it points at: nothing here follows one.
@@ -226,7 +228,11 @@ impl Run<'_> {
         for folder in folders {
             platform::check_folder(folder).map_err(|reason| refusal(io::ErrorKind::InvalidInput, reason))?;
         }
-        if !request.names.iter().all(|name| platform::is_plain_name(name)) {
+        let spelled = |name: &String| match request.task {
+            Task::Pack { .. } => is_item_path(name),
+            _ => platform::is_plain_name(name),
+        };
+        if !request.names.iter().all(spelled) {
             return Err(refusal(
                 io::ErrorKind::InvalidInput,
                 "an item has a name that cannot be used here",
