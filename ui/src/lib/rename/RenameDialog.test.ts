@@ -334,6 +334,19 @@ describe('RenameDialog presets', () => {
     expect(screen.getAllByRole('alert').map((alert) => alert.textContent)).toContain('Fix the rule before saving it.');
   });
 
+  it('a rule whose counter field holds no number is not kept either', async () => {
+    const { renames } = open({ rename_preview: () => rowsOf([row('a.txt', 'x.txt')]) }, ['a.txt']);
+    await vi.waitFor(() => expect(apply()).toBeEnabled());
+    await type(screen.getByRole('spinbutton', { name: 'Step' }), '');
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Save as…' }));
+    await type(field('Name of the preset'), 'Half');
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(renames.list).toEqual([]);
+    expect(screen.getAllByRole('alert').map((alert) => alert.textContent)).toContain('Fix the rule before saving it.');
+  });
+
   it('Enter in the name of a preset saves it and does not rename', async () => {
     const { renames, calls } = open({ rename_preview: () => rowsOf([row('a.txt', 'x.txt')]) }, ['a.txt']);
     await vi.waitFor(() => expect(apply()).toBeEnabled());

@@ -1,6 +1,7 @@
 //! What a rename does to a name after the templates: search and replace over the whole name, and the change of case.
 
 use std::borrow::Cow;
+use std::ops::Range;
 
 use regex::Regex;
 
@@ -53,21 +54,47 @@ impl Search {
     /// is returned is then longer than that by the rest of a replacement at most, and cut short of the rest of the
     /// name), so a replacement that is long or matches at every position cannot make a result of any size.
     pub(super) fn apply(&self, name: &str, limit: usize) -> String {
+        // The groups of a match are only needed to expand `$` in the replacement; without that, finding the matches
+        // alone is faster.
+        if self.literal || !self.replace.contains('$') {
+            return self.splice(
+                name,
+                limit,
+                self.regex.find_iter(name),
+                |found| Some(found.range()),
+                |_, out| out.push_str(&self.replace),
+            );
+        }
+
+        self.splice(
+            name,
+            limit,
+            self.regex.captures_iter(name),
+            |captures| captures.get(0).map(|found| found.range()),
+            |captures, out| captures.expand(&self.replace, out),
+        )
+    }
+
+    /// `name` with the span of each of `matches` (`span`) replaced by what `write` appends, as `apply` says.
+    fn splice<M>(
+        &self,
+        name: &str,
+        limit: usize,
+        matches: impl Iterator<Item = M>,
+        span: impl Fn(&M) -> Option<Range<usize>>,
+        write: impl Fn(&M, &mut String),
+    ) -> String {
         let mut out = String::with_capacity(name.len());
         let mut tail = 0;
 
-        for captures in self.regex.captures_iter(name) {
-            let Some(found) = captures.get(0) else {
+        for found in matches {
+            let Some(span) = span(&found) else {
                 break;
             };
 
-            out.push_str(&name[tail..found.start()]);
-            if self.literal {
-                out.push_str(&self.replace);
-            } else {
-                captures.expand(&self.replace, &mut out);
-            }
-            tail = found.end();
+            out.push_str(&name[tail..span.start]);
+            write(&found, &mut out);
+            tail = span.end;
 
             if self.first_only || out.len() > limit {
                 break;

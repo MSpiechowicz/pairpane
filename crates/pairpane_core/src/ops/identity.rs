@@ -5,6 +5,8 @@
 //! are all the same folder. The handle is opened for its attributes only and never follows a link: a link has the
 //! identity of the link itself, and nothing here can make Windows connect to a network host.
 //!
+//! `FolderId` is the same identity as plain numbers, for a log that is kept and must not keep a handle open.
+//!
 //! An identity that cannot be read (`None`) is never evidence that two paths differ: callers fail closed and treat
 //! the two as the same file (nothing is overwritten, deleted or entered). Names are not compared instead, as on
 //! Windows an ACL can refuse the open while two spellings of one folder still exist. The file index of a filesystem
@@ -22,6 +24,19 @@ use super::open::{BACKUP_SEMANTICS, OPEN_REPARSE_POINT};
 /// read still has one.
 #[cfg(windows)]
 const READ_ATTRIBUTES: u32 = 0x0080;
+
+/// `path` opened for its attributes only, without following a link.
+#[cfg(windows)]
+fn open_for_identity(path: &Path) -> Option<std::fs::File> {
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    OpenOptions::new()
+        .access_mode(READ_ATTRIBUTES)
+        .custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT)
+        .open(path)
+        .ok()
+}
 
 /// The identity of one existing file, folder or link.
 #[cfg(unix)]
@@ -62,16 +77,39 @@ impl FileId {
 
     #[cfg(windows)]
     pub(super) fn of_path(path: &Path) -> Option<Self> {
-        use std::fs::OpenOptions;
-        use std::os::windows::fs::OpenOptionsExt;
-
-        let file = OpenOptions::new()
-            .access_mode(READ_ATTRIBUTES)
-            .custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT)
-            .open(path)
-            .ok()?;
+        let file = open_for_identity(path)?;
 
         same_file::Handle::from_file(file).ok().map(Self)
+    }
+}
+
+/// The identity of a folder as plain numbers, for what must outlive a job (the log of a rename, kept for an undo).
+/// Unlike [`FileId`] it never holds a handle: on Windows the handle it is read from is closed before it is returned,
+/// so remembering it blocks no safe-eject and keeps no deleted folder delete-pending.
+///
+/// It is the device and inode (Unix) or the volume serial number and file index (Windows). Both can be reused when the
+/// folder is deleted and another is created, and a filesystem that does not keep them stable (some FUSE and CIFS
+/// mounts) gives another one at each open; `RenameLog` says what the undo makes of either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FolderId((u64, u64));
+
+impl FolderId {
+    /// The identity of the folder `path` is right now (a link being its own thing); `None` when it cannot be read. On
+    /// Unix a job reads it from the folder it holds open (`Held::identity`), so this is for the tests.
+    #[cfg(all(unix, test))]
+    pub(super) fn of_path(path: &Path) -> Option<Self> {
+        let meta = std::fs::symlink_metadata(path).ok()?;
+
+        crate::listing::platform::identity(&meta).map(Self)
+    }
+
+    #[cfg(windows)]
+    pub(super) fn of_path(path: &Path) -> Option<Self> {
+        let file = open_for_identity(path)?;
+        let info = winapi_util::file::information(&file).ok()?;
+
+        // `file` is closed here, as the function ends.
+        Some(Self((info.volume_serial_number(), info.file_index())))
     }
 }
 
@@ -107,15 +145,15 @@ impl Run<'_> {
 impl super::held::Held {
     /// The identity of the folder this holds open (on Windows, of the path it is held by); `None` when it cannot be read.
     #[cfg(unix)]
-    pub(super) fn identity(&self) -> Option<FileId> {
+    pub(super) fn identity(&self) -> Option<FolderId> {
         let meta = self.dir.metadata().ok()?;
 
-        crate::listing::platform::identity(&meta).map(FileId::of_ids)
+        crate::listing::platform::identity(&meta).map(FolderId)
     }
 
     #[cfg(windows)]
-    pub(super) fn identity(&self) -> Option<FileId> {
-        FileId::of_path(&self.path)
+    pub(super) fn identity(&self) -> Option<FolderId> {
+        FolderId::of_path(&self.path)
     }
 }
 

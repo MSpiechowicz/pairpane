@@ -102,7 +102,7 @@ impl Run<'_> {
         }
 
         match (log.folder(), here) {
-            (Some(was), Some(now)) if *was == now => Ok(()),
+            (Some(was), Some(now)) if was == now => Ok(()),
             _ => Err(refusal(io::ErrorKind::Other, "The folder changed; nothing was undone.").into()),
         }
     }

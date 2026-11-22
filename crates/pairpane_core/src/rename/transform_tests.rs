@@ -74,6 +74,32 @@ fn the_text_after_the_last_match_is_kept_when_the_result_stays_within_the_limit(
 }
 
 #[test]
+fn a_replacement_without_a_dollar_gives_what_the_expanding_path_gives() {
+    // `$$` is a literal `$` once expanded, so a pattern with it takes the path that reads the groups; the same
+    // pattern with `-` takes the one that does not. Every `$` of the first result stands where a `-` of the second does.
+    for pattern in ["a+", "x?", "(a)|b", "^", "$"] {
+        for first_only in [false, true] {
+            let plain = searching(pattern, "-", |rule| {
+                rule.regex = true;
+                rule.first_only = first_only;
+            });
+            let expanded = searching(pattern, "$$", |rule| {
+                rule.regex = true;
+                rule.first_only = first_only;
+            });
+
+            for (name, limit) in [("aabxa", LIMIT), ("", LIMIT), ("ba.ab", 3), ("aaaa", 2)] {
+                assert_eq!(
+                    plain.apply(name, limit),
+                    expanded.apply(name, limit).replace('$', "-"),
+                    "{pattern} {first_only} {name:?} {limit}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn the_case_of_the_search_matters_only_when_asked() {
     let exact = searching("abc", "-", |_| {});
     let loose = searching("abc", "-", |rule| rule.match_case = false);

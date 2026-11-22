@@ -4,13 +4,20 @@
 //! finished when it ends, however it ends. The caller that made the log reads it after that.
 //!
 //! The log also keeps the identity of the folder the job opened (see `identity`), so that the undo can refuse to act on a
-//! folder that is not that one any more (the path was replaced by a link to another folder, say).
+//! folder that is not that one any more (the path was replaced by a link to another folder, say). It is kept as plain
+//! numbers (`FolderId`, device and inode, or volume serial number and file index on Windows), never as an open handle:
+//! the log lives as long as the undo can be asked for, and a handle would hold the volume (no safe-eject) and a
+//! deleted folder (delete-pending) all that time.
+//!
+//! Two limits are accepted. The numbers can be reused when the folder is deleted and another is created in its place:
+//! the undo then acts in the new folder, and still skips every item that is not there. And some FUSE and CIFS mounts
+//! give another inode number at each open: the undo is then refused, the safe side.
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use super::control::locked;
-use super::identity::FileId;
+use super::identity::FolderId;
 
 #[derive(Default)]
 struct Entries {
@@ -18,7 +25,7 @@ struct Entries {
     done: Vec<(String, String)>,
     finished: bool,
     /// The folder the job opened, when its identity could be read. An undo that has none to compare with is refused.
-    folder: Option<Arc<FileId>>,
+    folder: Option<FolderId>,
 }
 
 /// The renames a job made. Clones share one log; two logs are equal when they are the same one. `Debug` says how many
@@ -42,7 +49,7 @@ impl RenameLog {
     /// The log of the undo of this job: empty, and expecting the folder that this job opened.
     #[must_use]
     pub fn undoing(&self) -> Self {
-        let folder = locked(&self.0).folder.clone();
+        let folder = locked(&self.0).folder;
 
         Self(Arc::new(Mutex::new(Entries {
             folder,
@@ -54,17 +61,17 @@ impl RenameLog {
     #[cfg(test)]
     pub(super) fn expecting(path: &std::path::Path) -> Self {
         let log = Self::default();
-        log.set_folder(FileId::of_path(path));
+        log.set_folder(FolderId::of_path(path));
 
         log
     }
 
-    pub(super) fn set_folder(&self, id: Option<FileId>) {
-        locked(&self.0).folder = id.map(Arc::new);
+    pub(super) fn set_folder(&self, id: Option<FolderId>) {
+        locked(&self.0).folder = id;
     }
 
-    pub(super) fn folder(&self) -> Option<Arc<FileId>> {
-        locked(&self.0).folder.clone()
+    pub(super) fn folder(&self) -> Option<FolderId> {
+        locked(&self.0).folder
     }
 
     pub(super) fn push(&self, from: &str, to: &str) {

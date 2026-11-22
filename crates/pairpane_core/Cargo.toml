@@ -68,6 +68,7 @@ trash.workspace = true
 [target.'cfg(windows)'.dependencies]
 same-file.workspace = true
 sysinfo.workspace = true
+winapi-util.workspace = true
 windows.workspace = true
 windows-sys.workspace = true
 

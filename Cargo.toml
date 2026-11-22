@@ -67,6 +67,10 @@ uzers = { version = "0.12.2", default-features = false, features = ["cache"] }
 # without following links), so two spellings of one place (8.3 names, case, a volume GUID path) compare equal. A safe
 # API over `winapi-util`; both are in the lockfile already through `walkdir`.
 same-file = "1.0.6"
+# Windows only: the plain (volume serial number, file index) of a folder read through a handle that is closed at once
+# (pairpane_core::ops::identity::FolderId), for what must be remembered without keeping a handle open. The version
+# `same-file` already locks.
+winapi-util = "0.1.11"
 # Windows only: setting the hidden, system and archive attributes through a handle (`SetFileInformationByHandle`, an
 # `unsafe` block in pairpane_core::ops::win_attrs) and the Job Object that holds the HEIC helper process
 # (pairpane_core::view::heic::job). Only the features those calls need; already in the lockfile through other

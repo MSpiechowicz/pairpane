@@ -74,7 +74,9 @@
 
   /** What Save as keeps: the rule, unless it is faulty (the backend drops such a rule when it is loaded). */
   function savable(): RenameRule | string {
-    return renamer.error === undefined ? ($state.snapshot(renamer.rule) as RenameRule) : 'Fix the rule before saving it.';
+    return renamer.error === undefined && renamer.counterFault === undefined
+      ? ($state.snapshot(renamer.rule) as RenameRule)
+      : 'Fix the rule before saving it.';
   }
 
   async function submit() {
