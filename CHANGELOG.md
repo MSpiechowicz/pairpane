@@ -1,3 +1,10 @@
+# [0.18.0](https://github.com/MSpiechowicz/pairpane/compare/v0.17.0...v0.18.0) (2026-11-22)
+
+
+### Features
+
+* **rename:** multi-rename (Ctrl+M) with live preview, safe batch job, undo and presets (#38) ([3970245](https://github.com/MSpiechowicz/pairpane/commit/3970245648c96263c8ee01e3b922d9328dcc84ec))
+
 # [0.17.0](https://github.com/MSpiechowicz/pairpane/compare/v0.16.0...v0.17.0) (2026-11-22)
 
 
