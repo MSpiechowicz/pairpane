@@ -6,6 +6,9 @@ import type { EditOpened } from './bindings/EditOpened';
 import type { EditSaved } from './bindings/EditSaved';
 import type { EditSaveOptions } from './bindings/EditSaveOptions';
 import type { ExternalEdit } from './bindings/ExternalEdit';
+import type { FindEvent } from './bindings/FindEvent';
+import type { FindId } from './bindings/FindId';
+import type { FindQuery } from './bindings/FindQuery';
 import type { ItemProperties } from './bindings/ItemProperties';
 import type { JobId } from './bindings/JobId';
 import type { JobTask } from './bindings/JobTask';
@@ -55,6 +58,10 @@ export const commands = {
   >(),
   archive_password: cmd<{ archive: string; password: string }, boolean>(),
   pane_folder_size: cmd<{ pane: PaneId; path: string; name: string; onEvent: EventSink<SizeEvent> }, null>(),
+  find_start: cmd<{ query: FindQuery; onEvent: EventSink<FindEvent> }, FindId>(),
+  find_cancel: cmd<{ id: FindId }, null>(),
+  find_forget: cmd<{ id: FindId }, null>(),
+  find_open: cmd<{ pane: PaneId; id: FindId; onEvent: EventSink<ListEvent> }, null>(),
   volumes_list: cmd<{ onEvent: EventSink<VolumeEvent> }, null>(),
   ops_subscribe: cmd<{ onEvent: EventSink<OpsEvent> }, null>(),
   ops_start: cmd<{ kind: OpKind; from: string; names: string[]; to: string; verify: boolean }, JobId>(),

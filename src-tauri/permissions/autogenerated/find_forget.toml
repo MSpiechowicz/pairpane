@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-find-forget"
+description = "Enables the find_forget command without any pre-configured scope."
+commands.allow = ["find_forget"]
+
+[[permission]]
+identifier = "deny-find-forget"
+description = "Denies the find_forget command without any pre-configured scope."
+commands.deny = ["find_forget"]

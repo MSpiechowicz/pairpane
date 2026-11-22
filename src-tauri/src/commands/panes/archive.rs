@@ -141,13 +141,13 @@ fn list_archive(
     show_hidden: bool,
     cancel: &AtomicBool,
     on_start: impl FnOnce(),
-    mut emit: impl FnMut(ListEvent),
+    emit: impl FnMut(ListEvent),
 ) -> Result<(), IpcError> {
     let entries = describe(index, dir, show_hidden)
         .ok_or_else(|| IpcError::new(IpcErrorCode::NotFound, "This folder is not in the archive."))?;
 
     on_start();
-    emit(ListEvent::Start {
+    let start = ListEvent::Start {
         path: target.folder.to_string_lossy().into_owned(),
         parent: target
             .folder
@@ -160,13 +160,28 @@ fn list_archive(
             dir: dir.to_owned(),
         }),
         results: None,
-    });
+    };
+
+    send_listing(start, &entries, cancel, emit);
+
+    Ok(())
+}
+
+/// Sends `start` (whose `total` is `entries.len()`), `entries` in `batch`es and `done` (in the folder listing's sizes
+/// of batch); stops quietly, without `done`, when `cancel` is raised. Shared by every listing that is made from a list.
+pub(in crate::commands) fn send_listing(
+    start: ListEvent,
+    entries: &[Entry],
+    cancel: &AtomicBool,
+    mut emit: impl FnMut(ListEvent),
+) {
+    emit(start);
 
     let mut offset = 0;
 
     while offset < entries.len() {
         if cancel.load(Ordering::Relaxed) {
-            return Ok(());
+            return;
         }
 
         let size = if offset == 0 { FIRST_BATCH } else { BATCH };
@@ -189,27 +204,35 @@ fn list_archive(
         bytes,
         free: None,
     });
-
-    Ok(())
 }
 
 /// The entries of the folder `dir`, folders first and then by name (the rules of a folder listing); hidden ones (a name
 /// with a leading dot) only when `show_hidden`. `None` when `dir` is not a folder of the archive.
 fn describe(index: &ArchiveIndex, dir: &str, show_hidden: bool) -> Option<Vec<Entry>> {
-    let mut found: Vec<(bool, String, Entry)> = index
+    let found = index
         .list(dir)?
         .into_iter()
         .filter(|child| show_hidden || !child.name.starts_with('.'))
-        .map(|child| (child.dir, platform::sort_key(child.name), entry_of(&child)))
+        .map(|child| entry_of(&child))
         .collect();
 
-    found.sort_by(|(a_dir, a_key, a), (b_dir, b_key, b)| {
-        b_dir
-            .cmp(a_dir)
+    Some(sorted(found))
+}
+
+/// `entries` in the order of a folder listing: folders first, then by name (the platform's rules).
+pub(in crate::commands) fn sorted(entries: Vec<Entry>) -> Vec<Entry> {
+    let mut keyed: Vec<(String, Entry)> = entries
+        .into_iter()
+        .map(|entry| (platform::sort_key(&entry.name), entry))
+        .collect();
+
+    keyed.sort_by(|(a_key, a), (b_key, b)| {
+        (b.kind == EntryKind::Dir)
+            .cmp(&(a.kind == EntryKind::Dir))
             .then_with(|| platform::compare(a_key, &a.name, b_key, &b.name))
     });
 
-    Some(found.into_iter().map(|(_, _, entry)| entry).collect())
+    keyed.into_iter().map(|(_, entry)| entry).collect()
 }
 
 /// One entry as a pane shows it. Everything in an archive is read-only; a link or a special entry is shown as "other".
@@ -296,6 +319,6 @@ fn folder_crumbs(folder: &Path) -> Vec<Crumb> {
 }
 
 /// Entry counts are capped at `u32::MAX` on the wire.
-fn count(n: usize) -> u32 {
+pub(in crate::commands) fn count(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }

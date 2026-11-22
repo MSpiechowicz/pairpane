@@ -16,7 +16,7 @@ use std::process::ExitCode;
 
 use tauri::{Manager, RunEvent};
 
-/// Builds and runs the app until the last window closes; the transfers still running are cancelled, and given up to two seconds to clean up, as it exits, and the viewer's sessions are ended (which stops the HEIC helper that runs) and its temporary archive files are swept.
+/// Builds and runs the app until the last window closes; the searches and the transfers still running are cancelled, and given up to two seconds to clean up, as it exits, and the viewer's sessions are ended (which stops the HEIC helper that runs) and its temporary archive files are swept.
 pub fn run() -> ExitCode {
     let builder = tauri::Builder::default()
         // Must be registered first so a second launch exits before anything else starts.
@@ -50,6 +50,7 @@ pub fn run() -> ExitCode {
             app.manage(commands::items::Items::default());
             app.manage(commands::view::Viewer::default());
             app.manage(commands::archives::Archives::default());
+            app.manage(commands::find::Finder::default());
             // Files an earlier run left in the temporary folder (an entry opened in the viewer is deleted at once).
             tauri::async_runtime::spawn_blocking(commands::view::archive_entry::sweep);
             // The same for the staging folders of an unpacking that a crash left (a RAR unpacked by `unrar`).
@@ -91,6 +92,10 @@ pub fn run() -> ExitCode {
             commands::panes::archive::archive_open,
             commands::archives::archive_password,
             commands::sizes::pane_folder_size,
+            commands::find::find_start,
+            commands::find::find_cancel,
+            commands::find::find_forget,
+            commands::find::list::find_open,
             commands::volumes::volumes_list,
             commands::state::state_load,
             commands::state::state_save,
@@ -137,7 +142,11 @@ pub fn run() -> ExitCode {
 
                 // Cancel the jobs, silently, and give each a moment to remove its partial file (the plan's decision 8).
                 if let RunEvent::Exit = event {
-                    // First: an archive read that nobody cancels (a file opened in the viewer, a password check, the
+                    // First: a search that runs stops its walk (it may be on a slow disk) before anything waits.
+                    if let Some(finder) = app.try_state::<commands::find::Finder>() {
+                        finder.shut_down();
+                    }
+                    // An archive read that nobody cancels (a file opened in the viewer, a password check, the
                     // checks before an extraction) stops, so none starts `unrar` again while the staging folders go.
                     if let Some(archives) = app.try_state::<commands::archives::Archives>() {
                         archives.shut_down();

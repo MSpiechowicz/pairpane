@@ -5,15 +5,16 @@
 //! blocking thread, and only one at a time: while a request has its thread (a load or a save stuck on such a share)
 //! another is refused as busy, so a page cannot use up threads, and no two writes ever overlap. A refused save is the
 //! page's to repeat with its latest state. A save of the very bytes last written (what a page that saves on every
-//! change sends again and again) is answered as done without touching the disk. What the page sends to save is cleaned before it is written (paths
-//! checked by syntax, sizes capped), and nothing on disk but the file is touched.
+//! change sends again and again) is answered as done without touching the disk. What the page sends to save is
+//! cleaned before it is written (paths checked by syntax, sizes capped, saved searches that could not run dropped), and
+//! nothing on disk but the file is touched. A state sent without its `searches` leaves the saved searches as they are.
 
 use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use pairpane_core::model::{IpcErrorCode, SavedState};
-use pairpane_core::state;
+use pairpane_core::state::{self, SavedUpdate};
 use tauri::State;
 use tauri::async_runtime;
 
@@ -93,10 +94,11 @@ pub async fn state_load(store: State<'_, StateStore>) -> CommandResult<Option<Sa
     loaded.map_err(|_| internal())
 }
 
-/// Saves `state`, cleaned, replacing what was saved. Refused as busy while an earlier request has not finished; the
-/// page saves again with its newest state.
+/// Saves `state`, cleaned, replacing what was saved, except that a state sent without `searches` keeps the saved
+/// searches (an explicit empty list clears them). Refused as busy while an earlier request has not finished; the page
+/// saves again with its newest state.
 #[tauri::command]
-pub async fn state_save(store: State<'_, StateStore>, state: SavedState) -> CommandResult<()> {
+pub async fn state_save(store: State<'_, StateStore>, state: SavedUpdate) -> CommandResult<()> {
     let Some(job) = store.begin()? else {
         return Err(CommandError::new(
             IpcErrorCode::Unsupported,
@@ -119,10 +121,10 @@ pub async fn state_save(store: State<'_, StateStore>, state: SavedState) -> Comm
 }
 
 /// Writes `state` unless it is what the last write left in the file. Returns whether it wrote.
-fn save(job: &Job, state: SavedState) -> io::Result<bool> {
+fn save(job: &Job, state: SavedUpdate) -> io::Result<bool> {
     let mut last = job.written.lock().unwrap_or_else(PoisonError::into_inner);
 
-    state::save_changed(&job.file, state, &mut last)
+    state::save_update(&job.file, state, &mut last)
 }
 
 fn internal() -> CommandError {
@@ -141,27 +143,36 @@ fn save_error(error: &io::Error) -> CommandError {
 mod tests {
     use std::fs;
 
-    use pairpane_core::model::{PaneId, SavedPane};
+    use pairpane_core::model::{FindCriteria, PaneId, SavedPane, SavedSearch};
 
     use super::*;
 
-    fn empty() -> SavedState {
+    fn empty() -> SavedUpdate {
         let pane = || SavedPane {
             tabs: Vec::new(),
             active: 0,
         };
 
-        SavedState {
+        SavedUpdate {
             active: PaneId::Left,
             left: pane(),
             right: pane(),
             hotlist: Vec::new(),
-            searches: Vec::new(),
+            searches: Some(Vec::new()),
         }
     }
 
     fn store() -> StateStore {
         StateStore::new(Some(PathBuf::from("state.json")))
+    }
+
+    /// A store whose file is in a folder of its own, which lives as long as the first part.
+    fn store_in_temp_dir() -> (tempfile::TempDir, PathBuf, StateStore) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file = dir.path().join("state.json");
+        let store = StateStore::new(Some(file.clone()));
+
+        (dir, file, store)
     }
 
     #[test]
@@ -178,9 +189,7 @@ mod tests {
 
     #[test]
     fn saving_the_same_state_twice_writes_once() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let file = dir.path().join("state.json");
-        let store = StateStore::new(Some(file.clone()));
+        let (_dir, file, store) = store_in_temp_dir();
         let job = || store.begin().expect("free").expect("a file");
 
         assert!(save(&job(), empty()).expect("first"));
@@ -188,6 +197,38 @@ mod tests {
 
         assert!(!save(&job(), empty()).expect("second"), "identical: not written");
         assert!(!file.exists());
+    }
+
+    fn search(name: &str) -> SavedSearch {
+        SavedSearch {
+            name: name.to_owned(),
+            criteria: FindCriteria::default(),
+        }
+    }
+
+    #[test]
+    fn a_page_that_sends_no_searches_keeps_the_saved_ones_and_an_empty_list_clears_them() {
+        let (_dir, file, store) = store_in_temp_dir();
+        let job = || store.begin().expect("free").expect("a file");
+        let searches = |file: &PathBuf| state::load(file).expect("state").searches;
+        let from_wire = |json: &str| serde_json::from_str::<SavedUpdate>(json).expect("an update");
+        let pane = r#"{"tabs":[],"active":0}"#;
+        let without = format!(r#"{{"active":"left","left":{pane},"right":{pane},"hotlist":[]}}"#);
+
+        let mut with = empty();
+        with.searches = Some(vec![search("big"), search("old")]);
+        save(&job(), with).expect("saved with searches");
+
+        save(&job(), from_wire(&without)).expect("saved without searches");
+        assert_eq!(searches(&file), vec![search("big"), search("old")], "kept");
+
+        let null = without.replace(r#""hotlist":[]"#, r#""hotlist":[],"searches":null"#);
+        save(&job(), from_wire(&null)).expect("saved with null searches");
+        assert_eq!(searches(&file).len(), 2, "null is absent too");
+
+        let cleared = without.replace(r#""hotlist":[]"#, r#""hotlist":[],"searches":[]"#);
+        save(&job(), from_wire(&cleared)).expect("saved with none");
+        assert_eq!(searches(&file), Vec::new(), "an explicit empty list clears them");
     }
 
     #[test]

@@ -4,6 +4,7 @@
 pub mod app;
 pub mod archives;
 pub mod edit;
+pub mod find;
 pub mod items;
 mod limit;
 pub mod ops;
