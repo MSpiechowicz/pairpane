@@ -46,10 +46,11 @@ pub fn check_password(
 }
 
 /// [`check_password`] for what is about to seal new content with the password (a rewrite of an archive): a zip is judged by
-/// the whole of its smallest encrypted entry (see [`super::zip::confirm_password`]) and a 7z by the check it already has,
-/// which reads an entry to its end when it is within the probe (see [`super::sevenz::check_password`]); a 7z with only
-/// large stored entries can still let a wrong password through. Errors are those of reading the archive, a raised `cancel`
-/// included.
+/// the whole of the encrypted entry that declares the least (see [`super::zip::confirm_password`]) and a 7z by the whole of
+/// an encrypted entry that starts a block (see [`super::sevenz::confirm_password`]), so the checksum that ends it is
+/// checked. Only that one entry is read: an archive whose entries are sealed under different passwords is not fully
+/// verified. Errors are those of reading the archive, a raised `cancel` included; a 7z with encrypted content that cannot
+/// be checked at all is `Unsupported`.
 pub fn confirm_password(
     index: &super::index::ArchiveIndex,
     file: &dyn super::file::ReadAt,
@@ -58,6 +59,7 @@ pub fn confirm_password(
 ) -> std::io::Result<bool> {
     match index.format() {
         crate::model::ArchiveFormat::Zip => super::zip::confirm_password(index, file, cancel, password),
+        crate::model::ArchiveFormat::SevenZ => super::sevenz::confirm_password(file, cancel, password),
         _ => check_password(index, file, password),
     }
 }

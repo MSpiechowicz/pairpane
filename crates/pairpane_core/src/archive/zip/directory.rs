@@ -113,6 +113,12 @@ pub fn comment<F: ReadAt + ?Sized>(file: &F) -> io::Result<Vec<u8>> {
     Ok(tail[from..tail.len().min(from + length)].to_vec())
 }
 
+/// The length of the data that precedes the zip in `file` (a self-extracting program): what the offsets of its entries lack.
+/// It is 0 for a zip that starts at the start of the file.
+pub fn base<F: ReadAt + ?Sized>(file: &F) -> io::Result<u64> {
+    locate(file).map(|directory| directory.base)
+}
+
 /// Finds the central directory through the last end record in the file, and checks that it fits in the file.
 fn locate<F: ReadAt + ?Sized>(file: &F) -> io::Result<Directory> {
     let (base, tail, at) = find_end(file)?;

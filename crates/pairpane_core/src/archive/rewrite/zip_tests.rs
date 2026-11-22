@@ -227,16 +227,12 @@ fn the_comment_of_the_archive_is_carried_over_with_what_is_added_and_what_is_lef
     );
 }
 
-#[test]
-fn a_zip_with_a_program_before_its_entries_is_refused_and_one_without_is_not() {
-    let zip_bytes = archive(ZIP, &sample(), None, false);
+/// Checks that `zip_bytes` (a zip of `entries` entries) is refused for a program before it, and is not without it.
+fn assert_a_stub_is_refused(zip_bytes: &[u8], entries: usize) {
     let mut old = b"MZ a self-extracting stub, 64 bytes of it .....................".to_vec();
-    old.extend_from_slice(&zip_bytes);
+    old.extend_from_slice(zip_bytes);
     // The entries are still listed, from where they are.
-    assert_eq!(
-        index(&old, ZIP, None).expect("an index").entries().len(),
-        sample().len()
-    );
+    assert_eq!(index(&old, ZIP, None).expect("an index").entries().len(), entries);
 
     let error = rewrite_with(&old, ZIP, (&[], &added()), None).expect_err("refused");
 
@@ -245,5 +241,15 @@ fn a_zip_with_a_program_before_its_entries_is_refused_and_one_without_is_not() {
         error.to_string(),
         "this archive has data before its entries, so it can't be changed"
     );
-    assert!(rewrite_with(&zip_bytes, ZIP, (&[], &added()), None).is_ok());
+    assert!(rewrite_with(&zip_bytes.to_vec(), ZIP, (&[], &added()), None).is_ok());
+}
+
+#[test]
+fn a_zip_with_a_program_before_its_entries_is_refused_and_one_without_is_not() {
+    assert_a_stub_is_refused(&archive(ZIP, &sample(), None, false), sample().len());
+}
+
+#[test]
+fn an_empty_zip_with_a_program_before_its_end_record_is_refused_and_one_without_is_not() {
+    assert_a_stub_is_refused(&archive(ZIP, &[], None, false), 0);
 }

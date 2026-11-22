@@ -231,3 +231,34 @@ fn the_confirmation_reads_the_smallest_entry_with_content_and_accepts_any_passwo
 
     assert!(confirms(&zip_of(&[("a", b"1")]), "anything"));
 }
+
+#[test]
+fn the_confirmation_reads_the_entry_that_declares_the_least_not_the_one_that_is_smallest_packed() {
+    // A bomb: a huge declared size that packs to almost nothing, and damaged, so reading it would say "wrong".
+    let mut bomb = aes("bomb", &vec![0; 400_000], DEFLATE, "right", 3, 2);
+    *bomb.data.last_mut().expect("a tag") ^= 1;
+    let small = aes("small", &noise(6_000), STORED, "right", 3, 2);
+    assert!(
+        bomb.data.len() < small.data.len(),
+        "the bomb is the smaller of the two packed: {} {}",
+        bomb.data.len(),
+        small.data.len()
+    );
+    let bytes = zip_members(&[bomb, small]);
+
+    assert!(confirms(&bytes, "right"));
+    assert!(!confirms(&bytes, "wrong"));
+}
+
+/// Bytes that do not compress.
+fn noise(length: usize) -> Vec<u8> {
+    let mut state = 0x2545_F491_u32;
+
+    (0..length)
+        .map(|_| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+
+            (state >> 24) as u8
+        })
+        .collect()
+}

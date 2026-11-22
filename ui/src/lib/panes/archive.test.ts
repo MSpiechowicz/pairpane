@@ -96,6 +96,8 @@ describe('sameArchivePath', () => {
     expect(sameArchivePath('c:/Users/Me/a.zip', 'C:\\users\\me\\A.ZIP')).toBe(true);
     expect(sameArchivePath('C:\\Users\\Me\\a.zip\\', 'C:\\Users\\Me\\a.zip')).toBe(true);
     expect(sameArchivePath('C:/', 'c:\\')).toBe(true);
+    expect(sameArchivePath('\\\\?\\C:\\Users\\Me\\a.zip', 'c:/users/me/a.zip')).toBe(true);
+    expect(sameArchivePath('\\\\?\\UNC\\host\\share\\a.zip', '\\\\host\\share\\A.zip')).toBe(true);
   });
 
   it('tells Windows archives apart', () => {

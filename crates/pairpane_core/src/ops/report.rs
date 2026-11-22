@@ -2,7 +2,7 @@
 
 use std::io::{self, ErrorKind};
 
-use crate::archive::{fault_text, password_fault};
+use crate::archive::password_text;
 use crate::model::{IpcError, IpcErrorCode};
 
 /// Windows `ERROR_PRIVILEGE_NOT_HELD`: creating a symbolic link without the privilege (or Developer Mode).
@@ -20,8 +20,8 @@ pub(super) fn ipc_error(error: &io::Error) -> IpcError {
         );
     }
 
-    if let Some(fault) = password_fault(error) {
-        return IpcError::new(IpcErrorCode::PasswordRequired, fault_text(fault));
+    if let Some(text) = password_text(error) {
+        return IpcError::new(IpcErrorCode::PasswordRequired, text);
     }
 
     if error.raw_os_error().is_none()
@@ -66,7 +66,7 @@ pub(super) fn refusal(kind: ErrorKind, text: &'static str) -> io::Error {
 mod tests {
     use pretty_assertions::assert_eq;
 
-    use crate::archive::{PasswordFault, password_error};
+    use crate::archive::{PasswordFault, password_error, password_fault, unverified_password_error};
 
     use super::*;
 
@@ -95,6 +95,17 @@ mod tests {
         assert_eq!(needed.message, "needs a password");
         assert_eq!(wrong.code, IpcErrorCode::PasswordRequired);
         assert_eq!(wrong.message, "the password is wrong");
+    }
+
+    #[test]
+    fn a_password_that_is_refused_by_a_check_that_may_mean_damage_says_so_and_still_says_wrong() {
+        let error = unverified_password_error();
+        let told = ipc_error(&error);
+
+        assert_eq!(password_fault(&error), Some(PasswordFault::Wrong));
+        assert_eq!(told.code, IpcErrorCode::PasswordRequired);
+        assert_eq!(told.message, "the password is wrong or the archive is damaged");
+        assert!(told.message.to_lowercase().contains("wrong"));
     }
 
     #[test]

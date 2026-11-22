@@ -21,12 +21,13 @@ use super::index::ArchiveIndex;
 use super::password::Password;
 use crate::view::refusal;
 
+mod check;
+
+pub use check::{check_password, confirm_password};
+
 /// The most memory, in KiB, that the headers of one archive and the dictionary of one coder may take: 512 MiB, far past
 /// the 64 MiB of `7z -mx9`; an archive that asks for more is refused.
 pub(super) const MEMORY_KB: usize = 512 * 1024;
-
-/// How much of the entry [`check_password`] probes it decodes to see whether the password opens it.
-const PROBE: u64 = 64 * 1024;
 
 /// Windows attribute bits of a 7z entry.
 pub(super) const ATTRIBUTE_DIRECTORY: u32 = 0x10;
@@ -257,50 +258,6 @@ pub fn walk(
     }
 
     Ok(Walked::default())
-}
-
-/// The encrypted entry that tells most about a password for the least work: of the entries that come first in their block
-/// (so decoding stops at them), the smallest, which is read to its end when it is within [`PROBE`] and so ends in what the
-/// decoder checks there. `None` when no entry is encrypted.
-fn probe_entry(archive: &Archive) -> Option<usize> {
-    let map = &archive.stream_map;
-
-    (0..archive.files.len())
-        .filter(|file| archive.files[*file].has_stream() && archive.is_file_encrypted(*file))
-        .filter(|file| map.file_block_index[*file].is_some_and(|block| map.block_first_file_index[block] == *file))
-        .min_by_key(|file| archive.files[*file].size())
-}
-
-/// Whether `password` opens the archive in `file`: its headers, and when its content is encrypted an entry of it (see
-/// [`probe_entry`]: at most 64 KiB of it are decoded). `Ok(false)` is a password that does not open it, or a missing one
-/// that is needed; an archive that cannot be read at all is an error. A stored (not compressed) encrypted entry longer than
-/// the probe cannot be told wrong before its end, so it counts as opened.
-pub fn check_password(file: &dyn ReadAt, password: &Password) -> io::Result<bool> {
-    // Nothing here is long enough to need stopping: the headers and at most 64 KiB of one entry.
-    let cancel = &AtomicBool::new(false);
-    let opened = match open(file, cancel, Some(password)) {
-        Ok(opened) => opened,
-        Err(error) if password_fault(&error).is_some() => return Ok(false),
-        Err(error) => return Err(error),
-    };
-
-    let Some(first) = probe_entry(&opened.archive) else {
-        return Ok(true);
-    };
-
-    let mut source = Source::new(file, cancel);
-    let probed = decode(&opened, &mut source, cancel, &[first], &mut |_, data| {
-        // One byte more than the probe, so an entry that is as long as it is read to its end.
-        io::copy(&mut data.take(PROBE + 1), &mut io::sink())?;
-
-        Ok(Flow::Continue)
-    });
-
-    match probed {
-        Ok(()) => Ok(true),
-        Err(error) if password_fault(&error) == Some(PasswordFault::Wrong) => Ok(false),
-        Err(error) => Err(error),
-    }
 }
 
 /// Reads an entry's decoded data, saying a failure the way [`EntrySource`] promises: a raised cancel flag is

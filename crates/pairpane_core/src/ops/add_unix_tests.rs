@@ -11,7 +11,7 @@ use crate::model::{ArchiveFormat, Outcome};
 
 use super::add_tests::{add, knows, scene_with};
 use super::hooks::Hooks;
-use super::testing::Rig;
+use super::testing::{Rig, temp_mode_hooks};
 
 /// The scene with an `a.zip` that has the mode `mode`.
 fn scene_of_mode(mode: u32) -> tempfile::TempDir {
@@ -82,4 +82,17 @@ fn a_temporary_file_swapped_for_a_link_does_not_get_the_mode_of_the_archive() {
         fs::metadata(&victim).expect("metadata").permissions().mode() & 0o777,
         0o600
     );
+}
+
+#[test]
+fn the_temporary_file_is_for_its_owner_alone_from_the_moment_it_exists() {
+    let root = scene_of_mode(0o644);
+    let (hooks, seen) = temp_mode_hooks();
+
+    let ended = Rig::with(hooks, |_, _| {}).run(add(root.path(), &["new.txt"], "a.zip", "", knows(None)));
+
+    assert_eq!(ended.outcome, Outcome::Done);
+    let mode = seen.lock().expect("lock").expect("the hook ran");
+    assert_eq!(mode & 0o077, 0, "{mode:o}");
+    assert_eq!(mode_and_group(&root).0, 0o644);
 }

@@ -146,9 +146,11 @@ impl<'a, W: Write> TarWriter<'a, W> {
         }
     }
 
-    /// Writes `size` bytes of `reader` and the padding. A file that ends early fails: the header already says its size.
-    fn data(&mut self, size: u64, reader: Box<dyn Read + 'a>) -> io::Result<()> {
-        let mut limited = reader.take(size);
+    /// Writes `size` bytes of `reader` and the padding. A file that ends early fails: the header already says its size. So
+    /// does one that gives more (one byte past the size is read to know, no more), as it does in a zip and a 7z: it is not
+    /// cut short.
+    fn data(&mut self, size: u64, mut reader: Box<dyn Read + 'a>) -> io::Result<()> {
+        let mut limited = reader.by_ref().take(size);
         let sink = self.builder.get_mut();
 
         if pump(&mut limited, sink, self.cancel, |_| {})? != size {
@@ -156,6 +158,10 @@ impl<'a, W: Write> TarWriter<'a, W> {
                 io::ErrorKind::UnexpectedEof,
                 "a file changed while it was being packed",
             ));
+        }
+
+        if reader.take(1).read(&mut [0])? > 0 {
+            return Err(refusal(io::ErrorKind::Other, "a file grew while it was being packed"));
         }
 
         let padding = (BLOCK - size % BLOCK) % BLOCK;

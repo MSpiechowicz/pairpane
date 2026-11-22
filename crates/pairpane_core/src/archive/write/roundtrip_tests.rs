@@ -211,8 +211,8 @@ fn a_lazy_reader_opens_at_its_first_read_and_lets_go_at_its_end() {
 }
 
 #[test]
-fn a_zip_or_7z_file_that_gives_more_than_its_declared_size_fails_after_one_byte_past_it() {
-    for format in [PackFormat::Zip, PackFormat::SevenZ] {
+fn a_file_that_gives_more_than_its_declared_size_fails_after_one_byte_past_it_in_every_format() {
+    for format in [PackFormat::Zip, PackFormat::SevenZ, PackFormat::TarZst] {
         let cancel = AtomicBool::new(false);
         let given = std::cell::Cell::new(0);
         let mut packer = packer(format, &cancel);

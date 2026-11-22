@@ -73,13 +73,26 @@ fn a_file_that_ends_before_its_declared_size_fails_the_pack() {
 }
 
 #[test]
-fn a_file_that_grew_is_cut_at_its_declared_size() {
+fn a_file_that_grew_fails_the_pack_and_is_not_cut_at_its_declared_size() {
     let cancel = AtomicBool::new(false);
     let mut writer = TarWriter::new(Cursor::new(Vec::new()), PackLevel::Fast, &cancel).expect("a writer");
     let content = noise(1000);
 
-    writer
+    let error = writer
         .add(Entry::file("grew.bin", 0o644, Some(MOMENT), 600, content.as_slice()))
+        .expect_err("fails");
+
+    assert_eq!(error.to_string(), "a file grew while it was being packed");
+}
+
+#[test]
+fn a_file_that_is_exactly_its_declared_size_is_written() {
+    let cancel = AtomicBool::new(false);
+    let mut writer = TarWriter::new(Cursor::new(Vec::new()), PackLevel::Fast, &cancel).expect("a writer");
+    let content = noise(600);
+
+    writer
+        .add(Entry::file("same.bin", 0o644, Some(MOMENT), 600, content.as_slice()))
         .expect("added");
     writer
         .add(Entry::file("after.txt", 0o644, Some(MOMENT), 5, &b"after"[..]))
@@ -88,6 +101,6 @@ fn a_file_that_grew_is_cut_at_its_declared_size() {
 
     let seen = read_back(&bytes, ArchiveFormat::TarZst, None).expect("read back");
 
-    assert_eq!(seen[0].content, content[..600]);
+    assert_eq!(seen[0].content, content);
     assert_eq!(seen[1].content, b"after");
 }

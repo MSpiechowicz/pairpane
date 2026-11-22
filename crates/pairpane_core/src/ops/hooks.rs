@@ -54,8 +54,8 @@ pub(super) struct Hooks {
     pub(super) entry_source: Option<SourceHook>,
     /// The free space an extraction leaves on the disk, in place of `MIN_FREE_RESERVE`.
     pub(super) free_reserve: Option<u64>,
-    /// Called with the path of the temporary file of an add job right after it was made, before it is given the old
-    /// archive's permissions.
+    /// Called with the path of the temporary file of an add or a pack job right after it was made, before it is given
+    /// its final permissions.
     pub(super) after_temp: Option<PathHook>,
     /// The new archive of an add job cannot be given the old one's group, as when the user is not in it (Unix).
     #[cfg(unix)]

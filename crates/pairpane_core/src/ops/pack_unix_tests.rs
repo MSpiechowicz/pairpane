@@ -3,6 +3,7 @@
 use std::fs;
 #[cfg(target_os = "linux")]
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::fs::symlink;
 use std::sync::Arc;
 
@@ -12,7 +13,7 @@ use crate::model::{ArchiveFormat, Outcome, PackFormat, PackLevel};
 
 use super::hooks::Hooks;
 use super::pack_tests::{ITEMS, archived, at, expected, options, pack, scene, the_paths, zip};
-use super::testing::{Rig, make_fifo, put, set_times};
+use super::testing::{Rig, make_fifo, put, set_times, temp_mode_hooks};
 
 #[test]
 fn links_and_special_files_are_skipped_and_counted_and_never_followed() {
@@ -97,4 +98,25 @@ fn a_folder_swapped_for_a_link_while_the_tree_is_walked_is_refused_and_nothing_i
     );
     let seen = archived(&root, "out.zip", ArchiveFormat::Zip);
     assert_eq!(the_paths(&seen), ["a.txt", "empty", "z.bin"]);
+}
+
+#[test]
+fn the_temporary_file_is_for_its_owner_alone_and_the_archive_gets_the_mode_of_a_new_file() {
+    let root = scene();
+    // What a plain new file gets here (the umask is the process's).
+    let plain = root.path().join("dst/plain");
+    fs::write(&plain, b"").expect("file");
+    let normal = fs::metadata(&plain).expect("metadata").permissions().mode() & 0o777;
+    fs::remove_file(&plain).expect("removed");
+    let (hooks, seen) = temp_mode_hooks();
+
+    let ended = Rig::with(hooks, |_, _| {}).run(zip(root.path()));
+
+    assert_eq!(ended.outcome, Outcome::Done);
+    let mode = seen.lock().expect("lock").expect("the hook ran");
+    assert_eq!(mode & 0o077, 0, "{mode:o}");
+    let made = fs::metadata(root.path().join("dst/out.zip")).expect("metadata");
+    assert_eq!(made.permissions().mode() & 0o777, normal);
+    // Nothing but the archive is left, the probe that read the mode of a new file included.
+    assert_eq!(fs::read_dir(root.path().join("dst")).expect("dir").count(), 1);
 }

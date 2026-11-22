@@ -289,11 +289,16 @@ pub fn check_password(index: &ArchiveIndex, file: &dyn ReadAt, password: &Passwo
     }
 }
 
-/// Whether `password` opens the zip of `index`, judged by decrypting a whole entry: the smallest encrypted file (one with
-/// content before an empty one, which only has the check byte to tell by), read to its end, so the CRC-32 of a ZipCrypto
+/// Whether `password` opens the zip of `index`, judged by decrypting a whole entry: the encrypted file that declares the
+/// least content (one with content before an empty one, which only has the check byte to tell by; ties go to the one that
+/// is packed smaller), read to its end, so the CRC-32 of a ZipCrypto
 /// entry and the HMAC of a WinZip AES one are checked too. [`check_password`] stops at the check byte (one wrong password
 /// in 256 passes) or the verifier (one in 65,536), which is enough to ask the user again but not to encrypt new entries
-/// with. A zip with nothing encrypted accepts any password.
+/// with. A zip with nothing encrypted accepts any password. The entry is chosen by the size it declares and not by its packed
+/// size: a tiny packed entry may declare a huge content (a bomb), and reading it to its end is the work this check does.
+///
+/// Only that one entry is checked: the entries of an archive may be sealed under different passwords (nothing in the format
+/// forbids it), and one that is not the chosen entry is not verified, so such an archive is not fully confirmed.
 ///
 /// An entry that fails to decode or check after its check byte or verifier was accepted (a ZipCrypto entry that does not
 /// inflate or whose CRC differs, a WinZip AES entry whose tag does not match) counts as a wrong password: damaged data
@@ -317,7 +322,7 @@ pub fn confirm_password(
             Place::Zip(place) => Some((entry, place)),
             _ => None,
         })
-        .min_by_key(|(entry, place)| (entry.size == 0, place.compressed));
+        .min_by_key(|(entry, place)| (entry.size == 0, entry.size, place.compressed));
     let Some((entry, place)) = smallest else {
         return Ok(true);
     };

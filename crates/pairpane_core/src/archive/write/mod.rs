@@ -21,7 +21,7 @@
 //! - A file is read once, with the size it was declared with as its limit. A zip and a 7z take the size actually read when
 //!   the file gave less, and fail ("a file grew while it was being packed") when it gives more: one byte past the
 //!   declared size is read to know, no more. A tar (which writes the size before the data) fails when the file ended
-//!   early and cuts one that grew at its size.
+//!   early, and fails the same way as the others when it grew.
 //! - The cancel flag is checked between chunks of 64 KiB by a copy loop of our own, never `io::copy`, which tries a read
 //!   again at every `Interrupted` and so would not stop.
 //! - Modes are stored as `mode & 0o777`; on Windows a zip and a 7z store DOS attributes instead of a mode.

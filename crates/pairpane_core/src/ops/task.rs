@@ -147,6 +147,23 @@ pub(super) fn create_plain(path: &Path) -> io::Result<File> {
     OpenOptions::new().write(true).create_new(true).open(path)
 }
 
+/// [`create_plain`] with the access of the owner alone on Unix (`0o600` less the umask), for a file whose content is not to be
+/// read by anyone else while it is written (the temporary file of an archive, which may hold what a password seals): the
+/// permissions it ends with are set on the open handle when it is complete. Windows has no such bits to give.
+pub(super) fn create_private(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+
+    options.open(path)
+}
+
 /// Fails with "already exists" when anything is at `path`, a link that leads nowhere included.
 pub(super) fn require_free(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {

@@ -238,11 +238,29 @@ fn an_encrypted_archive_without_its_password_or_with_a_wrong_one_is_refused_and_
                 panic!("{name}: the job must fail: {:?}", ended.outcome);
             };
             assert_eq!(error.code, IpcErrorCode::PasswordRequired, "{name}");
-            assert_eq!(error.message, fault_text(fault), "{name}");
+            // Opening the encrypted names failed by itself; a check of the content cannot tell a wrong password from damage.
+            let text = if fault == PasswordFault::Wrong && !names {
+                "the password is wrong or the archive is damaged"
+            } else {
+                fault_text(fault)
+            };
+            assert_eq!(error.message, text, "{name}");
             assert_eq!(read(&root.path().join("dst").join(name)), before, "{name}");
             assert!(has_no_partial_files(&root.path().join("dst")), "{name}");
         }
     }
+}
+
+#[test]
+fn judging_the_password_of_an_encrypted_archive_shows_the_scanning_phase() {
+    let root = scene_with("b.zip", ArchiveFormat::Zip, Some(SECRET), false);
+    let mut rig = Rig::new();
+
+    let job = rig.start(add(root.path(), &["new.txt"], "b.zip", "", knows(Some("wrong"))));
+    let ended = rig.wait_ended(job);
+
+    assert!(matches!(ended.outcome, Outcome::Failed { .. }));
+    assert!(phases(&rig).ends_with(&[JobPhase::Scanning]));
 }
 
 #[test]

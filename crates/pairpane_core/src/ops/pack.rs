@@ -11,8 +11,10 @@
 //!
 //! Then the target is decided: when the archive's name is taken the user is asked (see `conflict`) before the first byte is
 //! written. The archive is written to a temporary file next to its target (the disk keeps its reserve, see
-//! `extract_write`), flushed to the disk and put in place with the no-replace rename (or the replacing one when the answer
-//! was to overwrite); a cancel or any failure removes the temporary file.
+//! `extract_write`; on Unix it is made readable by its owner alone, and given the access of a new file, which a probe file
+//! made and removed at once tells, through its open handle when it is whole), flushed to the disk and put in place with the
+//! no-replace rename (or the replacing one when the answer was to overwrite); a cancel or any failure removes the
+//! temporary file.
 //!
 //! The progress counts the bytes of the files as the writer reads them, through a reader that also stops for a pause and
 //! raises the writer's cancel flag on a cancel.
@@ -35,7 +37,7 @@ use super::extract_write::CHECK_EVERY;
 use super::held::{Held, Node};
 use super::partial::{Partial, run_token};
 use super::report::refusal;
-use super::task::{as_text, create_plain};
+use super::task::{as_text, create_private};
 use super::transfer::{Run, Stop};
 use super::tree::{Reopen, Spot, Visitor};
 
@@ -317,6 +319,55 @@ impl Seek for Output<'_, '_, '_> {
     }
 }
 
+/// What opens the finished temporary file of a pack job to the access a new file has (Unix: the temporary file is made for
+/// its owner alone, so nobody else can read it while it is written). It is set through a handle of the file, never its
+/// path. Windows gives a new file its access as it is made.
+struct Opening {
+    #[cfg(unix)]
+    file: File,
+    #[cfg(unix)]
+    mode: u32,
+}
+
+impl Opening {
+    /// What `file` (in `dir`) is given when it is complete: the mode a plain new file in `dir` gets, which a probe file made
+    /// and removed at once tells (the umask is the process's, and cannot be read without changing it).
+    #[cfg(unix)]
+    fn new(run: &mut Run<'_>, dir: &Path, file: &File) -> Result<Self, Stop> {
+        use std::os::unix::fs::PermissionsExt;
+
+        use super::task::create_plain;
+
+        let (probe, made) = run.make_temp(dir, create_plain)?;
+        let _removed = Partial::new(probe);
+        let mode = made.metadata()?.permissions().mode() & 0o777;
+
+        Ok(Self {
+            file: file.try_clone()?,
+            mode,
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn new(_run: &mut Run<'_>, _dir: &Path, _file: &File) -> Result<Self, Stop> {
+        Ok(Self {})
+    }
+
+    #[cfg(unix)]
+    fn apply(self) -> Result<(), Stop> {
+        use std::os::unix::fs::PermissionsExt;
+
+        self.file.set_permissions(std::fs::Permissions::from_mode(self.mode))?;
+
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn apply(self) -> Result<(), Stop> {
+        Ok(())
+    }
+}
+
 /// The time now, as what a new archive is modified at.
 fn now_millis() -> Option<i64> {
     let since = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
@@ -355,11 +406,18 @@ impl Run<'_> {
         }
 
         self.phase(JobPhase::Packing);
-        let (temp, file) = self.make_temp(&to, create_plain)?;
+        let (temp, file) = self.make_temp(&to, create_private)?;
         let mut guard = Partial::new(temp.clone());
+        if let Some(hook) = &self.inner.hooks.after_temp {
+            hook(&temp);
+        }
 
+        let opening = Opening::new(self, &to, &file)?;
         self.write_archive(&plan, options, file, &to)?;
         self.checkpoint()?;
+
+        // Only now do others get to read it, when it is whole.
+        opening.apply()?;
 
         if self.commit_with(&temp, &mut place, |run, again| run.place_entry(name, &facts, again))? {
             guard.committed = true;

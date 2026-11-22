@@ -76,9 +76,19 @@ function withoutTrailing(path: string, separator: string): string {
   return path.slice(0, end);
 }
 
-/** A Windows path in one form for comparing: `\` separators, no trailing one (a drive root `C:\` keeps it), lower case. */
+/**
+ * A Windows path in one form for comparing: `\` separators, no verbatim prefix (`\\?\C:\…` is `C:\…`,
+ * `\\?\UNC\host\…` is `\\host\…`), no trailing separator (a drive root `C:\` keeps it), lower case.
+ */
 function windowsKey(path: string): string {
-  const key = withoutTrailing(path.replaceAll('/', '\\'), '\\').toLowerCase();
+  let plain = path.replaceAll('/', '\\');
+  if (/^\\\\\?\\unc\\/i.test(plain)) {
+    plain = `\\\\${plain.slice('\\\\?\\UNC\\'.length)}`;
+  } else if (plain.startsWith('\\\\?\\')) {
+    plain = plain.slice('\\\\?\\'.length);
+  }
+
+  const key = withoutTrailing(plain, '\\').toLowerCase();
   return /^[a-z]:$/.test(key) ? `${key}\\` : key;
 }
 

@@ -18,9 +18,10 @@
 //! archive, skip leaves the new file out, rename adds it under a name that neither the archive nor the job uses, and
 //! overwrite older replaces the entry only when the new file's time is later.
 //!
-//! The new archive is written to a temporary file next to the old one (the disk keeps its reserve), flushed to the disk,
-//! given the permission bits and the group of the old one on Unix (through its open handle; its owner, hard links, extended
-//! attributes and ACLs are not kept), and put in place with the replacing rename. A cancel or any failure
+//! The new archive is written to a temporary file next to the old one (the disk keeps its reserve; it is made readable by
+//! its owner alone on Unix, and gets the permission bits and the group of the old one at once, through its open handle,
+//! before a byte is written), flushed to the disk, and put in place with the replacing rename. The owner, hard links,
+//! extended attributes and ACLs of the old one are not kept. A cancel or any failure
 //! removes the temporary file and leaves the old archive as it was. The progress counts the bytes of the new files and
 //! the bytes taken from the old archive.
 
@@ -33,7 +34,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::archive::rewrite::{self, Old};
-use crate::archive::{self, ArchiveIndex, Fingerprint, Input, Password, PasswordFault, cancelled, password_error};
+use crate::archive::{
+    self, ArchiveIndex, Fingerprint, Input, Password, PasswordFault, cancelled, password_error,
+    unverified_password_error,
+};
 use crate::listing::platform;
 use crate::model::{ArchiveFormat, FileFacts, JobPhase};
 
@@ -43,7 +47,7 @@ use super::held::{Held, Node};
 use super::pack::{OUTPUT_BUFFER, Output, Plan, Source, count_empty, entry_of, sync_output};
 use super::partial::Partial;
 use super::report::refusal;
-use super::task::create_plain;
+use super::task::create_private;
 use super::transfer::{Run, Stop};
 use super::tree::{Spot, Visitor};
 
@@ -148,9 +152,10 @@ impl Run<'_> {
         check_changeable(&index, inner)?;
 
         let password = source.password.as_deref();
+        // Judging a password may read a whole entry: the job shows it is working.
+        self.phase(JobPhase::Scanning);
         self.check_password(&index, &archive, cancel, password)?;
 
-        self.phase(JobPhase::Scanning);
         let mut plan = self.plan_additions(root, items, &index, inner)?;
         if plan.entries.is_empty() {
             return Err(refusal(io::ErrorKind::InvalidInput, "there is nothing to add").into());
@@ -171,7 +176,7 @@ impl Run<'_> {
         self.found(change.copy);
 
         self.phase(JobPhase::Packing);
-        let (temp, file) = self.make_temp(&opened.folder, create_plain)?;
+        let (temp, file) = self.make_temp(&opened.folder, create_private)?;
         let mut guard = Partial::new(temp.clone());
         if let Some(hook) = &self.inner.hooks.after_temp {
             hook(&temp);
@@ -213,7 +218,7 @@ impl Run<'_> {
 
         match archive::confirm_password(index, file, cancel, password) {
             Ok(true) => Ok(()),
-            Ok(false) => Err(password_error(PasswordFault::Wrong).into()),
+            Ok(false) => Err(unverified_password_error().into()),
             Err(error) => Err(self.stopped(error)),
         }
     }

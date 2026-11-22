@@ -8,7 +8,7 @@
 //! the field (or a number added to the one it has) only when the new offset no longer fits 32 bits.
 //!
 //! The comment of the archive is carried over to the new end record. A zip with data before its first entry (a
-//! self-extracting program) is refused: that data would be lost.
+//! self-extracting program), or, for a zip without entries, before its end record, is refused: that data would be lost.
 //!
 //! New entries are written by [`ZipWriter`] after the old ones, deflated at the normal level; when the old zip has an
 //! encrypted entry they are encrypted with its password (AES-256, as the writer does for a pack).
@@ -21,7 +21,7 @@ use crate::archive::file::FileReader;
 use crate::archive::write::{Entry, Limits, Options, ZipWriter};
 use crate::archive::zip::local::Layout;
 use crate::archive::zip::{ZipPlace, directory};
-use crate::archive::{ArchiveIndex, Place};
+use crate::archive::{ArchiveIndex, Place, ReadAt};
 use crate::model::PackLevel;
 use crate::view::refusal;
 
@@ -77,17 +77,22 @@ impl Ends {
     }
 }
 
-/// Whether the first local header of the zip of `index` is not at the start of the file.
-fn starts_late(index: &ArchiveIndex) -> bool {
-    index
+/// Whether the zip of `index` in `file` does not start at the start of the file: its first local header is not there, or
+/// (a zip without entries) data precedes its end record, which an empty zip is only made of.
+fn starts_late(index: &ArchiveIndex, file: &dyn ReadAt) -> io::Result<bool> {
+    let first = index
         .entries()
         .iter()
         .filter_map(|entry| match &entry.place {
             Place::Zip(place) => Some(place.offset),
             _ => None,
         })
-        .min()
-        .is_some_and(|first| first > 0)
+        .min();
+
+    match first {
+        Some(first) => Ok(first > 0),
+        None => Ok(directory::base(file)? > 0),
+    }
 }
 
 /// Writes the zip of `old` without its left-out entries, then `added`, into `out`; `limits` say where a number becomes a
@@ -102,7 +107,7 @@ pub(super) fn rewrite<'a, W: Write + Seek>(
     Layout::new(old.index.entries())?;
 
     // What comes before the first entry (a self-extracting program) is not copied: refused, not dropped.
-    if starts_late(old.index) {
+    if starts_late(old.index, old.file)? {
         return Err(refusal(
             io::ErrorKind::Unsupported,
             "this archive has data before its entries, so it can't be changed",
