@@ -1,3 +1,10 @@
+# [0.20.0](https://github.com/MSpiechowicz/pairpane/compare/v0.19.0...v0.20.0) (2026-11-22)
+
+
+### Features
+
+* **diff:** compare files by content (#44) ([e3b6066](https://github.com/MSpiechowicz/pairpane/commit/e3b606693e25f0b580fea40d6f9f8fdeab46f1d9))
+
 # [0.19.0](https://github.com/MSpiechowicz/pairpane/compare/v0.18.0...v0.19.0) (2026-11-22)
 
 
