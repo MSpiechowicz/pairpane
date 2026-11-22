@@ -133,6 +133,7 @@ pub fn run() -> ExitCode {
             commands::view::read::view_image_decode,
             commands::view::search::view_search,
             commands::view::search::view_search_cancel,
+            commands::view::diff::diff_next_difference,
             commands::view::media::view_media,
             commands::edit::edit_open,
             commands::edit::edit_save,

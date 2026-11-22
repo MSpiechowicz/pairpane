@@ -18,6 +18,7 @@
     { action: 'split', label: 'Split file…' },
     { action: 'combine', label: 'Combine files…' },
     { action: 'find', label: 'Find files…', keys: 'Alt+F7' },
+    { action: 'compareFiles', label: 'Compare files…', keys: 'Shift+F2' },
     { action: 'compare', label: 'Compare folders' },
     { action: 'synchronize', label: 'Synchronize folders…' },
     { action: 'pack', label: 'Pack…', keys: 'Alt+F5' },

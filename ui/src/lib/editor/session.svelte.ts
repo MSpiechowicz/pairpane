@@ -9,6 +9,9 @@ import type { EditorSurface } from './surface';
 /** How a save ended: the file is written, it changed (or went) on disk since it was read, or it was refused. */
 export type SaveResult = 'saved' | 'changed' | 'failed';
 
+/** How each line ending is written for the user. */
+export const ENDING_LABELS: Record<LineEnding, string> = { lf: 'LF', crlf: 'CRLF', cr: 'CR' };
+
 /** Whether the encoding can start with a byte order mark (UTF-8 and UTF-16; the others have none). */
 export const isUnicode = (encoding: string) => encoding === 'UTF-8' || encoding.startsWith('UTF-16');
 

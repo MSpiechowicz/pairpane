@@ -9,6 +9,7 @@
 //! - [`ViewFile::read_at`] and [`ViewFile::size`]: raw bytes at an offset (the hex view, images, PDF, media).
 //! - [`text_window`]: lines of a text file from or up to a byte offset, in any encoding.
 //! - [`search`]: the next or previous match of a text or byte needle, scanned in chunks, cancellable.
+//! - [`next_difference`]: the next or previous byte where two open files differ, scanned in chunks, cancellable.
 //! - [`markdown`]: a Markdown file as a tree of plain data; [`archive`]: the entries of a zip, tar (plain or compressed)
 //!   or 7z, as [`crate::archive`] reads them. Both take
 //!   a cancel flag (raised when the session ends) and then fail with `Interrupted`.
@@ -27,6 +28,7 @@
 //! ours are marked ([`refusal`], [`is_refusal`]), so a caller can show those and nothing else.
 
 mod archive;
+mod difference;
 mod encoding;
 mod file;
 mod heic;
@@ -44,6 +46,8 @@ mod text;
 mod archive_limit_tests;
 #[cfg(test)]
 mod archive_tests;
+#[cfg(test)]
+mod difference_tests;
 #[cfg(test)]
 mod encoding_tests;
 #[cfg(test)]
@@ -72,6 +76,7 @@ mod zip_tests;
 use std::io;
 
 pub use archive::archive;
+pub use difference::{DIFF_BUDGET, DIFF_CHUNK, next_difference};
 pub use encoding::is_known_encoding;
 pub(crate) use encoding::{bom_len, by_name, detect, is_utf16};
 pub use file::ViewFile;

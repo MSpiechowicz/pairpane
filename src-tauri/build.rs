@@ -53,6 +53,7 @@ const COMMANDS: &[&str] = &[
     "view_text",
     "view_search",
     "view_search_cancel",
+    "diff_next_difference",
     "view_markdown",
     "view_archive",
     "view_image_decode",

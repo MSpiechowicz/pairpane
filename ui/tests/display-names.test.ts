@@ -19,6 +19,7 @@ const ALLOWED: Record<string, string> = {
   'ops/OpDialog.svelte: spec.label': 'the fixed name of the field a dialog asks for (`Target folder`)',
   'ops/PasswordDialog.svelte: message': 'one of two fixed sentences',
   'viewer/HexView.svelte: row.label': 'the offset of a row in hex digits',
+  'diff/HexDiffView.svelte: row.label': 'the offset of a row in hex digits',
 };
 
 interface Shown {
@@ -161,6 +162,30 @@ describe('names on the screen', () => {
       expect.arrayContaining(['displayName(place(roots.left))', 'displayName(place(roots.right))', 'displayName(syncer.failure)', 'displayName(syncer.notice)']),
     );
     expect(shownIn(sources['../src/lib/panes/PaneRow.svelte']).map(({ expression }) => expression)).toContain('MARK_TEXT[mark]');
+  });
+
+  it('the file diff, its headers, its toolbar and its two views are among the components it reads', () => {
+    const files = Object.keys(sources).map((path) => path.replace('../src/lib/', ''));
+    const shown = (file: string) => shownIn(sources[`../src/lib/${file}`]).map(({ expression }) => expression);
+
+    expect(files).toEqual(
+      expect.arrayContaining([
+        'diff/DiffOverlay.svelte',
+        'diff/DiffSideHeader.svelte',
+        'diff/DiffToolbar.svelte',
+        'diff/DiffNote.svelte',
+        'diff/DiffFrame.svelte',
+        'diff/TextDiffView.svelte',
+        'diff/HexDiffView.svelte',
+        'editor/EditBanners.svelte',
+      ]),
+    );
+    // The names of the two files, the notes (also what the hex comparison says and what it failed with) and what a side failed with are shown, so each is written through displayName.
+    expect(shown('diff/DiffSideHeader.svelte')).toEqual(expect.arrayContaining(['displayName(session.name)', 'displayName(session.encoding)']));
+        expect(shown('diff/DiffToolbar.svelte')).toContain('displayName(summary)');
+    expect(shown('diff/HexDiffView.svelte')).toEqual(expect.arrayContaining(['displayName(hex.left.name)', 'displayName(hex.right.name)']));
+    expect(shown('diff/DiffNote.svelte')).toContain('displayName(text)');
+    expect(shown('editor/EditBanners.svelte')).toEqual(expect.arrayContaining(['displayName(session.note)', 'displayName(session.failure)']));
   });
 
   it('looks at the components that are there, and every exception is still needed', () => {

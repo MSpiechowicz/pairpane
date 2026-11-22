@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-diff-next-difference"
+description = "Enables the diff_next_difference command without any pre-configured scope."
+commands.allow = ["diff_next_difference"]
+
+[[permission]]
+identifier = "deny-diff-next-difference"
+description = "Denies the diff_next_difference command without any pre-configured scope."
+commands.deny = ["diff_next_difference"]

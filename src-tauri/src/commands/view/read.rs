@@ -87,7 +87,7 @@ impl Viewer {
 }
 
 /// Runs `work` on the file of `handle` on a blocking thread that holds a place of `cap` (of at most `max`).
-async fn run<T: Send + 'static>(
+pub(super) async fn run<T: Send + 'static>(
     cap: &ThreadCap,
     max: usize,
     handle: Handle,

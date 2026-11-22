@@ -16,6 +16,7 @@
 //!   session and deleted at once; the stale ones are swept at start-up and exit.
 //! - `read.rs`: raw bytes, text windows, Markdown and archive listings (the last two stop when the session ends) and
 //!   HEIC pictures decoded to pixels by the system's own codecs (`view_image_decode`).
+//! - `diff.rs`: `diff_next_difference`, where the files of two sessions next differ (the hex diff), on the search cap.
 //! - `search.rs`: the search of a session, cancelled by the next search, by `view_search_cancel` and by closing.
 //! - `media.rs`: the tokens `view_media` hands out; `serve.rs`: the `pairpane-media` scheme that answers them.
 
@@ -37,11 +38,14 @@ use super::panes::resolve;
 use crate::error::{CommandError, CommandResult};
 
 pub mod archive_entry;
+pub mod diff;
 pub mod media;
 pub mod read;
 pub mod search;
 pub mod serve;
 
+#[cfg(test)]
+mod diff_tests;
 #[cfg(test)]
 mod heic_tests;
 #[cfg(test)]

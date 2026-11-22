@@ -1,6 +1,7 @@
 import type { Answer } from './bindings/Answer';
 import type { AppInfo } from './bindings/AppInfo';
 import type { ArchiveListing } from './bindings/ArchiveListing';
+import type { ByteDifference } from './bindings/ByteDifference';
 import type { CompareEvent } from './bindings/CompareEvent';
 import type { CompareId } from './bindings/CompareId';
 import type { CompareOptions } from './bindings/CompareOptions';
@@ -115,6 +116,7 @@ export const commands = {
   view_open: cmd<{ path: string; name: string }, ViewOpened>(),
   archive_view_open: cmd<{ archive: string; dir: string; name: string }, ViewOpened>(),
   view_close: cmd<{ session: number }, null>(),
+  diff_next_difference: cmd<{ left: number; right: number; from: number; forward: boolean }, ByteDifference>(),
   view_bytes: cmd<{ session: number; offset: number; length: number }, ArrayBuffer>(),
   view_image_decode: cmd<{ session: number }, ArrayBuffer>(),
   view_text: cmd<{ session: number; query: TextQuery }, TextWindow>(),

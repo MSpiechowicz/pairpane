@@ -25,11 +25,14 @@ export class HexModel {
   error = $state<string | undefined>();
 
   readonly #session: ViewSession;
+  /** How far the view scrolls at least: the diff of two files lays both out to the longer one's end. */
+  readonly #extent: () => number;
   readonly #wheel = new Wheel();
   #generation = 0;
 
-  constructor(session: ViewSession) {
+  constructor(session: ViewSession, extent: () => number = () => 0) {
     this.#session = session;
+    this.#extent = extent;
   }
 
   get size(): number {
@@ -38,7 +41,7 @@ export class HexModel {
 
   /** The furthest the view scrolls: the offset of the first row of the last page. */
   get limit(): number {
-    return lastTop(this.size, this.rows);
+    return lastTop(Math.max(this.size, this.#extent()), this.rows);
   }
 
   /** Whether the bytes of the rows in view are all held. */
