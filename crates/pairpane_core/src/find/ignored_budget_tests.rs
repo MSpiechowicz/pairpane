@@ -405,70 +405,7 @@ fn rules_above_folders_without_rules_are_read_once_however_many_of_those_are_rem
     assert_eq!(ignores.compiles(), 1);
 }
 
-/// A chain of folders and a file `name` in each of them, made below `root` as `<chain>/d/d/d/...`: the folders, from the
-/// top one down.
+// Chains of folders deeper than macOS (1 024 bytes of path) or Windows (260) allow, made and searched on Linux only.
 #[cfg(target_os = "linux")]
-fn plain_chain(root: &std::path::Path, chain: usize, levels: usize) -> Vec<std::path::PathBuf> {
-    let mut folder = root.join(format!("c{chain}"));
-    let mut folders = vec![folder.clone()];
-
-    for _ in 1..levels {
-        folder.push("d");
-        folders.push(folder.clone());
-    }
-    std::fs::create_dir_all(&folder).expect("a chain");
-
-    folders
-}
-
-// Paths this long cannot be built on macOS (1 024 bytes) or Windows (260).
-#[cfg(target_os = "linux")]
-#[test]
-fn deep_chains_of_folders_without_ignore_files_stay_within_the_bound_and_are_searched_fast() {
-    const CHAINS: usize = 21;
-    const LEVELS: usize = 400;
-    const _: () = assert!(
-        CHAINS * LEVELS > 2 * super::ignored::KEPT,
-        "the folders must outnumber the bound twice over"
-    );
-
-    let top = temp();
-    put(top.path(), ".ignore", b"secret\n");
-    let chains: Vec<Vec<std::path::PathBuf>> = (0..CHAINS)
-        .map(|chain| plain_chain(top.path(), chain, LEVELS))
-        .collect();
-    // A longer one, of a thousand folders.
-    let long = plain_chain(top.path(), CHAINS, 1_000);
-    for end in chains.iter().chain([&long]).filter_map(|chain| chain.last()) {
-        put(end, "secret", b"x");
-        put(end, "found", b"x");
-    }
-
-    let root = top.path().to_owned();
-    let walk = root.clone();
-    let (ignores, kept) = within(IN_TIME, move || {
-        let (ignores, _) = ignores(&walk);
-        let mut left_out = 0;
-
-        for chain in chains.iter().chain([&long]) {
-            left_out += ask_each(&ignores, chain, "secret");
-        }
-
-        (ignores, left_out)
-    });
-
-    // Every folder of every chain left `secret` out by the rule of the top folder, with no more than the bound of places.
-    assert_eq!(kept, CHAINS * LEVELS + 1_000);
-    assert!(
-        ignores.remembered_peak() <= super::ignored::KEPT,
-        "{}",
-        ignores.remembered_peak()
-    );
-    assert_eq!(ignores.compiles(), 1);
-
-    let found = within(IN_TIME, move || search(&root, ignoring()));
-    let found_files = found.paths().iter().filter(|path| path.ends_with("/found")).count();
-    assert_eq!(found_files, CHAINS + 1);
-    assert!(!found.paths().iter().any(|path| path.ends_with("/secret")));
-    assert_eq!(found.done().1, 0);
-}
+#[path = "ignored_deep_tests.rs"]
+mod deep;
