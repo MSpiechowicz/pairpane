@@ -8,7 +8,7 @@ use pretty_assertions::assert_eq;
 
 use super::entries::{EntryType, Flow, Place, Record};
 use super::tar::walk;
-use super::testing::{Central, MOMENT, directory_of, field, tar_of, zip_of};
+use super::testing::{Central, MOMENT, Member, directory_of, field, tar_of, zip_members, zip_of};
 use super::zip::{AesExtra, ZipPlace, directory};
 
 fn idle() -> AtomicBool {
@@ -43,7 +43,12 @@ fn one_record(central: &Central<'_>) -> Record {
 
 #[test]
 fn a_zip_record_has_everything_the_data_reader_needs() {
-    let zip = zip_of(&[("a.txt", b"hello"), ("dir/", b""), ("b.bin", &[7; 300])]);
+    // Made by hand: the test is about the layout of the headers (30 bytes, the name, the data) and the plain "made by".
+    let zip = zip_members(&[
+        Member::stored("a.txt", b"hello"),
+        Member::stored("dir/", b""),
+        Member::stored("b.bin", &[7; 300]),
+    ]);
 
     let records = zip_records(&zip);
 

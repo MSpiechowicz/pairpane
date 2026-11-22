@@ -22,7 +22,8 @@ export type FileAction =
   | 'verifyChecksum'
   | 'split'
   | 'combine'
-  | 'extract';
+  | 'extract'
+  | 'pack';
 
 /** What the OS calls the place deleted items go to. */
 export const trashName = () => (isWindowsPlatform() ? 'Recycle Bin' : 'Trash');

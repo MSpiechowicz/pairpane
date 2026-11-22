@@ -8,7 +8,7 @@ export const HASHES: readonly { algorithm: HashAlgorithm; label: string }[] = [
 ];
 
 /** The last folder of a path (`/home/ann/docs` → `docs`); `undefined` at a root (`/`, `C:\`). */
-function folderName(path: string): string | undefined {
+export function folderName(path: string): string | undefined {
   const last = path.split(/[\\/]/).filter((part) => part !== '').at(-1);
   return last === undefined || last.endsWith(':') ? undefined : last;
 }

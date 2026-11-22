@@ -9,7 +9,8 @@
 //! reaches the page as `passwordRequired`, with "needs a password" or "the password is wrong" (the page tells the two
 //! apart by the word "wrong").
 //!
-//! - `panes/archive.rs`: `archive_open`. `ops/extract.rs`: `ops_extract`. `view/archive_entry.rs`: `archive_view_open`.
+//! - `panes/archive.rs`: `archive_open`. `ops/extract.rs`: `ops_extract`. `ops/add.rs`: `ops_add_to_archive`.
+//!   `view/archive_entry.rs`: `archive_view_open`. (`ops_pack` writes a new archive and reads none.)
 
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -129,6 +130,12 @@ impl Archives {
     /// Drops the password kept for the archive, so the page is asked for one again.
     pub(super) fn forget(&self, archive: &Path) {
         self.lock().remove(archive);
+    }
+
+    /// Drops the index kept for the archive, whatever state of the file it was made from, so the next open reads the
+    /// archive again (it was replaced, or may have been).
+    pub(super) fn forget_index(&self, archive: &Path) {
+        self.cache.forget(archive);
     }
 
     /// [`Archives::forget`], but only when the password kept is `used` (the very one): a job that learns its password was
@@ -284,6 +291,21 @@ pub(super) fn check_inner(dir: &str) -> CommandResult<()> {
     Ok(())
 }
 
+/// A password the page sent: between 1 and [`MAX_PASSWORD_BYTES`] bytes. It is wrapped at once, so it never appears in an
+/// error, an event or a log.
+pub(super) fn checked_password(password: String) -> CommandResult<Password> {
+    let password = Password::new(password);
+
+    if password.as_bytes().is_empty() || password.as_bytes().len() > MAX_PASSWORD_BYTES {
+        return Err(CommandError::new(
+            IpcErrorCode::InvalidInput,
+            "a password must have between 1 and 1024 bytes",
+        ));
+    }
+
+    Ok(password)
+}
+
 /// Whether `password` opens the archive at `archive`, and if it does, keeps it for the archive until the app exits. The
 /// check is cheap (see [`archive::check_password`]): a format with nothing to check ahead accepts any password, and a
 /// later failure asks again. A wrong password is not kept.
@@ -295,13 +317,7 @@ pub async fn archive_password(archives: State<'_, Archives>, archive: String, pa
 impl Archives {
     /// Checks the arguments of [`archive_password`] and the password, on a blocking thread.
     pub(super) async fn remember_if_right(&self, archive: String, password: String) -> CommandResult<bool> {
-        if password.is_empty() || password.len() > MAX_PASSWORD_BYTES {
-            return Err(CommandError::new(
-                IpcErrorCode::InvalidInput,
-                "a password must have between 1 and 1024 bytes",
-            ));
-        }
-        let password = Password::new(password);
+        let password = checked_password(password)?;
         let target = Target::parse(archive)?;
         let permit = self.begin()?;
 

@@ -68,6 +68,7 @@ describe('an archive is read-only', () => {
     ['Delete', {}],
     ['Delete', { shiftKey: true }],
     ['Enter', { altKey: true }],
+    ['F5', { altKey: true }],
   ])('%s %o says so and does nothing', async (name, init) => {
     const backend = await world();
     await cursorTo(2);
@@ -76,7 +77,7 @@ describe('an archive is read-only', () => {
 
     expect(await screen.findByText(READ_ONLY)).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    for (const command of ['ops_start', 'ops_extract', 'ops_delete', 'ops_trash', 'ops_rename', 'ops_mkdir', 'ops_mkfile', 'edit_external']) {
+    for (const command of ['ops_start', 'ops_extract', 'ops_pack', 'ops_delete', 'ops_trash', 'ops_rename', 'ops_mkdir', 'ops_mkfile', 'edit_external']) {
       expect(backend.sent(command)).toEqual([]);
     }
   });

@@ -226,6 +226,43 @@ describe('Split file', () => {
   });
 });
 
+describe('Pack', () => {
+  it('Alt+F5 packs the cursor item into the other pane`s folder, and the Files menu does the same', async () => {
+    const backend = await shown();
+
+    await key(listbox('Left'), 'F5', { altKey: true });
+    expect(screen.getByRole('dialog', { name: 'Pack “a.pdf”' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Archive' })).toHaveValue('/right/a.pdf.zip');
+    await fireEvent.click(screen.getByRole('button', { name: 'Pack' }));
+
+    await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(backend.sent('ops_pack')).toEqual([
+      {
+        from: '/left',
+        names: ['a.pdf'],
+        archive: '/right/a.pdf.zip',
+        format: 'zip',
+        level: 'normal',
+        password: null,
+        encryptNames: false,
+      },
+    ]);
+
+    await choose('Pack…');
+    expect(screen.getByRole('dialog', { name: 'Pack “a.pdf”' })).toBeInTheDocument();
+  });
+
+  it('packs the selection, named after the folder', async () => {
+    await shown();
+    await key(listbox('Left'), 'a', { ctrlKey: true });
+
+    await key(listbox('Left'), 'F5', { altKey: true });
+
+    expect(screen.getByRole('dialog', { name: 'Pack 3 items' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Archive' })).toHaveValue('/right/left.zip');
+  });
+});
+
 describe('Combine files', () => {
   const withParts = async () => {
     const backend = await shown();

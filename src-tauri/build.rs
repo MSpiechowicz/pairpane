@@ -23,6 +23,8 @@ const COMMANDS: &[&str] = &[
     "ops_subscribe",
     "ops_start",
     "ops_extract",
+    "ops_pack",
+    "ops_add_to_archive",
     "ops_control",
     "ops_answer",
     "ops_rename",

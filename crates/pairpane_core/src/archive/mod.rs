@@ -1,6 +1,6 @@
 //! Archives: reading the entries of a zip, tar (plain or compressed), gzip, 7z or RAR file without extracting anything,
-//! and, later, handing out the data of chosen entries. Nothing here writes to the disk; extraction is `ops`'s job, fed by
-//! an [`EntrySource`].
+//! and, later, handing out the data of chosen entries. Nothing here touches the disk; extraction and packing are `ops`'s
+//! job, fed by an [`EntrySource`] and feeding the [`write`] writers.
 //!
 //! # API
 //!
@@ -14,6 +14,8 @@
 //! - [`IndexCache`] and [`Fingerprint`] ([`cache`]): the last four indexes, keyed by the file's state.
 //! - [`open_source`]: an [`EntrySource`], which calls a visitor with the data of the wanted entries (ascending
 //!   ordinals) as bounded readers ([`Declared`] keeps each to the size it declares).
+//! - [`write`]: the writers a pack job uses (zip, tar.zst, 7z) over a `Write`; they read nothing of the disk and are fed
+//!   entries with readers by `ops`.
 //! - [`Password`]: held in memory only, zeroized, `Debug` hides it. A password that an archive needs and lacks (or that is
 //!   wrong) surfaces as an error made by [`password_error`] and recognised by [`password_fault`].
 //! - [`check_password`]: whether a password opens an archive, judged cheaply (a zip by the verifier or check byte of its
@@ -46,6 +48,7 @@ pub mod password;
 pub mod rar;
 pub mod sevenz;
 pub mod tar;
+pub mod write;
 pub mod zip;
 
 #[cfg(test)]

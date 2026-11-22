@@ -22,6 +22,7 @@ export type Action =
   | 'deletePermanently'
   | 'properties'
   | 'extract'
+  | 'pack'
   | 'transfers'
   | 'view'
   | 'edit'
@@ -70,6 +71,8 @@ function withAlt(event: KeyboardEvent): Action | undefined {
       return 'driveMenuRight';
     case 'Enter':
       return 'properties';
+    case 'F5':
+      return 'pack';
     case 'F9':
       return 'extract';
     default:

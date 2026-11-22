@@ -11,7 +11,7 @@ use crate::archive::testing::{DOS_TIME, Member, field};
 use crate::archive::{ArchiveIndex, Flow, Input, Password, build_index, open_source};
 use crate::model::ArchiveFormat;
 
-use super::winzip_aes::{self, Keys};
+use super::winzip_aes::{self, Keys, Sealing};
 use super::zipcrypto;
 
 pub(super) const STORED: u16 = 0;
@@ -107,12 +107,9 @@ pub(super) fn aes<'a>(
         .collect();
     let keys = Keys::derive(&Password::new(password.to_owned()), &salt, key);
 
-    let mut data = salt;
-    data.extend_from_slice(&keys.verifier());
-    let start = data.len();
-    data.extend_from_slice(&plain.data);
-    let tag = keys.seal(&mut data[start..]);
-    data.extend_from_slice(&tag);
+    let mut sealing = Sealing::begin(Vec::new(), &salt, keys).expect("a sealing writer");
+    sealing.write_all(&plain.data).expect("encrypt");
+    let data = sealing.finish().expect("the tag");
 
     let mut info = version.to_le_bytes().to_vec();
     info.extend_from_slice(b"AE");

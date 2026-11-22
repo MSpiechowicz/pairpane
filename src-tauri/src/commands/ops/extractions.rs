@@ -1,10 +1,12 @@
-//! The extraction jobs that run with a password, so a password the archive turns down while the job decrypts is forgotten.
+//! The jobs on an archive that run with a password, so a password the archive turns down while the job decrypts is
+//! forgotten, and the jobs that rewrite an archive, so the index kept for it goes when they end.
 //!
 //! The check before a job starts catches a password the directory of a zip or 7z turns down, but a password that only
 //! fails on the data (an encrypted entry's checksum, a RAR is never given one) ends the job with `passwordRequired` and
 //! the text "the password is wrong". Without this the stored password would be sent with the next try, and the page could
 //! never ask for another one. The events the engine produces pass through [`Extractions::observe`] before they are
-//! delivered, so the password is dropped before the page learns the job failed.
+//! delivered, so the password is dropped before the page learns the job failed. A job that adds to an archive may replace
+//! the file, however it ends, so the index kept for the archive is dropped with it and the next open reads it again.
 //!
 //! [`Extractions::submit`] holds the lock from before the job is queued until it is registered, so a job that ends at
 //! once waits to find its entry. The events produced on the thread that is submitting (the job being added, a job that
@@ -65,14 +67,15 @@ fn defer(ended: Ended) -> bool {
     })
 }
 
-/// The archive and password of a running job.
+/// The archive of a running job, the password it was given and whether it rewrites the archive.
 struct Running {
     archives: Archives,
     archive: PathBuf,
-    password: Arc<Password>,
+    password: Option<Arc<Password>>,
+    rewrites: bool,
 }
 
-/// The extraction jobs that were given a password, by id, until they end.
+/// The jobs that were given a password or that rewrite their archive, by id, until they end.
 #[derive(Default)]
 pub(super) struct Extractions {
     jobs: Mutex<HashMap<JobId, Running>>,
@@ -93,13 +96,36 @@ impl Extractions {
         password: Option<Arc<Password>>,
         submit: impl FnOnce() -> CommandResult<JobId>,
     ) -> CommandResult<JobId> {
+        self.track(archives, archive, password, false, submit)
+    }
+
+    /// [`Extractions::submit`] for a job that may replace the archive: the index kept for the archive goes when the job
+    /// ends, however it ends, with or without a password.
+    pub(super) fn submit_rewrite(
+        &self,
+        archives: &Archives,
+        archive: PathBuf,
+        password: Option<Arc<Password>>,
+        submit: impl FnOnce() -> CommandResult<JobId>,
+    ) -> CommandResult<JobId> {
+        self.track(archives, archive, password, true, submit)
+    }
+
+    fn track(
+        &self,
+        archives: &Archives,
+        archive: PathBuf,
+        password: Option<Arc<Password>>,
+        rewrites: bool,
+        submit: impl FnOnce() -> CommandResult<JobId>,
+    ) -> CommandResult<JobId> {
         let mut jobs = self.lock();
         let submitting = Submitting::begin();
         let queued = submit();
         let deferred = submitting.end();
 
         if let Ok(id) = &queued
-            && let Some(password) = password
+            && (password.is_some() || rewrites)
         {
             jobs.insert(
                 *id,
@@ -107,6 +133,7 @@ impl Extractions {
                     archives: archives.clone(),
                     archive,
                     password,
+                    rewrites,
                 },
             );
         }
@@ -140,18 +167,25 @@ impl Extractions {
     }
 }
 
-/// Takes the entries of the jobs `ended` out of `jobs`; returns those of the jobs that ended with a wrong password.
-fn settle(jobs: &mut HashMap<JobId, Running>, ended: Vec<Ended>) -> Vec<Running> {
+/// Takes the entries of the jobs `ended` out of `jobs`, each with whether it ended with a wrong password.
+fn settle(jobs: &mut HashMap<JobId, Running>, ended: Vec<Ended>) -> Vec<(Running, bool)> {
     ended
         .into_iter()
-        .filter_map(|(id, wrong)| jobs.remove(&id).filter(|_| wrong))
+        .filter_map(|(id, wrong)| jobs.remove(&id).map(|running| (running, wrong)))
         .collect()
 }
 
-/// Forgets the passwords of `jobs` (unless the user gave another one since), with no lock of the entries held.
-fn forget_all(jobs: Vec<Running>) {
-    for running in jobs {
-        running.archives.forget_used(&running.archive, &running.password);
+/// Forgets what the jobs that ended leave stale, with no lock of the entries held: the index of an archive a job may have
+/// replaced, and the password of a job that ended with it wrong (unless the user gave another one since).
+fn forget_all(jobs: Vec<(Running, bool)>) {
+    for (running, wrong) in jobs {
+        if running.rewrites {
+            running.archives.forget_index(&running.archive);
+        }
+
+        if wrong && let Some(used) = &running.password {
+            running.archives.forget_used(&running.archive, used);
+        }
     }
 }
 

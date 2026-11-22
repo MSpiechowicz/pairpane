@@ -51,6 +51,7 @@ const CHANGES: FileAction[] = [
   'verifyChecksum',
   'split',
   'combine',
+  'pack',
 ];
 
 describe('FileActions in an archive', () => {
@@ -92,6 +93,15 @@ describe('FileActions in an archive', () => {
     files.run('copy');
 
     expect(files.toast?.text).toBe(INTO_ARCHIVE_NOTICE);
+  });
+
+  it('pack with the other pane inside an archive offers the folder of the items, not the archive', async () => {
+    const { files } = await world({ left: false, right: true });
+
+    files.run('pack');
+
+    expect(files.toast).toBeUndefined();
+    expect(files.tools.dialog).toMatchObject({ kind: 'pack', path: '/work', names: ['b.txt'], to: '/work' });
   });
 
   it('the actions that only read still work on a folder, and delete still asks there', async () => {

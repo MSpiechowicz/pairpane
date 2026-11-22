@@ -199,6 +199,7 @@
       case 'deletePermanently':
       case 'properties':
       case 'extract':
+      case 'pack':
         files.run(action);
         break;
       case 'transfers':

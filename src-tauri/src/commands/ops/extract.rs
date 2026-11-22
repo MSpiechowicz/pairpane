@@ -82,6 +82,26 @@ impl Ops {
 /// archive's directory turns down the one there is (which is then forgotten, so the page asks again). A password that
 /// only fails later, while the job decrypts, ends the job with `passwordRequired` and is not forgotten here.
 fn prepare(archives: &Archives, target: &Target, dir: &str, names: &[String]) -> Result<ArchiveJob, IpcError> {
+    // A compressed tar is decoded by the job itself, which can be cancelled and shows its progress.
+    let source = load(archives, target, false)?;
+
+    if let Some(index) = &source.index {
+        let selection = index
+            .select(dir, names)
+            .ok_or_else(|| IpcError::new(IpcErrorCode::NotFound, "the folder or item is not in the archive"))?;
+
+        if source.password.is_none() && selection.any_encrypted() {
+            return Err(archive_error(&archive::password_error(PasswordFault::Needed)));
+        }
+    }
+
+    Ok(source)
+}
+
+/// The part of [`prepare`] that every job on an archive shares: the archive opened, its index (kept, or built now; for a
+/// zip or 7z always, for a tar only when `whole` says the caller needs the index and cannot leave it to the job), the
+/// state of the file the index was made from and the password kept for it. Blocking.
+pub(super) fn load(archives: &Archives, target: &Target, whole: bool) -> Result<ArchiveJob, IpcError> {
     let opened = archives.open(target).map_err(|error| archive_error(&error))?;
     let password = archives.password(&target.path);
 
@@ -92,8 +112,7 @@ fn prepare(archives: &Archives, target: &Target, dir: &str, names: &[String]) ->
                 .format(target, &opened)
                 .map_err(|error| archive_error(&error))?;
 
-            // A compressed tar is decoded by the job itself, which can be cancelled and shows its progress.
-            if matches!(format, ArchiveFormat::Zip | ArchiveFormat::SevenZ) {
+            if whole || matches!(format, ArchiveFormat::Zip | ArchiveFormat::SevenZ) {
                 Some(
                     archives
                         .index(target, &opened, archives.stop(), None)
@@ -105,16 +124,6 @@ fn prepare(archives: &Archives, target: &Target, dir: &str, names: &[String]) ->
         }
     };
 
-    if let Some(index) = &index {
-        let selection = index
-            .select(dir, names)
-            .ok_or_else(|| IpcError::new(IpcErrorCode::NotFound, "the folder or item is not in the archive"))?;
-
-        if password.is_none() && selection.any_encrypted() {
-            return Err(archive_error(&archive::password_error(PasswordFault::Needed)));
-        }
-    }
-
     Ok(ArchiveJob {
         index,
         fingerprint: Some(opened.fingerprint),
@@ -123,7 +132,7 @@ fn prepare(archives: &Archives, target: &Target, dir: &str, names: &[String]) ->
 }
 
 /// A folder inside an archive: every part is a plain name that fits.
-fn check_folders(dir: &str) -> CommandResult<()> {
+pub(super) fn check_folders(dir: &str) -> CommandResult<()> {
     if dir.is_empty() {
         return Ok(());
     }

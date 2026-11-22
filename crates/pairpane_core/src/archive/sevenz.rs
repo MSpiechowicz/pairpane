@@ -29,21 +29,21 @@ const MEMORY_KB: usize = 512 * 1024;
 const PROBE: u64 = 64 * 1024;
 
 /// Windows attribute bits of a 7z entry.
-const ATTRIBUTE_DIRECTORY: u32 = 0x10;
+pub(super) const ATTRIBUTE_DIRECTORY: u32 = 0x10;
 const ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 /// Set when the high 16 bits of the attributes are a Unix `st_mode` (what p7zip and 7-Zip on Unix write).
-const ATTRIBUTE_UNIX_EXTENSION: u32 = 0x8000;
+pub(super) const ATTRIBUTE_UNIX_EXTENSION: u32 = 0x8000;
 
 /// The `st_mode` bits: the file type and the permission bits.
 const MODE_TYPE: u32 = 0o170_000;
-const MODE_DIRECTORY: u32 = 0o040_000;
-const MODE_REGULAR: u32 = 0o100_000;
+pub(super) const MODE_DIRECTORY: u32 = 0o040_000;
+pub(super) const MODE_REGULAR: u32 = 0o100_000;
 const MODE_SYMLINK: u32 = 0o120_000;
 const MODE_PERMISSIONS: u32 = 0o7777;
 
 /// 100 ns ticks per millisecond, and the milliseconds from 1601 (the 7z epoch) to 1970.
-const TICKS_PER_MILLISECOND: u64 = 10_000;
-const EPOCH_GAP_MS: i64 = 11_644_473_600_000;
+pub(super) const TICKS_PER_MILLISECOND: u64 = 10_000;
+pub(super) const EPOCH_GAP_MS: i64 = 11_644_473_600_000;
 
 /// The archive file, read and sought at the pace of the decoder. Once `cancel` is raised a read fails, with an error of
 /// kind `Other` and not `Interrupted`: the decoders drain what they skip with `io::copy`, which tries again at every

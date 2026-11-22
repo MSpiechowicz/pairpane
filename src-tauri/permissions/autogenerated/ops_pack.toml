@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ops-pack"
+description = "Enables the ops_pack command without any pre-configured scope."
+commands.allow = ["ops_pack"]
+
+[[permission]]
+identifier = "deny-ops-pack"
+description = "Denies the ops_pack command without any pre-configured scope."
+commands.deny = ["ops_pack"]

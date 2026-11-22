@@ -5,7 +5,7 @@ import type { PaneView } from '$lib/panes/view.svelte';
 import { chosen } from './targets';
 
 /** The file tools: what the Files menu and Alt+Enter ask for besides copying, moving and the like. */
-export type ToolAction = 'properties' | 'attributes' | 'checksum' | 'verifyChecksum' | 'split';
+export type ToolAction = 'properties' | 'attributes' | 'checksum' | 'verifyChecksum' | 'split' | 'pack';
 
 /** The dialog of a tool that is open; `source` is the pane its items are in. */
 export type ToolDialog =
@@ -13,9 +13,11 @@ export type ToolDialog =
   | { kind: 'attributes'; path: string; entries: Entry[]; source: PaneView }
   | { kind: 'checksum'; path: string; names: string[]; source: PaneView }
   /** The parts go into the folder `to` to begin with: the other pane's. */
-  | { kind: 'split'; path: string; entry: Entry; to: string; source: PaneView };
+  | { kind: 'split'; path: string; entry: Entry; to: string; source: PaneView }
+  /** The archive is made in the folder `to` to begin with: the other pane's (the folder of the items when that pane is in an archive). */
+  | { kind: 'pack'; path: string; names: string[]; to: string; source: PaneView };
 
-const TOOLS: ReadonlySet<string> = new Set<ToolAction>(['properties', 'attributes', 'checksum', 'verifyChecksum', 'split']);
+const TOOLS: ReadonlySet<string> = new Set<ToolAction>(['properties', 'attributes', 'checksum', 'verifyChecksum', 'split', 'pack']);
 
 export const isTool = (action: string): action is ToolAction => TOOLS.has(action);
 
@@ -26,8 +28,8 @@ const NOT_A_FILE = {
 } as const;
 
 /**
- * The properties dialog, the attributes dialog, the checksum file and the split, and the check of a checksum file,
- * on the items of the active pane. The window shows `dialog` and hands the user's answers back; `say` is how a
+ * The properties dialog, the attributes dialog, the checksum file, the split, the archive and the check of a checksum
+ * file, on the items of the active pane. The window shows `dialog` and hands the user's answers back; `say` is how a
  * refusal that needs no dialog reaches the user.
  */
 export class ItemTools {
@@ -49,7 +51,7 @@ export class ItemTools {
   /**
    * Does what the tool asks on `source`'s items; nothing when there is nothing to act on. Properties, splitting and
    * checking act on the entry under the cursor (the others on the selection, as copying does); the parts of a split
-   * go to the other pane's folder.
+   * and the archive go to the other pane's folder.
    */
   run(action: ToolAction, source: PaneView, other: PaneView) {
     const path = source.listing.path;
@@ -65,6 +67,9 @@ export class ItemTools {
         break;
       case 'checksum':
         this.dialog = { kind: 'checksum', path, names: entries.map((entry) => entry.name), source };
+        break;
+      case 'pack':
+        this.dialog = { kind: 'pack', path, names: entries.map((entry) => entry.name), to: other.listing.path ?? path, source };
         break;
       case 'properties':
         if (under !== undefined) {
@@ -102,7 +107,7 @@ export class ItemTools {
     this.dialog = undefined;
   }
 
-  /** A job started: a checksum file takes the selection it was made for, and the cursor goes to the new file. */
+  /** A job started: a checksum file or an archive takes the selection it was made for, and the cursor goes to a new checksum file. */
   done(output?: string) {
     const dialog = this.dialog;
     this.dialog = undefined;
@@ -110,6 +115,8 @@ export class ItemTools {
     if (dialog?.kind === 'checksum' && output !== undefined) {
       dialog.source.deselect(dialog.names);
       dialog.source.pointAt(output);
+    } else if (dialog?.kind === 'pack') {
+      dialog.source.deselect(dialog.names);
     }
   }
 }

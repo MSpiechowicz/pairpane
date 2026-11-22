@@ -171,6 +171,7 @@ describe('the Files menu', () => {
       'Verify checksum file',
       'Split file…',
       'Combine files…',
+      'Pack… Alt+F5',
       'Extract… Alt+F9',
     ]);
   });
