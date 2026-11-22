@@ -223,7 +223,7 @@ impl<R: Read> Read for Counted<'_, '_, '_, R> {
             }
         };
 
-        // The file is over when its declared size is read (a tar never asks for more) or when it ends.
+        // The file is over when its declared size is read (a writer asks for one more byte only to see a file grew) or when it ends.
         if !self.ended {
             self.seen += count as u64;
             run.add_bytes(count as u64);
@@ -357,7 +357,11 @@ impl Opening {
     fn apply(self) -> Result<(), Stop> {
         use std::os::unix::fs::PermissionsExt;
 
-        self.file.set_permissions(std::fs::Permissions::from_mode(self.mode))?;
+        // A file system that refuses the change (some network and FUSE mounts) leaves the archive for its owner alone,
+        // which fails safe: the pack is not lost for it.
+        if self.file.metadata()?.permissions().mode() & 0o777 != self.mode {
+            let _ = self.file.set_permissions(std::fs::Permissions::from_mode(self.mode));
+        }
 
         Ok(())
     }

@@ -69,6 +69,8 @@ mod names_tests;
 #[cfg(test)]
 mod open_tests;
 #[cfg(test)]
+mod sevenz_confirm_tests;
+#[cfg(test)]
 mod sevenz_tests;
 #[cfg(test)]
 pub(crate) mod testing;

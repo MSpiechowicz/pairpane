@@ -11,7 +11,7 @@ use crate::model::{ArchiveFormat, PackLevel};
 
 use super::entries::{EntryType, Flow, Record};
 use super::error::{PasswordFault, password_fault};
-use super::sevenz::{check_password, confirm_password};
+use super::sevenz::check_password;
 use super::testing::{
     Counting, MOMENT, SevenZ, assert_stop_and_failure, extract, idle, index_of, noise, project, root, sevenz_entry,
 };
@@ -441,48 +441,4 @@ fn a_stored_7z_entry_that_fits_the_probe_is_read_to_its_end_so_a_wrong_password_
 
     assert!(check_password(&bytes, &password("sesame")).expect("checked"));
     assert!(!check_password(&bytes, &password("wrong")).expect("checked"));
-}
-
-/// A stored, encrypted 7z with one entry of `length` bytes.
-fn stored_secret(length: usize) -> Vec<u8> {
-    let cancel = idle();
-    let options = Options {
-        level: PackLevel::Store,
-        password: Some(password("sesame")),
-        encrypt_names: false,
-    };
-    let content = noise(length);
-    let mut writer = SevenZWriter::new(Cursor::new(Vec::new()), &options, &cancel).expect("a 7z writer");
-    writer
-        .add(Entry::file(
-            "big.bin",
-            0o644,
-            None,
-            content.len() as u64,
-            Cursor::new(content),
-        ))
-        .expect("added");
-
-    writer.finish().expect("a 7z").into_inner()
-}
-
-#[test]
-fn the_confirmation_reads_a_stored_entry_longer_than_the_probe_to_its_end_and_tells_a_wrong_password() {
-    let bytes = stored_secret(128 * 1024);
-
-    // The cheap check stops at 64 KiB, before the checksum that would tell.
-    assert!(check_password(&bytes, &password("wrong")).expect("checked"));
-
-    assert!(!confirm_password(&bytes, &idle(), &password("wrong")).expect("confirmed"));
-    assert!(confirm_password(&bytes, &idle(), &password("sesame")).expect("confirmed"));
-}
-
-#[test]
-fn the_confirmation_accepts_any_password_for_a_7z_with_nothing_encrypted_and_stops_for_a_cancel() {
-    let plain = SevenZ::default().of(&project());
-    assert!(confirm_password(&plain, &idle(), &password("anything")).expect("confirmed"));
-
-    let cancel = AtomicBool::new(true);
-    let error = confirm_password(&stored_secret(1024), &cancel, &password("sesame")).expect_err("cancelled");
-    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
 }

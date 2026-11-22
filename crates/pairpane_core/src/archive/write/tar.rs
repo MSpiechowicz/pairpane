@@ -160,7 +160,8 @@ impl<'a, W: Write> TarWriter<'a, W> {
             ));
         }
 
-        if reader.take(1).read(&mut [0])? > 0 {
+        // An empty file is never opened, as in a zip and a 7z, so none is probed for growth either.
+        if size > 0 && reader.take(1).read(&mut [0])? > 0 {
             return Err(refusal(io::ErrorKind::Other, "a file grew while it was being packed"));
         }
 

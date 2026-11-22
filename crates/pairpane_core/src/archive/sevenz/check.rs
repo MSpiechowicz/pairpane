@@ -8,9 +8,10 @@ use sevenz_rust2::Archive;
 
 use super::{Source, decode, open};
 use crate::archive::entries::Flow;
-use crate::archive::error::{PasswordFault, password_fault, unsupported};
+use crate::archive::error::{PasswordFault, check, password_fault, unsupported};
 use crate::archive::file::ReadAt;
 use crate::archive::password::Password;
+use crate::archive::write::pump;
 
 /// How much of the entry [`check_password`] probes it decodes to see whether the password opens it.
 const PROBE: u64 = 64 * 1024;
@@ -88,11 +89,20 @@ fn probed(file: &dyn ReadAt, cancel: &AtomicBool, password: &Password, limit: Op
     };
 
     let mut source = Source::new(file, cancel);
+    // Never `io::copy`: a cancel surfaces as `Interrupted`, which it would retry forever. `pump` stops on it.
     let read = decode(&opened, &mut source, cancel, &[first], &mut |_, data| {
-        io::copy(&mut data.take(limit.unwrap_or(u64::MAX)), &mut io::sink())?;
+        pump(
+            &mut data.take(limit.unwrap_or(u64::MAX)),
+            &mut io::sink(),
+            cancel,
+            |_| {},
+        )?;
 
         Ok(Flow::Continue)
     });
+
+    // A cancel is never told as a wrong password.
+    check(cancel)?;
 
     match read {
         Ok(()) => Ok(Probe::Verdict(true)),
