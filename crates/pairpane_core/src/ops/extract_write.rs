@@ -2,8 +2,9 @@
 //! to its target, given its mode and time, then put in place like a copy does), and the guards around that: the data is
 //! cut off at the size the entry declares, and the disk keeps a reserve of free space.
 //!
-//! Only the permission bits `0o777` of an entry are kept (setuid, setgid and sticky never are), and a folder gets its
-//! mode and time last, once what is in it is written.
+//! Only the permission bits `0o755` of an entry are kept (no write for the group and others; setuid, setgid and sticky
+//! never are) and the owner always keeps read and write (a folder also entering), so a `0o000` entry is still readable.
+//! A folder gets its mode and time last, once what is in it is written.
 
 use std::collections::HashMap;
 use std::fs::File;

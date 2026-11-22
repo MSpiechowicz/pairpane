@@ -11,7 +11,7 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 use super::run::{extract_args, list_args};
-use super::testing::{Item, MOMENT, rar_of, rar_with};
+use super::testing::{Item, MOMENT, index_of, rar_of, rar_with};
 use super::{RarSource, Unrar, headers_encrypted, is_missing, protected, records_with};
 use crate::archive::entries::{EntrySource, EntryType, Flow, Place, Record};
 use crate::archive::error::{password_fault, unreadable};
@@ -266,18 +266,7 @@ fn a_program_that_unpacks_nothing_fails_each_file_and_leaves_nothing() {
 
 #[test]
 fn unpacking_what_does_not_fit_on_the_disk_is_refused_before_it_starts() {
-    let mut builder = Builder::new(ArchiveFormat::Rar);
-    builder.push(Record {
-        name: "huge.bin".to_owned(),
-        kind: EntryType::File,
-        size: 1 << 62,
-        modified: None,
-        mode: None,
-        link: None,
-        encrypted: false,
-        place: Place::Walk,
-    });
-    let index = builder.finish(false);
+    let index = index_of(&[("huge.bin", 1 << 62)]);
     let rig = rig_with(Some(Unrar::at(PathBuf::from("/usr/bin/true"))), b"").expect("rig");
 
     let error = rig.unpack(&index, &[0]).expect_err("too big");

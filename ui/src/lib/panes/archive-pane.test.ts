@@ -71,6 +71,7 @@ describe('opening an archive', () => {
     expect(backend.invoke).toHaveBeenLastCalledWith(
       'archive_open',
       expect.objectContaining({ pane: 'left', archive: '/work/a.zip', dir: '', showHidden: false }),
+      { signal: expect.any(AbortSignal) },
     );
 
     arriveIn(backend, ZIP, [entry('readme', 'file')]);

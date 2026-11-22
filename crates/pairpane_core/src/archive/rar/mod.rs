@@ -8,11 +8,13 @@
 //!   chosen entries ([`RarSource`], see its module for the staging folder and the disk it uses).
 //! - [`find`]: where `unrar` is: a few fixed absolute folders, then the absolute entries of `PATH`. [`missing`] is the
 //!   error when it is nowhere, [`is_missing`] tells it from every other: `NotFound` with the fixed text [`MISSING`],
-//!   which a page shows as it is.
+//!   which a page shows as it is. An `unrar` older than 7 is refused the same way ([`too_old`], `Unsupported`, [`TOO_OLD`];
+//!   see [`version`]).
 //! - [`protected`]: the error of a password-protected archive (`Unsupported`, [`PASSWORD_TEXT`]). Passwords are not
 //!   supported: an archive whose headers are encrypted is refused when it is opened ([`headers_encrypted`] looks at its
 //!   first bytes; `unrar`'s own refusal is the second line of defence), and an entry whose content is encrypted is listed
 //!   as encrypted and refused when it is unpacked.
+//! - [`stage::sweep`]: removes the staging folders an earlier run left in the temporary folder.
 //! - [`run::Unrar`]: the program and the two commands; see its module for exactly what is run and with which switches.
 //!
 //! # Limits
@@ -28,6 +30,7 @@ mod parse;
 pub mod run;
 pub mod source;
 pub mod stage;
+mod version;
 
 #[cfg(test)]
 mod find_tests;
@@ -36,7 +39,13 @@ mod parse_tests;
 #[cfg(test)]
 mod run_tests;
 #[cfg(test)]
+mod space_tests;
+#[cfg(test)]
+mod stage_tests;
+#[cfg(test)]
 mod testing;
+#[cfg(test)]
+mod version_tests;
 
 use std::io;
 use std::sync::atomic::AtomicBool;
@@ -57,12 +66,28 @@ pub use source::RarSource;
 /// What a page is told when `unrar` is not installed.
 pub const MISSING: &str = "Install unrar to open RAR archives";
 
+/// What a page is told when the `unrar` of the system is older than 7.
+pub const TOO_OLD: &str = "unrar 7 or newer is needed to open RAR archives";
+
 /// What a page is told for a password-protected archive.
 pub const PASSWORD_TEXT: &str = "password-protected RAR archives are not supported";
 
 /// The error of a system without `unrar`: `NotFound`, text [`MISSING`].
 pub fn missing() -> io::Error {
     refusal(io::ErrorKind::NotFound, MISSING)
+}
+
+/// The error of an `unrar` older than 7: `Unsupported`, text [`TOO_OLD`] (a page shows it as it is, like [`MISSING`]).
+pub fn too_old() -> io::Error {
+    unsupported(TOO_OLD)
+}
+
+/// The error of a disk that cannot hold what is unpacked: `StorageFull`.
+pub(super) fn full() -> io::Error {
+    refusal(
+        io::ErrorKind::StorageFull,
+        "there is not enough free space to unpack the RAR archive",
+    )
 }
 
 /// Whether `error` is [`missing`].

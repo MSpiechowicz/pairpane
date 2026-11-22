@@ -130,6 +130,64 @@ describe('Passwords', () => {
     await expect(second).rejects.toMatchObject({ code: 'passwordRequired' });
   });
 
+  describe('a caller that does not want the command any more', () => {
+    const open = { pane: 'left', archive: '/a/x.zip', dir: '', showHidden: false, onEvent: () => {} } as const;
+
+    it('is not run again once the password was taken, and fails with its own failure', async () => {
+      const { ipc, passwords, calls } = world();
+      const wanted = new AbortController();
+      const started = ipc.invoke('archive_open', open, { signal: wanted.signal });
+      await vi.waitFor(() => expect(passwords.prompt).toBeDefined());
+
+      wanted.abort();
+      await expect(started).rejects.toMatchObject({ code: 'passwordRequired' });
+      expect(passwords.prompt).toBeUndefined();
+      expect(passwords.modal).toBe(false);
+      expect(calls('archive_open')).toHaveLength(1);
+    });
+
+    it('is not asked for when it was aborted before the failure came', async () => {
+      const { ipc, passwords, calls } = world();
+      const wanted = new AbortController();
+      wanted.abort();
+
+      await expect(ipc.invoke('archive_open', open, { signal: wanted.signal })).rejects.toMatchObject({ code: 'passwordRequired' });
+
+      expect(passwords.prompt).toBeUndefined();
+      expect(calls('archive_open')).toHaveLength(1);
+    });
+
+    it('leaves the question to the callers that still wait on the same archive', async () => {
+      const { ipc, passwords, calls } = world();
+      const wanted = new AbortController();
+      const gone = ipc.invoke('archive_open', open, { signal: wanted.signal });
+      const stays = ipc.invoke('ops_extract', extract);
+      await vi.waitFor(() => expect(calls('ops_extract')).toHaveLength(1));
+      await vi.waitFor(() => expect(passwords.prompt).toBeDefined());
+
+      wanted.abort();
+      await expect(gone).rejects.toMatchObject({ code: 'passwordRequired' });
+      expect(passwords.prompt).toMatchObject({ archive: '/a/x.zip' });
+
+      await passwords.submit('pw');
+
+      await expect(stays).resolves.toBe(1);
+      expect(calls('ops_extract')).toHaveLength(2);
+      expect(calls('archive_open')).toHaveLength(1);
+    });
+
+    it('still runs again when it is not aborted', async () => {
+      const { ipc, passwords, calls } = world();
+      const started = ipc.invoke('archive_open', open, { signal: new AbortController().signal });
+      await vi.waitFor(() => expect(passwords.prompt).toBeDefined());
+
+      await passwords.submit('pw');
+
+      await expect(started).resolves.toBe(1);
+      expect(calls('archive_open')).toHaveLength(2);
+    });
+  });
+
   it('does not keep the password: the question holds none, and a failure of the check is shown for another try', async () => {
     const ipc = {
       invoke: vi.fn(async (name: string) => {

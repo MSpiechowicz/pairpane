@@ -181,3 +181,13 @@ fn a_remembered_password_that_the_archive_turns_down_is_forgotten_so_the_page_as
     assert_eq!(error.code(), IpcErrorCode::PasswordRequired);
     assert!(archives.password(Path::new(&archive)).is_none());
 }
+
+#[test]
+fn an_entry_is_viewed_only_where_it_leaves_the_reserve_on_the_temporary_volume() {
+    let reserve = MIN_FREE_RESERVE;
+
+    assert!(has_room(None, u64::MAX));
+    assert!(has_room(Some(reserve + 10), 10));
+    assert!(!has_room(Some(reserve + 9), 10));
+    assert!(!has_room(Some(reserve), 1));
+}

@@ -63,6 +63,8 @@ export class Listing {
   readonly #hooks: ListingHooks;
   #showHidden = false;
   #generation = 0;
+  /** Aborted when the next open starts: the open it belongs to is not wanted any more (its password question goes). */
+  #wanted: AbortController | undefined;
   #spinner: ReturnType<typeof setTimeout> | undefined;
   /** The folder changed while it was still loading: list it again once done. */
   #stale = false;
@@ -130,17 +132,11 @@ export class Listing {
     return this.archive === undefined && target.child === null && target.folder === (this.#folder ?? null);
   }
 
-  #request(target: Target, onEvent: (event: ListEvent) => void) {
+  #request(target: Target, onEvent: (event: ListEvent) => void, signal: AbortSignal) {
     const showHidden = this.#showHidden;
     if ('spot' in target) {
       const { archive, dir } = target.spot;
-      return this.#ipc.invoke('archive_open', {
-        pane: this.#pane,
-        archive,
-        dir,
-        showHidden,
-        onEvent,
-      });
+      return this.#ipc.invoke('archive_open', { pane: this.#pane, archive, dir, showHidden, onEvent }, { signal });
     }
 
     const { folder, child } = target;
@@ -159,6 +155,8 @@ export class Listing {
    */
   #open(target: Target, quiet: boolean): Promise<void> {
     const generation = ++this.#generation;
+    this.#wanted?.abort();
+    this.#wanted = new AbortController();
     const started = performance.now();
     // Listing the shown folder again (a live update, hidden toggled) must not be answered by one more reload.
     const reload = this.#isHere(target);
@@ -185,7 +183,7 @@ export class Listing {
       }
     };
 
-    return this.#request(target, onEvent)
+    return this.#request(target, onEvent, this.#wanted.signal)
       .then(() => undefined)
       .catch((error: unknown) => {
         if (generation === this.#generation) {

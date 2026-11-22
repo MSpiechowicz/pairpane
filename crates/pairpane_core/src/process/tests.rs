@@ -12,7 +12,7 @@ mod unix {
 
     use pretty_assertions::assert_eq;
 
-    use crate::process::{Wait, command, stop, wait_for};
+    use crate::process::{Exit, Wait, command, stop, wait_for, wait_for_exit};
 
     /// What `/usr/bin/env` prints when started like a child (so only what the child is given).
     fn environment(kept: &[&str]) -> String {
@@ -83,6 +83,38 @@ mod unix {
         stop(&mut child);
         assert!(child.try_wait().expect("reaped").is_some());
         assert!(started.elapsed() < Duration::from_secs(10), "stopped, not waited for");
+    }
+
+    #[test]
+    fn a_child_without_a_reader_may_run_longer_than_the_grace() {
+        let mut child = command(Path::new("/usr/bin/sleep"), ["3"], &[])
+            .spawn()
+            .expect("sleep runs");
+
+        let waited = wait_for_exit(&mut child, &AtomicBool::new(false), Duration::from_secs(10), || Ok(()));
+
+        assert!(waited.expect("ended").success());
+    }
+
+    #[test]
+    fn a_failed_check_gives_up_with_its_error_and_the_flag_and_the_deadline_still_do() {
+        let mut child = command(Path::new("/usr/bin/sleep"), ["30"], &[])
+            .spawn()
+            .expect("sleep runs");
+        let cancel = AtomicBool::new(false);
+
+        let waited = wait_for_exit(&mut child, &cancel, Duration::from_secs(20), || {
+            Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
+        });
+        let Err(Exit::Watch(error)) = waited else {
+            panic!("the check ends the wait");
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::StorageFull);
+
+        let waited = wait_for_exit(&mut child, &cancel, Duration::from_millis(100), || Ok(()));
+        assert!(matches!(waited, Err(Exit::Gave(Wait::Deadline))));
+
+        stop(&mut child);
     }
 
     #[test]

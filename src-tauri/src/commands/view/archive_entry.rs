@@ -4,15 +4,16 @@
 //! (`pairpane-view-<random>` in the system's temporary folder, mode 0700 on Unix, the file created new with mode 0600),
 //! opened as a session like `view_open` does, and deleted at once: the session keeps the open handle, so nothing of the
 //! entry stays on the disk once it is open. On Windows a file that cannot be deleted while it is open is left, and the
-//! sweep ([`sweep`], at start-up and on exit) removes it later. An entry over [`MAX_VIEW_ENTRY`] is refused; the data
-//! written is bounded by that, whatever the archive declares. Listing and extraction never go through here.
+//! sweep ([`sweep`], at start-up and on exit) removes it later. An entry over [`MAX_VIEW_ENTRY`] is refused, and so is one that
+//! would leave the temporary volume with less than the reserve ([`MIN_FREE_RESERVE`]); the data written is bounded by
+//! [`MAX_VIEW_ENTRY`], whatever the archive declares. Listing and extraction never go through here.
 
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
-use pairpane_core::archive::{self, Flow, MAX_VIEW_ENTRY, PasswordFault};
+use pairpane_core::archive::{self, Flow, MAX_VIEW_ENTRY, MIN_FREE_RESERVE, PasswordFault};
 use pairpane_core::listing::platform;
 use pairpane_core::model::{IpcError, IpcErrorCode, ViewOpened};
 use pairpane_core::ops::name_fits;
@@ -35,6 +36,8 @@ mod tests;
 const PREFIX: &str = "pairpane-view-";
 
 const TOO_BIG: &str = "This file is too big to view inside the archive \u{2014} extract it first (F5)";
+
+const NO_ROOM: &str = "Not enough free space to view this file \u{2014} extract it first (F5)";
 
 /// Opens the file `name` of the folder `dir` (`""` is the root) of the archive `archive` for viewing and returns its
 /// session, like `view_open`. A folder, a link, a file whose name the archive code refuses and an entry over 512 MiB are
@@ -108,6 +111,10 @@ fn open_entry(archives: &Archives, target: &Target, dir: &str, name: &str) -> Re
         return Err(IpcError::new(IpcErrorCode::InvalidInput, TOO_BIG));
     }
 
+    if !has_room(platform::free_space(&std::env::temp_dir()), entry.size) {
+        return Err(IpcError::new(IpcErrorCode::Io, NO_ROOM));
+    }
+
     let scratch = Scratch::create(name).map_err(|error| archive_error(&error))?;
     let mut file = scratch.open_file().map_err(|error| archive_error(&error))?;
     let mut source = archive::open_source(&index, &opened.input(), &never, password.as_deref())
@@ -129,6 +136,12 @@ fn open_entry(archives: &Archives, target: &Target, dir: &str, name: &str) -> Re
 
     // Opened before it is deleted: the session holds the handle.
     files::open(&scratch.folder, name).map_err(|error| archive_error(&error))
+}
+
+/// Whether a temporary volume with `free` bytes (`None`: the system does not tell) can take `size` bytes and still keep
+/// [`MIN_FREE_RESERVE`].
+fn has_room(free: Option<u64>, size: u64) -> bool {
+    free.is_none_or(|free| free >= size.saturating_add(MIN_FREE_RESERVE))
 }
 
 /// Writes what `reader` yields to `file`, at most [`MAX_VIEW_ENTRY`] bytes: a byte more means the entry holds more than

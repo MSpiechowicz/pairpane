@@ -52,6 +52,8 @@ pub fn run() -> ExitCode {
             app.manage(commands::archives::Archives::default());
             // Files an earlier run left in the temporary folder (an entry opened in the viewer is deleted at once).
             tauri::async_runtime::spawn_blocking(commands::view::archive_entry::sweep);
+            // The same for the staging folders of an unpacking that a crash left (a RAR unpacked by `unrar`).
+            tauri::async_runtime::spawn_blocking(pairpane_core::archive::rar::stage::sweep);
             app.manage(close::CloseGuard::default());
             // Next to the window-state plugin's file. Without a config folder nothing is saved.
             let state_file = app
@@ -141,6 +143,7 @@ pub fn run() -> ExitCode {
                         viewer.close_all();
                     }
                     commands::view::archive_entry::sweep();
+                    pairpane_core::archive::rar::stage::sweep_on_exit();
                 }
             });
         });

@@ -1,5 +1,5 @@
 import type { CommandArgs, CommandName, CommandResult } from '$lib/ipc/commands';
-import { IpcFailure, type Transport } from '$lib/ipc/transport';
+import { IpcFailure, type InvokeOptions, type Transport } from '$lib/ipc/transport';
 import { archiveName } from '$lib/panes/archive';
 
 /** What the commands that read inside an archive ask for; the others never need its password. */
@@ -21,9 +21,8 @@ export interface Prompt {
 /** An ask that waits for the dialog: every action that needs the archive joins it and goes on with its answer. */
 interface Ask {
   prompt: Prompt;
-  /** Called with `true` when the backend has the password, `false` when the user gave up. */
-  settle: (taken: boolean) => void;
-  answered: Promise<boolean>;
+  /** One per action that waits; each is called with `true` when the backend has the password, `false` when the user gave up. */
+  waiters: Set<(taken: boolean) => void>;
 }
 
 /**
@@ -50,16 +49,23 @@ export class Passwords {
   /**
    * `ipc` with the guarded commands retried after the user gave the password: a command that fails because the
    * archive needs a password (or the one given does not open it) waits for the dialog and runs again. Giving up
-   * is the command's own failure.
+   * is the command's own failure. A caller that aborts its `signal` no longer waits and is not run again; the
+   * question goes away with its last caller.
    */
   wrap(ipc: Transport): Transport {
     return {
       // The other commands are the transport's own, as they are.
-      invoke: (name, args) => (GUARDED.has(name) ? this.#retrying(ipc, name, args) : ipc.invoke(name, args)),
+      invoke: (name, args, options) =>
+        GUARDED.has(name) ? this.#retrying(ipc, name, args, options?.signal) : ipc.invoke(name, args),
     };
   }
 
-  async #retrying<K extends CommandName>(ipc: Transport, name: K, args: CommandArgs<K>): Promise<CommandResult<K>> {
+  async #retrying<K extends CommandName>(
+    ipc: Transport,
+    name: K,
+    args: CommandArgs<K>,
+    signal: InvokeOptions['signal'],
+  ): Promise<CommandResult<K>> {
     const { archive } = args as unknown as { archive: string };
 
     for (;;) {
@@ -67,27 +73,49 @@ export class Passwords {
         return await ipc.invoke(name, args);
       } catch (error) {
         const failure = IpcFailure.from(error);
-        if (failure.code !== 'passwordRequired' || !(await this.#ask(archive, failure.message))) {
+        if (failure.code !== 'passwordRequired' || !(await this.#ask(archive, failure.message, signal))) {
           throw failure;
         }
       }
     }
   }
 
-  /** Waits for the password of `archive`; a question already on the screen for it is joined. */
-  #ask(archive: string, message: string): Promise<boolean> {
-    const open = this.#asks.find((ask) => ask.prompt.archive === archive);
-    if (open !== undefined) {
-      return open.answered;
+  /** Waits for the password of `archive`; a question already on the screen for it is joined. `false`: gave up, or `signal` aborted. */
+  #ask(archive: string, message: string, signal: InvokeOptions['signal']): Promise<boolean> {
+    if (signal?.aborted) {
+      return Promise.resolve(false);
     }
 
-    let settle: (taken: boolean) => void = () => {};
-    const answered = new Promise<boolean>((resolve) => (settle = resolve));
-    const reason = /wrong/i.test(message) ? 'wrong' : 'needed';
-    this.#asks.push({ prompt: { archive, name: archiveName(archive), reason, failure: undefined, busy: false }, settle, answered });
-    this.#show();
+    let ask = this.#asks.find((open) => open.prompt.archive === archive);
+    if (ask === undefined) {
+      const reason = /wrong/i.test(message) ? 'wrong' : 'needed';
+      ask = { prompt: { archive, name: archiveName(archive), reason, failure: undefined, busy: false }, waiters: new Set() };
+      this.#asks.push(ask);
+      this.#show();
+    }
 
-    return answered;
+    const joined = ask;
+
+    return new Promise<boolean>((resolve) => {
+      joined.waiters.add(resolve);
+      signal?.addEventListener(
+        'abort',
+        () => {
+          joined.waiters.delete(resolve);
+          resolve(false);
+          this.#dropIfAbandoned(joined);
+        },
+        { once: true },
+      );
+    });
+  }
+
+  /** The question has no one left to answer for; one that is being checked ends with its answer. */
+  #dropIfAbandoned(ask: Ask) {
+    if (ask.waiters.size === 0 && !ask.prompt.busy && this.#asks.includes(ask)) {
+      this.#asks.splice(this.#asks.indexOf(ask), 1);
+      this.#show();
+    }
   }
 
   #show() {
@@ -131,7 +159,8 @@ export class Passwords {
 
   #finish(ask: Ask, taken: boolean) {
     this.#asks.splice(this.#asks.indexOf(ask), 1);
-    ask.settle(taken);
+    ask.waiters.forEach((settle) => settle(taken));
+    ask.waiters.clear();
     this.#show();
   }
 }

@@ -10,11 +10,15 @@
 //! Disk: the staging folder holds the unpacked files until they are read, so unpacking needs their size in free space on
 //! the volume of the staging folder, beside the space of the destination. By default that is the system's temporary
 //! folder; [`RarSource::staging_in`] puts it elsewhere (the destination volume, to be sure of one volume). Before `unrar`
-//! starts the declared sizes are checked against the free space, minus [`MIN_FREE_RESERVE`]. Each file is deleted from the
-//! staging folder as soon as it is read.
+//! starts the declared sizes are checked against the free space, minus [`MIN_FREE_RESERVE`]: every entry `unrar` may write
+//! for a wanted name counts (names are matched without regard to case, and a name can come twice or as a link), and an
+//! unpacking of everything counts every entry that is not a folder. While it runs, `unrar` is stopped when the volume is
+//! left with less than the reserve (see [`Unrar::extract`]). Each file is deleted from the staging folder as soon as it is
+//! read.
 //!
 //! The viewer's single entry goes through the same path (a one-entry `wanted`); `unrar p` is not used.
 
+use std::collections::HashSet;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -24,11 +28,10 @@ use crate::archive::entries::{Declared, EntrySource, EntryType, Flow, Visit};
 use crate::archive::error::{check, unreadable};
 use crate::archive::index::{ArchiveIndex, IndexEntry};
 use crate::listing::platform;
-use crate::view::refusal;
 
-use super::protected;
 use super::run::Unrar;
 use super::stage::Staging;
+use super::{full, protected};
 
 /// The most names that are handed to `unrar` on its command line; more (or longer) and everything is unpacked and the
 /// wanted files are picked from it, which also avoids the system's limit on a command line.
@@ -80,12 +83,27 @@ impl<'a> RarSource<'a> {
     /// Fails when the staging volume cannot hold `needed` bytes and the reserve.
     fn check_space(parent: &Path, needed: u64) -> io::Result<()> {
         match platform::free_space(parent) {
-            Some(free) if needed > free.saturating_sub(MIN_FREE_RESERVE) => Err(refusal(
-                io::ErrorKind::StorageFull,
-                "there is not enough free space to unpack the RAR archive",
-            )),
+            Some(free) if needed > free.saturating_sub(MIN_FREE_RESERVE) => Err(full()),
             _ => Ok(()),
         }
+    }
+
+    /// The bytes `unrar` may write when asked for `names` (everything when `None`): all the entries of the archive that
+    /// are not folders and, for names, whose name is one of them without regard to case.
+    fn staged_size(&self, names: Option<&[&str]>) -> u64 {
+        let wanted: Option<HashSet<String>> = names.map(|names| names.iter().map(|name| name.to_lowercase()).collect());
+
+        self.index
+            .entries()
+            .iter()
+            .filter(|entry| entry.kind != EntryType::Dir)
+            .filter(|entry| {
+                wanted
+                    .as_ref()
+                    .is_none_or(|wanted| wanted.contains(&entry.path.to_lowercase()))
+            })
+            .map(|entry| entry.size)
+            .fold(0, u64::saturating_add)
     }
 }
 
@@ -140,16 +158,7 @@ impl RarSource<'_> {
     /// Unpacks `files` (or all) into a new staging folder.
     fn unpack(&self, files: &[&IndexEntry]) -> io::Result<Staging> {
         let names = Self::names(files);
-        let needed: u64 = match names {
-            Some(_) => files.iter().map(|entry| entry.size).sum(),
-            None => self
-                .index
-                .entries()
-                .iter()
-                .filter(|entry| entry.kind == EntryType::File)
-                .map(|entry| entry.size)
-                .sum(),
-        };
+        let needed = self.staged_size(names.as_deref());
 
         let parent = self.staging_parent.clone().unwrap_or_else(std::env::temp_dir);
         Self::check_space(&parent, needed)?;

@@ -126,3 +126,25 @@ pub(super) fn rar_with(items: &[Item<'_>], flags: u64) -> Vec<u8> {
 
     bytes
 }
+
+/// An index of the file entries `(name, size)` of an archive, which need not exist.
+pub(super) fn index_of(entries: &[(&str, u64)]) -> crate::archive::ArchiveIndex {
+    use crate::archive::entries::{EntryType, Place, Record};
+
+    let mut builder = crate::archive::Builder::new(crate::model::ArchiveFormat::Rar);
+
+    for (name, size) in entries {
+        builder.push(Record {
+            name: (*name).to_owned(),
+            kind: EntryType::File,
+            size: *size,
+            modified: None,
+            mode: None,
+            link: None,
+            encrypted: false,
+            place: Place::Walk,
+        });
+    }
+
+    builder.finish(false)
+}

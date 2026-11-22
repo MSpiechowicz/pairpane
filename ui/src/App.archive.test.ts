@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -9,7 +9,7 @@ import { IpcFailure } from '$lib/ipc/transport';
 
 import App from './App.svelte';
 
-import { type Answers, appWorld, key, listbox } from '../tests/app';
+import { type Answers, appWorld, key, listbox, pane } from '../tests/app';
 import { entry } from '../tests/panes';
 import { FakeFile, numbered, viewAnswers } from '../tests/view';
 
@@ -282,6 +282,30 @@ describe('the password of an archive', () => {
 
     await vi.waitFor(() => expect(backend.sent('archive_open')).toHaveLength(2));
     expect(backend.sent('archive_password')).toEqual([{ archive: '/left/a.zip', password: 'secret' }]);
+  });
+});
+
+describe('a password asked for an archive the pane has left', () => {
+  it('closes its question, and neither opens the archive after all nor says anything', async () => {
+    const backend = await world(
+      {
+        archive_open: () => needsPassword(),
+        archive_password: () => true,
+      },
+      false,
+    );
+    await key(listbox('Left'), 'Enter');
+    const field = await screen.findByLabelText('Password');
+
+    await fireEvent.click(within(within(pane('Left pane')).getByRole('navigation', { name: 'Path' })).getByRole('button', { name: 'left' }));
+    await vi.waitFor(() => expect(backend.sent('pane_open')).toHaveLength(3));
+    backend.list('left', '/left', [entry('a.zip'), entry('b.txt')]);
+    await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    expect(backend.sent('archive_open')).toHaveLength(1);
+    expect(backend.sent('archive_password')).toEqual([]);
+    expect(listbox('Left')).toBeInTheDocument();
+    expect(screen.queryByText('The archive needs a password.')).not.toBeInTheDocument();
   });
 });
 

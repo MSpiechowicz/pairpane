@@ -4,11 +4,13 @@
 //! A child is never started through a shell: [`command`] takes a fixed program and an argument list and builds a command
 //! with a cleared environment, no standard input, a piped standard output (the caller may override it), no standard error,
 //! a working directory that is not the app's own and, on Windows, no console window. [`wait_for`] polls a started child
-//! against a cancel flag and a deadline, and [`stop`] kills and reaps it; a child that is not waited for to the end is
+//! whose output is read by a thread, [`wait_for_exit`] one whose output nobody reads, each against a cancel flag and a
+//! deadline, and [`stop`] kills and reaps it; a child that is not waited for to the end is
 //! always stopped. [`join_within`] waits for a reading thread without an unbounded wait: a thread whose pipe is held
 //! open by something else is left behind.
 
 use std::ffi::OsStr;
+use std::io;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -88,45 +90,101 @@ pub enum Wait {
     Lost,
 }
 
-/// Waits until the child has ended and `output_done` says its output has ended too (a caller with no output passes
-/// `|| true`), polling the cancel flag. Returns the child's exit status. The child is not stopped here: the caller does it
-/// with [`stop`], on every path.
+/// How often the periodic check of [`wait_for_exit`] runs.
+const WATCH_EVERY: Duration = Duration::from_millis(500);
+
+/// Why [`wait_for_exit`] gave up.
+#[derive(Debug)]
+pub enum Exit {
+    /// The wait itself ended: cancelled, past the deadline or lost.
+    Gave(Wait),
+    /// The periodic check failed; its error.
+    Watch(io::Error),
+}
+
+/// Waits until the child has ended and `output_done` says its output has ended too, polling the cancel flag. Returns the
+/// child's exit status. One of the two ends coming without the other within [`GRACE`] is [`Wait::Stalled`]. The child is
+/// not stopped here: the caller does it with [`stop`], on every path. A child whose output nobody reads is waited for
+/// with [`wait_for_exit`].
 pub fn wait_for(
     child: &mut Child,
     cancel: &AtomicBool,
     deadline: Duration,
     mut output_done: impl FnMut() -> bool,
 ) -> Result<ExitStatus, Wait> {
+    match drive(child, cancel, deadline, Some(&mut output_done), &mut || Ok(())) {
+        Ok(status) => Ok(status),
+        Err(Exit::Gave(wait)) => Err(wait),
+        Err(Exit::Watch(_)) => Err(Wait::Lost),
+    }
+}
+
+/// Waits until a child whose output nobody reads (it is closed or goes to a file) has ended, polling the cancel flag, and
+/// runs `watch` every half second meanwhile; a check that fails gives up with its error. There is no [`GRACE`]: the child
+/// may run until the deadline. The child is not stopped here either.
+pub fn wait_for_exit(
+    child: &mut Child,
+    cancel: &AtomicBool,
+    deadline: Duration,
+    mut watch: impl FnMut() -> io::Result<()>,
+) -> Result<ExitStatus, Exit> {
+    drive(child, cancel, deadline, None, &mut watch)
+}
+
+/// The loop of both waits; `output` is the reader's end, when there is a reader.
+fn drive(
+    child: &mut Child,
+    cancel: &AtomicBool,
+    deadline: Duration,
+    mut output: Option<&mut dyn FnMut() -> bool>,
+    watch: &mut dyn FnMut() -> io::Result<()>,
+) -> Result<ExitStatus, Exit> {
     let started = Instant::now();
+    let mut watched = started;
     let mut exited = None;
     let mut read = None;
 
     loop {
         let now = Instant::now();
         if cancel.load(Ordering::Relaxed) {
-            return Err(Wait::Cancelled);
+            return Err(Exit::Gave(Wait::Cancelled));
         }
         if now.duration_since(started) >= deadline {
-            return Err(Wait::Deadline);
+            return Err(Exit::Gave(Wait::Deadline));
         }
 
         if exited.is_none() {
             match child.try_wait() {
                 Ok(Some(status)) => exited = Some((now, status)),
                 Ok(None) => {}
-                Err(_) => return Err(Wait::Lost),
+                Err(_) => return Err(Exit::Gave(Wait::Lost)),
             }
         }
-        if read.is_none() && output_done() {
-            read = Some(now);
+        if read.is_none() {
+            match output.as_mut() {
+                Some(done) => {
+                    if done() {
+                        read = Some(now);
+                    }
+                }
+                // Nothing is read, so there is nothing to wait for.
+                None => read = Some(now),
+            }
         }
 
         match (exited, read) {
             (Some((_, status)), Some(_)) => return Ok(status),
-            (Some((first, _)), None) | (None, Some(first)) if now.duration_since(first) >= GRACE => {
-                return Err(Wait::Stalled);
+            (Some((first, _)), None) | (None, Some(first))
+                if output.is_some() && now.duration_since(first) >= GRACE =>
+            {
+                return Err(Exit::Gave(Wait::Stalled));
             }
             _ => {}
+        }
+
+        if exited.is_none() && now.duration_since(watched) >= WATCH_EVERY {
+            watched = now;
+            watch().map_err(Exit::Watch)?;
         }
 
         thread::sleep(POLL);

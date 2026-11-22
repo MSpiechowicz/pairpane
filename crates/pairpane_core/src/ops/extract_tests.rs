@@ -349,6 +349,26 @@ mod unix {
     }
 
     #[test]
+    fn an_archive_cannot_make_files_world_writable_or_unreadable_to_their_owner() {
+        let bytes = tar_by(|builder| {
+            add(builder, "open/", 0o777, b"");
+            add(builder, "open/wide", 0o777, b"x");
+            add(builder, "open/none", 0o000, b"x");
+            add(builder, "shut/", 0o000, b"");
+            add(builder, "shut/f", 0o666, b"x");
+        });
+        let root = scene("x.tar", &bytes);
+
+        Rig::new().run(extract(root.path(), "x.tar", "", &[]));
+
+        let modes: Vec<u32> = ["open", "open/wide", "open/none", "shut", "shut/f"]
+            .iter()
+            .map(|name| mode(&root.path().join("dst").join(name)))
+            .collect();
+        assert_eq!(modes, [0o755, 0o755, 0o600, 0o700, 0o644]);
+    }
+
+    #[test]
     fn an_entry_without_a_mode_gets_the_usual_one() {
         let root = scene("notes.txt.gz", &gzip(b"hello"));
 

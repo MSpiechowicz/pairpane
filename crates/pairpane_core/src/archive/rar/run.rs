@@ -21,11 +21,13 @@ use std::sync::atomic::AtomicBool;
 use std::thread;
 use std::time::Duration;
 
-use crate::process::{self, GRACE, Wait};
+use crate::archive::MIN_FREE_RESERVE;
+use crate::listing::platform;
+use crate::process::{self, Exit, GRACE, Wait};
 use crate::view::refusal;
 
 use super::parse::{Listing, parse};
-use super::{find, missing, protected};
+use super::{find, full, missing, protected, too_old, version};
 use crate::archive::error::{cancelled, check, unreadable, unsupported};
 
 /// How long a listing may take.
@@ -36,9 +38,9 @@ const EXTRACT_DEADLINE: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// A UTF-8 locale of this system; `unrar` writes names in the locale's charset.
 #[cfg(target_os = "macos")]
-const LOCALE: &str = "en_US.UTF-8";
+pub(super) const LOCALE: &str = "en_US.UTF-8";
 #[cfg(not(target_os = "macos"))]
-const LOCALE: &str = "C.UTF-8";
+pub(super) const LOCALE: &str = "C.UTF-8";
 
 // The exit codes of `unrar` that are told apart.
 const CODE_OK: i32 = 0;
@@ -52,13 +54,19 @@ const CODE_PASSWORD: i32 = 11;
 /// The `unrar` program that is started.
 #[derive(Debug, Clone)]
 pub struct Unrar {
-    program: PathBuf,
+    pub(super) program: PathBuf,
 }
 
 impl Unrar {
-    /// The `unrar` of this system (see [`find`]), or the error [`missing`] makes.
+    /// The `unrar` of this system (see [`find`]), or the error [`missing`] makes, or [`too_old`] when it is older than 7.
     pub fn locate() -> io::Result<Self> {
-        Ok(Self { program: find::find()? })
+        let program = find::find()?;
+
+        if !version::is_recent(&program) {
+            return Err(too_old());
+        }
+
+        Ok(Self { program })
     }
 
     /// The program at `program`, an absolute path.
@@ -104,7 +112,8 @@ impl Unrar {
 
     /// Unpacks `names` (everything when `None`) of `archive` into the existing, empty folder `staging`, which `unrar` gets
     /// as its working folder and as its destination. A file that cannot be unpacked is not there afterwards (a damaged one
-    /// is removed by `unrar`); that is not an error here.
+    /// is removed by `unrar`); that is not an error here. While it runs the free space of the volume of `staging` is
+    /// looked at, and `unrar` is killed with a "storage full" refusal when less than [`MIN_FREE_RESERVE`] is left.
     pub fn extract(
         &self,
         archive: &Path,
@@ -117,14 +126,17 @@ impl Unrar {
         plain(staging)?;
 
         let mut child = self.start(extract_args(archive, names, staging), Some(staging), Stdio::null())?;
-        let waited = process::wait_for(&mut child, cancel, EXTRACT_DEADLINE, || true);
+        let waited = process::wait_for_exit(&mut child, cancel, EXTRACT_DEADLINE, || {
+            keep_reserve(staging, MIN_FREE_RESERVE)
+        });
         process::stop(&mut child);
 
         match waited {
             Ok(status) => unpacked(status),
-            Err(Wait::Cancelled) => Err(cancelled()),
-            Err(Wait::Deadline) => Err(too_slow()),
-            Err(Wait::Stalled | Wait::Lost) => Err(unreadable()),
+            Err(Exit::Watch(error)) => Err(error),
+            Err(Exit::Gave(Wait::Cancelled)) => Err(cancelled()),
+            Err(Exit::Gave(Wait::Deadline)) => Err(too_slow()),
+            Err(Exit::Gave(Wait::Stalled | Wait::Lost)) => Err(unreadable()),
         }
     }
 
@@ -170,6 +182,15 @@ pub(super) fn extract_args(archive: &Path, names: Option<&[&str]>, staging: &Pat
     args.push(destination);
 
     args
+}
+
+/// Fails with [`full`] when the volume of `staging` has less than `reserve` left (and, where the system cannot tell,
+/// never).
+pub(super) fn keep_reserve(staging: &Path, reserve: u64) -> io::Result<()> {
+    match platform::free_space(staging) {
+        Some(free) if free < reserve => Err(full()),
+        _ => Ok(()),
+    }
 }
 
 /// Refuses a path that is not absolute, or that holds a wildcard: `unrar` reads the archive's name as a mask, so a
