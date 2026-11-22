@@ -16,6 +16,7 @@
     onEditSettings,
     onToggleHidden,
     onFiles,
+    onFind,
   }: {
     version: string | undefined;
     failure: string | undefined;
@@ -30,6 +31,8 @@
     onToggleHidden: () => void;
     /** An item of the Files menu was chosen; it does what its key does. */
     onFiles: (action: FilesChoice) => void;
+    /** The search box: it opens the Find dialog, as Alt+F7 does. */
+    onFind: () => void;
   } = $props();
 
   /** The menus that hold nothing yet. */
@@ -115,9 +118,9 @@
     {@render popup('settings', 'Settings', settings)}
   </nav>
 
-  <button class="search" type="button">
-    <span>Search files or run a command…</span>
-    <kbd>{nativeMenu ? '⌘K' : 'Ctrl K'}</kbd>
+  <button class="search" type="button" aria-keyshortcuts="Alt+F7" onclick={onFind}>
+    <span>Find files…</span>
+    <kbd aria-hidden="true">Alt F7</kbd>
   </button>
 
   <div class="tools">

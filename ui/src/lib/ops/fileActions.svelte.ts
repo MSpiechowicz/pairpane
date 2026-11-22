@@ -1,5 +1,6 @@
 import { tick } from 'svelte';
 
+import { groupResults, type ResultGroup } from '$lib/find/results';
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
 import { archiveName } from '$lib/panes/archive';
@@ -19,12 +20,16 @@ export interface OpenDialog {
   other: PaneView;
 }
 
-/** The confirmation to move items to the Trash or to delete them for good. */
+/**
+ * The confirmation to move items to the Trash or to delete them for good. `results`: the items are search results,
+ * `path` is the folder searched and the names are paths below it.
+ */
 export interface Removal {
   permanent: boolean;
   path: string;
   names: string[];
   source: PaneView;
+  results?: true;
 }
 
 /** The card that says what happened; `undo` is the token that takes a move to the Trash back. */
@@ -164,9 +169,14 @@ export class FileActions {
 
   #ask(permanent: boolean) {
     const source = this.#panes[this.#active()].view;
-    const path = source.listing.path;
+    const { path, folder, results } = source.listing;
     const names = targets(source);
-    if (path !== undefined && names.length > 0) {
+
+    if (results !== undefined) {
+      if (folder !== undefined && names.length > 0) {
+        this.removal = { permanent, path: folder, names, source, results: true };
+      }
+    } else if (path !== undefined && names.length > 0) {
       this.removal = { permanent, path, names, source };
     }
   }
@@ -176,34 +186,99 @@ export class FileActions {
     this.#settle();
   }
 
-  /** The confirmed removal; a refusal rejects, so that the dialog can show it and stay. */
+  /**
+   * The confirmed removal; a refusal rejects, so that the dialog can show it and stay. Search results are in many
+   * folders: one request for each, and the results are listed again after.
+   */
   async confirmRemoval() {
     const removal = this.removal;
     if (removal === undefined) {
       return;
     }
 
-    const { path, names, source } = removal;
-    if (removal.permanent) {
-      await this.#ipc.invoke('ops_delete', { path, names });
-      source.deselect(names);
-    } else {
-      const { undo, failure } = await this.#ipc.invoke('ops_trash', { path, names });
-      this.#trashed(names, undo, failure?.message);
-      if (failure === null) {
-        source.deselect(names);
+    const { path, names } = removal;
+    const groups = removal.results ? groupResults(path, names) : [{ folder: path, names, rels: names }];
+    const gone: string[] = [];
+
+    try {
+      if (removal.permanent) {
+        await this.#delete(groups, gone);
+      } else {
+        await this.#trash(groups, gone);
       }
+    } finally {
+      this.#removed(removal, gone);
     }
 
     this.closeRemoval();
   }
 
-  /** Says what the move did; a move that stopped part way still offers to take back the items that went. */
-  #trashed(names: string[], undo: number | null, failure: string | undefined) {
+  /** Deletes the groups in turn; `gone` collects the items that are. A refusal rejects. */
+  async #delete(groups: ResultGroup[], gone: string[]) {
+    for (const { folder, names, rels } of groups) {
+      await this.#ipc.invoke('ops_delete', { path: folder, names });
+      gone.push(...rels);
+    }
+  }
+
+  /**
+   * Moves the groups to the Trash in turn, one request (and undo token) for each, and says what happened; `gone`
+   * collects the items that went. The move stops at the first group that does not go through whole; a refusal of
+   * the first rejects, a later one is told with what already moved.
+   */
+  async #trash(groups: ResultGroup[], gone: string[]) {
+    const undos: number[] = [];
+    let failure: string | undefined;
+
+    try {
+      for (const { folder, names, rels } of groups) {
+        const result = await this.#ipc.invoke('ops_trash', { path: folder, names });
+        if (result.undo !== null) {
+          undos.push(result.undo);
+        }
+
+        if (result.failure !== null) {
+          failure = result.failure.message;
+          break;
+        }
+
+        gone.push(...rels);
+      }
+    } catch (error) {
+      if (gone.length === 0 && undos.length === 0) {
+        throw error;
+      }
+
+      failure = IpcFailure.from(error).message;
+    }
+
+    this.#trashed(gone, undos, failure);
+  }
+
+  /** The removed items are not selected any more; search results are listed again, and a dialog that stays asks only about the rest. */
+  #removed(removal: Removal, gone: readonly string[]) {
+    removal.source.deselect(gone);
+    if (!removal.results) {
+      return;
+    }
+
+    void removal.source.listing.reload();
+    if (this.removal === removal && gone.length > 0) {
+      const removed = new Set(gone);
+      this.removal = { ...removal, names: removal.names.filter((name) => !removed.has(name)) };
+    }
+  }
+
+  /**
+   * Says what the move did; a move that stopped part way still offers to take back the items that went. One undo
+   * token takes back one request, so Undo is offered only when the move was a single one (one folder).
+   */
+  #trashed(moved: string[], undos: number[], failure: string | undefined) {
     const place = `the ${trashName()}`;
+    const undo = undos.length === 1 ? undos[0] : null;
     if (failure === undefined) {
-      this.say(`Moved ${what(names)} to ${place}.`, false, undo);
-    } else if (undo === null) {
+      this.say(`Moved ${what(moved)} to ${place}.`, false, undo);
+    } else if (moved.length === 0 && undos.length === 0) {
       this.say(failure, true);
     } else {
       this.say(`Some items were moved to ${place}, but not all. ${failure}`, true, undo);

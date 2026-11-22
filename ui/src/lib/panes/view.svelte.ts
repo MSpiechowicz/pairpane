@@ -267,10 +267,10 @@ export class PaneView {
 
   // Opening
 
-  /** The archive file in `row`, when it can be opened here (an archive inside an archive cannot). */
+  /** The archive file in `row`, when it can be opened here (not one inside an archive, nor one among search results). */
   #archiveAt(row: number): string | undefined {
-    const { folder, readonly } = this.listing;
-    return folder === undefined || readonly ? undefined : archiveFile(folder, this.entryAt(row));
+    const { path } = this.listing;
+    return path === undefined ? undefined : archiveFile(path, this.entryAt(row));
   }
 
   /** Whether Enter on `row` opens something: `..`, a folder or an archive file. */

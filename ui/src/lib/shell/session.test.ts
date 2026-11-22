@@ -2,6 +2,9 @@ import { render } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { blankForm, toCriteria } from '$lib/find/query';
+import { SavedSearches } from '$lib/find/saved.svelte';
+import type { FindCriteria } from '$lib/ipc/bindings/FindCriteria';
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import type { SavedState } from '$lib/ipc/bindings/SavedState';
 import { IpcFailure } from '$lib/ipc/transport';
@@ -30,10 +33,12 @@ function setup(answers: Parameters<typeof fakeBackend>[0] = {}) {
   const backend = fakeBackend(answers);
   const panes = { left: new PaneTabs(backend.ipc, 'left'), right: new PaneTabs(backend.ipc, 'right') };
   const hotlist = new Hotlist();
+  const searches = new SavedSearches();
   const focus = { side: 'left' as PaneId };
   const session = new Session(backend.ipc, {
     panes,
     hotlist,
+    searches,
     active: { get: () => focus.side, set: (side) => (focus.side = side) },
   });
 
@@ -50,7 +55,7 @@ function setup(answers: Parameters<typeof fakeBackend>[0] = {}) {
     flushSync();
   };
 
-  return { backend, panes, hotlist, focus, session, calls, saves, opened, list };
+  return { backend, panes, hotlist, searches, focus, session, calls, saves, opened, list };
 }
 
 type Setup = ReturnType<typeof setup>;
@@ -194,8 +199,33 @@ describe('Session saving', () => {
         left: { tabs: [{ path: '/home/me', sort: 'name', desc: false }], active: 0 },
         right: { tabs: [{ path: '/home/me', sort: 'name', desc: false }], active: 0 },
         hotlist: [],
+        searches: [],
       },
     ]);
+  });
+
+  it('brings back the saved searches, and every save carries them, a delete included', async () => {
+    const criteria = toCriteria(blankForm(), false) as FindCriteria;
+    const s = setup({ state_load: () => ({ ...saved, searches: [{ name: 'Big', criteria }] }) });
+    await started(s);
+
+    expect(s.searches.list).toEqual([{ name: 'Big', criteria }]);
+
+    s.searches.save('Small', criteria);
+    await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS * 2);
+    expect(s.saves().at(-1)?.searches?.map((search) => search.name)).toEqual(['Big', 'Small']);
+
+    s.searches.remove('Big');
+    s.searches.remove('Small');
+    await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS * 2);
+    expect(s.saves().at(-1)?.searches).toEqual([]);
+  });
+
+  it('a state file from before saved searches loads with none', async () => {
+    const s = setup({ state_load: () => saved });
+    await started(s);
+
+    expect(s.searches.list).toEqual([]);
   });
 
   it('a save while a tab`s folder is still being opened stores that folder, not the one the pane still shows', async () => {

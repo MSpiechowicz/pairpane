@@ -16,6 +16,7 @@ describe('FilesMenu', () => {
     expect(screen.getByRole('menuitem', { name: 'Create hard link…' })).toBeEnabled();
     expect(screen.getByRole('menuitem', { name: 'Properties' })).toHaveAttribute('aria-keyshortcuts', 'Alt+Enter');
     expect(screen.getByRole('menuitem', { name: 'Change attributes…' })).not.toHaveAttribute('aria-keyshortcuts');
+    expect(screen.getByRole('menuitem', { name: 'Find files…' })).toHaveAttribute('aria-keyshortcuts', 'Alt+F7');
     expect(screen.getByRole('menuitem', { name: 'Pack…' })).toHaveAttribute('aria-keyshortcuts', 'Alt+F5');
     expect(screen.getByRole('menuitem', { name: 'Extract…' })).toHaveAttribute('aria-keyshortcuts', 'Alt+F9');
   });
@@ -48,6 +49,7 @@ describe('FilesMenu', () => {
       'Verify checksum file',
       'Split file…',
       'Combine files…',
+      'Find files…',
       'Pack…',
       'Extract…',
     ];
@@ -68,6 +70,7 @@ describe('FilesMenu', () => {
       'verifyChecksum',
       'split',
       'combine',
+      'find',
       'pack',
       'extract',
     ]);

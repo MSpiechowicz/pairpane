@@ -49,6 +49,14 @@ describe('shortcutFor', () => {
     expect(press('F5', { altKey: true, ctrlKey: true })).toBeUndefined();
   });
 
+  it('Alt+F7 finds files; F7 alone is a new folder and the other modifiers are not shortcuts', () => {
+    expect(press('F7', { altKey: true })).toBe('find');
+    expect(press('F7')).toBe('newFolder');
+    expect(press('F7', { altKey: true, shiftKey: true })).toBeUndefined();
+    expect(press('F7', { altKey: true, ctrlKey: true })).toBeUndefined();
+    expect(press('F7', { altKey: true, metaKey: true })).toBeUndefined();
+  });
+
   it('F5 copies, F6 moves, Shift+F6 renames and Ctrl+J toggles the transfers', () => {
     expect(press('F5')).toBe('copy');
     expect(press('F6')).toBe('move');
@@ -98,7 +106,7 @@ describe('shortcutFor', () => {
       }
     }
 
-    for (const name of ['F4', 'F7', 'F8', 'Delete']) {
+    for (const name of ['F4', 'F8', 'Delete']) {
       expect(press(name, { altKey: true })).toBeUndefined();
       expect(press(name, { altKey: true, shiftKey: true })).toBeUndefined();
     }

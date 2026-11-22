@@ -25,7 +25,7 @@ export function entry(name: string, kind: Entry['kind'] = 'file', extra: Partial
 type Call = { args: Record<string, unknown>; emit: (event: never) => void };
 
 /**
- * A transport that records every `pane_open` and `archive_open` (`opens`), `pane_folder_size` (`sizes`) and `volumes_list`
+ * A transport that records every `pane_open`, `archive_open` and `find_open` (`opens`), `pane_folder_size` (`sizes`) and `volumes_list`
  * (`volumes`) and lets the test send events on their channels. A command is answered with `null`, or as `answers`
  * says (a function of the arguments; it may return a promise, also a rejected or a never settled one);
  * `invoke` has the calls of all of them.
@@ -37,6 +37,7 @@ export function fakeBackend(answers: Partial<Record<CommandName, (args: never) =
   const channels: Record<string, Call[]> = {
     pane_open: opens as Call[],
     archive_open: opens as Call[],
+    find_open: opens as Call[],
     pane_folder_size: sizes as Call[],
     volumes_list: volumes as Call[],
   };

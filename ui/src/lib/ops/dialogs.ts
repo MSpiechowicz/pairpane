@@ -1,3 +1,4 @@
+import { groupResults } from '$lib/find/results';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
 import { archiveName } from '$lib/panes/archive';
 import { isWindowsPlatform } from '$lib/panes/keys';
@@ -149,12 +150,20 @@ async function makeFile(ipc: Transport, path: string, name: string): Promise<Don
   }
 }
 
+/** The folders a copy or move takes its items from, and the names in each. */
+function folders(request: Extract<OpRequest, { kind: 'copy' | 'move' }>): { folder: string; names: string[] }[] {
+  return request.results ? groupResults(request.from, request.names) : [{ folder: request.from, names: request.names }];
+}
+
 /** Asks the backend for what the dialog stands for; a refusal rejects. */
 export async function perform(ipc: Transport, request: OpRequest, value: string, verify: boolean): Promise<Done> {
   switch (request.kind) {
     case 'copy':
     case 'move':
-      await ipc.invoke('ops_start', { kind: request.kind, from: request.from, names: request.names, to: value, verify });
+      // Search results are in many folders: one job for each, in the order their folders first appear; one that is refused stops the rest.
+      for (const { folder, names } of folders(request)) {
+        await ipc.invoke('ops_start', { kind: request.kind, from: folder, names, to: value, verify });
+      }
       return { name: value };
     case 'add':
       await ipc.invoke('ops_add_to_archive', { archive: request.archive, dir: request.dir, from: request.from, names: request.names });

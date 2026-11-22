@@ -71,10 +71,14 @@
               {#if position > 0}<i>/</i>{/if}
               <button
                 type="button"
-                class:last={position === crumbs.length - 1}
+                class:last={position === crumbs.length - 1 && listing.results === undefined}
                 onclick={() => goTo(crumb)}>{crumb.name}</button
               >
             {/each}
+            <!-- The crumbs are the folder searched; the results are what is listed in it. -->
+            {#if listing.results !== undefined}
+              <i>/</i><span class="found">Search results</span>
+            {/if}
           </nav>
         </div>
       {:else}
@@ -216,9 +220,15 @@
     padding: 2px 5px;
   }
 
-  .crumbs button.last {
+  .crumbs button.last,
+  .crumbs .found {
     color: var(--text);
     font-weight: 600;
+  }
+
+  .crumbs .found {
+    flex: none;
+    padding: 2px 5px;
   }
 
   .crumbs i {

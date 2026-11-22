@@ -23,6 +23,7 @@ export type Action =
   | 'properties'
   | 'extract'
   | 'pack'
+  | 'find'
   | 'transfers'
   | 'view'
   | 'edit'
@@ -73,6 +74,8 @@ function withAlt(event: KeyboardEvent): Action | undefined {
       return 'properties';
     case 'F5':
       return 'pack';
+    case 'F7':
+      return 'find';
     case 'F9':
       return 'extract';
     default:

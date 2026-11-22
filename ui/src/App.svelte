@@ -3,6 +3,10 @@
 
   import { Editor } from '$lib/editor/editor.svelte';
   import EditorOverlay from '$lib/editor/EditorOverlay.svelte';
+  import FindDialog from '$lib/find/FindDialog.svelte';
+  import { Finder } from '$lib/find/finder.svelte';
+  import { goTo } from '$lib/find/goto';
+  import { SavedSearches } from '$lib/find/saved.svelte';
   import type { AppInfo } from '$lib/ipc/bindings/AppInfo';
   import { ipc as backend } from '$lib/ipc/client';
   import { IpcFailure } from '$lib/ipc/transport';
@@ -53,9 +57,14 @@
   // The volumes name the first step of the paths and fill the drive menu.
   const volumes = new Volumes(ipc);
   const hotlist = new Hotlist();
+  const searches = new SavedSearches();
+  const finder = new Finder(ipc, (id) =>
+    [panes.left, panes.right].some((tabs) => tabs.view.listing.results === id),
+  );
   const session = new Session(ipc, {
     panes,
     hotlist,
+    searches,
     active: { get: () => active, set: (side) => (active = side) },
   });
   session.watch();
@@ -91,7 +100,19 @@
   });
   const question = $derived(transfers.question);
   /** A dialog (or the viewer's or editor's overlay) has the keyboard: the shortcuts and Tab are its own then. */
-  const modal = $derived(files.modal || question !== undefined || viewer.modal || editor.modal || passwords.modal);
+  const modal = $derived(
+    files.modal || question !== undefined || viewer.modal || editor.modal || passwords.modal || finder.modal,
+  );
+
+  /** Alt+F7: the Find dialog, on the folder the active pane shows (inside an archive: the folder that holds it). */
+  function find() {
+    const { folder } = panes[active].view.listing;
+    if (folder === undefined) {
+      files.say('Wait until the folder has been listed.', true);
+    } else {
+      finder.show(folder);
+    }
+  }
 
   /** F4 and the Files menu's editor: an archive's entries are read-only, so there is nothing to edit there. */
   function edit(builtin = false) {
@@ -229,6 +250,9 @@
       case 'quickView':
         viewer.toggleQuick();
         break;
+      case 'find':
+        find();
+        break;
     }
 
     event.preventDefault();
@@ -249,6 +273,8 @@
   function chooseFile(choice: FilesChoice) {
     if (choice === 'editBuiltin') {
       edit(true);
+    } else if (choice === 'find') {
+      find();
     } else {
       files.run(choice);
     }
@@ -304,6 +330,7 @@
     onEditSettings={editSettings}
     onToggleHidden={toggleHidden}
     onFiles={chooseFile}
+    onFind={find}
   />
 
   <main class="panes">
@@ -388,6 +415,15 @@
 
 {#if viewer.overlay}
   <ViewerOverlay session={viewer.overlay} onClose={() => viewer.close()} />
+{/if}
+
+{#if finder.root !== undefined}
+  <FindDialog
+    {finder}
+    saved={searches}
+    results={panes[active].view.listing}
+    onGoTo={(hit) => finder.root !== undefined && void goTo(panes[active].view, finder.root, hit)}
+  />
 {/if}
 
 {#if editor.session}

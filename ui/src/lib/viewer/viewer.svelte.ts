@@ -1,5 +1,6 @@
 import { tick } from 'svelte';
 
+import { splitResult } from '$lib/find/results';
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import type { Transport } from '$lib/ipc/transport';
 import { focusActiveList } from '$lib/panes/focus';
@@ -64,11 +65,14 @@ export class Viewer {
     return this.overlay !== undefined;
   }
 
-  /** What the cursor is on: a file, an entry of an archive, a folder (`..` too) or nothing that can be shown yet. */
+  /**
+   * What the cursor is on: a file (a search result, in the folder that holds it), an entry of an archive, a folder
+   * (`..` too) or nothing that can be shown yet.
+   */
   #look(): Under {
     const view = this.#panes[this.#active()].view;
-    const { archive, path } = view.listing;
-    if (path === undefined && archive === undefined) {
+    const { archive, path, folder, results } = view.listing;
+    if (path === undefined && archive === undefined && results === undefined) {
       return undefined;
     }
 
@@ -81,7 +85,16 @@ export class Viewer {
       return 'folder';
     }
 
-    return archive === undefined ? { path: path!, name: entry.name } : { path: archive.archive, name: entry.name, inside: archive.dir };
+    if (archive !== undefined) {
+      return { path: archive.archive, name: entry.name, inside: archive.dir };
+    }
+
+    if (results !== undefined) {
+      const { folder: holder, name } = splitResult(folder ?? '', entry.name);
+      return { path: holder, name };
+    }
+
+    return { path: path!, name: entry.name };
   }
 
   /** F3: the overlay for the file (or archive entry) under the cursor. A folder, `..` and an empty pane have nothing to view. */

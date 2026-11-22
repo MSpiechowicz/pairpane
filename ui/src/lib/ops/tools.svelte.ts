@@ -51,10 +51,11 @@ export class ItemTools {
   /**
    * Does what the tool asks on `source`'s items; nothing when there is nothing to act on. Properties, splitting and
    * checking act on the entry under the cursor (the others on the selection, as copying does); the parts of a split
-   * and the archive go to the other pane's folder.
+   * and the archive go to the other pane's folder. Search results are packed with their folders kept (from the
+   * folder searched); the other tools do not take them.
    */
   run(action: ToolAction, source: PaneView, other: PaneView) {
-    const path = source.listing.path;
+    const path = this.#folderOf(action, source);
     const under = source.entryAt(source.cursor);
     const entries = chosen(source);
     if (path === undefined || entries.length === 0) {
@@ -81,6 +82,12 @@ export class ItemTools {
           this.#oneFile(action, path, under, source, other);
         }
     }
+  }
+
+  /** The folder the items are in. Search results have none: only a pack takes them, as names below the folder searched. */
+  #folderOf(action: ToolAction, source: PaneView): string | undefined {
+    const { path, folder, results } = source.listing;
+    return action === 'pack' && results !== undefined ? folder : path;
   }
 
   #oneFile(action: 'verifyChecksum' | 'split', path: string, entry: Entry, source: PaneView, other: PaneView) {
