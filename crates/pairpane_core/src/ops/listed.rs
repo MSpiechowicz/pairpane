@@ -220,10 +220,11 @@ fn resolve_folder_below(base: &Path, dir: &str) -> io::Result<Folder> {
 
 #[cfg(unix)]
 fn same_folder(folder: &Folder, target: &Path) -> io::Result<bool> {
-    let now = rustix::fs::fstat(folder).map_err(io::Error::from)?;
+    // Through std's metadata, whose device number is a u64 on every Unix (a raw `stat` has an i32 on macOS).
+    let now = folder.metadata()?;
     let there = std::fs::metadata(target)?;
 
-    Ok(platform::identity(&there) == Some((now.st_dev, now.st_ino)))
+    Ok(platform::identity(&now).is_some() && platform::identity(&there) == platform::identity(&now))
 }
 
 #[cfg(windows)]

@@ -4,7 +4,9 @@ use std::fs;
 
 use tauri::async_runtime::block_on;
 
-use super::tests::{received, running, wait_for};
+#[cfg(unix)]
+use super::tests::received;
+use super::tests::{running, wait_for};
 use super::*;
 use crate::commands::testing::names;
 use crate::commands::within::tests::{text, within};
