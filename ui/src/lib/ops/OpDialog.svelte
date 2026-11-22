@@ -80,6 +80,7 @@
       spellcheck="false"
       autocomplete="off"
       aria-label={spec.label}
+      readonly={spec.fixed}
       data-autofocus
       bind:value
       {onkeydown}

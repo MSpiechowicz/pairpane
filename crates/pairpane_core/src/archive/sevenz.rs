@@ -23,7 +23,7 @@ use crate::view::refusal;
 
 /// The most memory, in KiB, that the headers of one archive and the dictionary of one coder may take: 512 MiB, far past
 /// the 64 MiB of `7z -mx9`; an archive that asks for more is refused.
-const MEMORY_KB: usize = 512 * 1024;
+pub(super) const MEMORY_KB: usize = 512 * 1024;
 
 /// How much of the first encrypted entry [`check_password`] decodes to see whether the password opens it.
 const PROBE: u64 = 64 * 1024;
@@ -48,13 +48,13 @@ pub(super) const EPOCH_GAP_MS: i64 = 11_644_473_600_000;
 /// The archive file, read and sought at the pace of the decoder. Once `cancel` is raised a read fails, with an error of
 /// kind `Other` and not `Interrupted`: the decoders drain what they skip with `io::copy`, which tries again at every
 /// `Interrupted` and so would never stop. [`failure`] turns it into the `Interrupted` error of [`cancelled`].
-struct Source<'a> {
+pub(super) struct Source<'a> {
     reader: FileReader<'a, dyn ReadAt + 'a>,
     cancel: &'a AtomicBool,
 }
 
 impl<'a> Source<'a> {
-    fn new(file: &'a dyn ReadAt, cancel: &'a AtomicBool) -> Self {
+    pub(super) fn new(file: &'a dyn ReadAt, cancel: &'a AtomicBool) -> Self {
         Self {
             reader: FileReader::new(file),
             cancel,
@@ -79,9 +79,9 @@ impl Seek for Source<'_> {
 }
 
 /// An archive whose headers are read, and the password it was read with.
-struct Opened {
-    archive: Archive,
-    secret: sevenz_rust2::Password,
+pub(super) struct Opened {
+    pub(super) archive: Archive,
+    pub(super) secret: sevenz_rust2::Password,
 }
 
 /// The password the way the format takes it (UTF-16); a missing one is the empty password, which means none. Called once
@@ -97,7 +97,7 @@ fn secret(password: Option<&Password>) -> sevenz_rust2::Password {
 }
 
 /// Reads the headers of the archive in `file`.
-fn open(file: &dyn ReadAt, cancel: &AtomicBool, password: Option<&Password>) -> io::Result<Opened> {
+pub(super) fn open(file: &dyn ReadAt, cancel: &AtomicBool, password: Option<&Password>) -> io::Result<Opened> {
     let secret = secret(password);
     let mut source = Source::new(file, cancel);
 
@@ -115,11 +115,7 @@ fn open(file: &dyn ReadAt, cancel: &AtomicBool, password: Option<&Password>) -> 
             // Not needed any more: the second read is without one.
             drop(secret);
 
-            let mut source = Source::new(file, cancel);
-            let needs = matches!(
-                Archive::read_with_memory_limit(&mut source, &sevenz_rust2::Password::empty(), MEMORY_KB),
-                Err(Error::PasswordRequired)
-            );
+            let needs = headers_are_encrypted(file, cancel);
 
             Err(if needs {
                 password_error(PasswordFault::Wrong)
@@ -130,10 +126,21 @@ fn open(file: &dyn ReadAt, cancel: &AtomicBool, password: Option<&Password>) -> 
     }
 }
 
+/// Whether the headers of the 7z archive in `file` are encrypted: they ask for a password when they are read without one.
+pub(super) fn headers_are_encrypted(file: &dyn ReadAt, cancel: &AtomicBool) -> bool {
+    let mut source = Source::new(file, cancel);
+    let none = sevenz_rust2::Password::empty();
+
+    matches!(
+        Archive::read_with_memory_limit(&mut source, &none, MEMORY_KB),
+        Err(Error::PasswordRequired)
+    )
+}
+
 /// `error` of the 7z code as an error of ours: a raised `cancel` first, then what it says about the password and the
 /// method. `encrypted` is whether the data it failed on is encrypted with a password that was given: it failing then is
 /// taken for the password being wrong.
-fn failure(error: Error, cancel: &AtomicBool, encrypted: bool) -> io::Error {
+pub(super) fn failure(error: Error, cancel: &AtomicBool, encrypted: bool) -> io::Error {
     if let Err(stopped) = check(cancel) {
         return stopped;
     }
@@ -150,7 +157,7 @@ fn failure(error: Error, cancel: &AtomicBool, encrypted: bool) -> io::Error {
 }
 
 /// The entries that make the index, in order: all but the anti-items (marks that an update removes a file, not entries).
-fn listed(archive: &Archive) -> Vec<usize> {
+pub(super) fn listed(archive: &Archive) -> Vec<usize> {
     (0..archive.files.len())
         .filter(|file| !archive.files[*file].is_anti_item())
         .collect()
@@ -287,10 +294,10 @@ pub fn check_password(file: &dyn ReadAt, password: &Password) -> io::Result<bool
 
 /// Reads an entry's decoded data, saying a failure the way [`EntrySource`] promises: a raised cancel flag is
 /// `Interrupted`, a failure of encrypted data a wrong password, any other damage `InvalidData`.
-struct Entry<'r, 'c> {
-    inner: &'r mut dyn Read,
-    cancel: &'c AtomicBool,
-    encrypted: bool,
+pub(super) struct Entry<'r, 'c> {
+    pub(super) inner: &'r mut dyn Read,
+    pub(super) cancel: &'c AtomicBool,
+    pub(super) encrypted: bool,
 }
 
 impl Read for Entry<'_, '_> {

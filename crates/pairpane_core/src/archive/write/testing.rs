@@ -13,16 +13,16 @@ use crate::model::{ArchiveFormat, PackFormat, PackLevel};
 use super::{Entry, Options, Packer};
 
 /// Every format the writers make, with the format the readers know it as.
-pub(super) const FORMATS: [(PackFormat, ArchiveFormat); 3] = [
+pub(crate) const FORMATS: [(PackFormat, ArchiveFormat); 3] = [
     (PackFormat::Zip, ArchiveFormat::Zip),
     (PackFormat::TarZst, ArchiveFormat::TarZst),
     (PackFormat::SevenZ, ArchiveFormat::SevenZ),
 ];
 
-pub(super) const LEVELS: [PackLevel; 4] = [PackLevel::Store, PackLevel::Fast, PackLevel::Normal, PackLevel::Maximum];
+pub(crate) const LEVELS: [PackLevel; 4] = [PackLevel::Store, PackLevel::Fast, PackLevel::Normal, PackLevel::Maximum];
 
 /// One item to pack: a folder (no content) or a file.
-pub(super) struct Item {
+pub(crate) struct Item {
     pub name: String,
     pub mode: u32,
     pub modified: i64,
@@ -30,7 +30,7 @@ pub(super) struct Item {
 }
 
 impl Item {
-    pub(super) fn file(name: &str, mode: u32, content: &[u8]) -> Self {
+    pub(crate) fn file(name: &str, mode: u32, content: &[u8]) -> Self {
         Self {
             name: name.to_owned(),
             mode,
@@ -39,7 +39,7 @@ impl Item {
         }
     }
 
-    pub(super) fn folder(name: &str, mode: u32) -> Self {
+    pub(crate) fn folder(name: &str, mode: u32) -> Self {
         Self {
             name: name.to_owned(),
             mode,
@@ -48,7 +48,7 @@ impl Item {
         }
     }
 
-    pub(super) fn entry(&self) -> Entry<'_> {
+    pub(crate) fn entry(&self) -> Entry<'_> {
         match &self.content {
             None => Entry::folder(&self.name, self.mode, Some(self.modified)),
             Some(content) => Entry::file(
@@ -64,7 +64,7 @@ impl Item {
 
 /// A small project with a nested folder, an empty folder and file, text that compresses and noise that does not, and a
 /// name of every kind of character.
-pub(super) fn sample() -> Vec<Item> {
+pub(crate) fn sample() -> Vec<Item> {
     let text = "the quick brown fox jumps over the lazy dog\n".repeat(2000);
     let long = format!("{}/{}.txt", "a-long-folder-name".repeat(6), "b".repeat(120));
 
@@ -82,7 +82,7 @@ pub(super) fn sample() -> Vec<Item> {
     ]
 }
 
-pub(super) fn options(level: PackLevel, password: Option<&str>) -> Options {
+pub(crate) fn options(level: PackLevel, password: Option<&str>) -> Options {
     Options {
         level,
         password: password.map(|text| Password::new(text.to_owned())),
@@ -91,7 +91,7 @@ pub(super) fn options(level: PackLevel, password: Option<&str>) -> Options {
 }
 
 /// `items` packed into an archive of `format`.
-pub(super) fn pack(format: PackFormat, options: &Options, items: &[Item]) -> io::Result<Vec<u8>> {
+pub(crate) fn pack(format: PackFormat, options: &Options, items: &[Item]) -> io::Result<Vec<u8>> {
     let cancel = idle();
     let mut packer = Packer::new(format, Cursor::new(Vec::new()), options, &cancel)?;
 
@@ -103,13 +103,13 @@ pub(super) fn pack(format: PackFormat, options: &Options, items: &[Item]) -> io:
 }
 
 /// A packer of `format` into memory, at the fast level, without a password.
-pub(super) fn packer(format: PackFormat, cancel: &AtomicBool) -> Packer<'_, Cursor<Vec<u8>>> {
+pub(crate) fn packer(format: PackFormat, cancel: &AtomicBool) -> Packer<'_, Cursor<Vec<u8>>> {
     Packer::new(format, Cursor::new(Vec::new()), &options(PackLevel::Fast, None), cancel).expect("a packer")
 }
 
 /// What the readers say of an entry.
 #[derive(Debug, PartialEq)]
-pub(super) struct Seen {
+pub(crate) struct Seen {
     pub path: String,
     pub dir: bool,
     pub mode: Option<u32>,
@@ -118,7 +118,7 @@ pub(super) struct Seen {
 }
 
 /// Every entry of `bytes`, listed and extracted through [`build_index`] and [`open_source`].
-pub(super) fn read_back(bytes: &Vec<u8>, format: ArchiveFormat, password: Option<&Password>) -> io::Result<Vec<Seen>> {
+pub(crate) fn read_back(bytes: &Vec<u8>, format: ArchiveFormat, password: Option<&Password>) -> io::Result<Vec<Seen>> {
     let cancel = idle();
     let input = Input {
         file: bytes,
@@ -152,7 +152,7 @@ pub(super) fn read_back(bytes: &Vec<u8>, format: ArchiveFormat, password: Option
 
 /// What `items` should read back as from an archive of `format`: the same paths in the same order with the same content
 /// and times, and the modes where the format stores them (not a zip or a 7z made on Windows).
-pub(super) fn expected(format: PackFormat, items: &[Item]) -> Vec<Seen> {
+pub(crate) fn expected(format: PackFormat, items: &[Item]) -> Vec<Seen> {
     items
         .iter()
         .map(|item| Seen {
@@ -167,7 +167,7 @@ pub(super) fn expected(format: PackFormat, items: &[Item]) -> Vec<Seen> {
 
 /// `bsdtar` with `arguments`, or `None` when it is not installed. Its output is the standard output (lossy text for a
 /// listing, the bytes of an entry for `-xOf`).
-pub(super) fn bsdtar(arguments: &[&str]) -> Option<(bool, Vec<u8>)> {
+pub(crate) fn bsdtar(arguments: &[&str]) -> Option<(bool, Vec<u8>)> {
     let output = Command::new("bsdtar").args(arguments).output().ok()?;
 
     Some((output.status.success(), output.stdout))
@@ -175,7 +175,7 @@ pub(super) fn bsdtar(arguments: &[&str]) -> Option<(bool, Vec<u8>)> {
 
 /// Whether `bsdtar` is there and its version line names one of `libraries` (it lists what it was built with: a zip with AES
 /// needs a crypto library, a tar.zst `libzstd`; the macOS one has neither).
-pub(super) fn bsdtar_has(libraries: &[&str]) -> bool {
+pub(crate) fn bsdtar_has(libraries: &[&str]) -> bool {
     let Some((true, version)) = bsdtar(&["--version"]) else {
         return false;
     };
@@ -185,14 +185,14 @@ pub(super) fn bsdtar_has(libraries: &[&str]) -> bool {
 }
 
 /// Whether `bsdtar` can open a zip with AES.
-pub(super) fn bsdtar_decrypts() -> bool {
+pub(crate) fn bsdtar_decrypts() -> bool {
     bsdtar_has(&["openssl", "mbedtls", "nettle", "cng"])
 }
 
 /// Checks that `bsdtar` lists the archive at `path` with `items` in it and extracts their content (with `passphrase`
 /// for an encrypted one). Only the names that are ASCII are looked for by name: what a locale makes of the others is not
 /// the writer's doing.
-pub(super) fn assert_bsdtar_reads(path: &str, items: &[Item], passphrase: Option<&str>) {
+pub(crate) fn assert_bsdtar_reads(path: &str, items: &[Item], passphrase: Option<&str>) {
     let (listed, listing) = bsdtar(&["-tf", path]).expect("bsdtar");
     let listing = String::from_utf8_lossy(&listing).into_owned();
 
@@ -222,7 +222,7 @@ pub(super) fn assert_bsdtar_reads(path: &str, items: &[Item], passphrase: Option
 }
 
 /// Writes `bytes` to `name` in `folder` and gives the path.
-pub(super) fn store(folder: &Path, name: &str, bytes: &[u8]) -> String {
+pub(crate) fn store(folder: &Path, name: &str, bytes: &[u8]) -> String {
     let path = folder.join(name);
     std::fs::write(&path, bytes).expect("write the archive");
 
@@ -230,7 +230,7 @@ pub(super) fn store(folder: &Path, name: &str, bytes: &[u8]) -> String {
 }
 
 /// A reader that gives `bytes` and raises `cancel` with its first chunk, as a user cancelling in the middle of a file.
-pub(super) struct Raising<'a> {
+pub(crate) struct Raising<'a> {
     pub bytes: &'a [u8],
     pub cancel: &'a AtomicBool,
 }

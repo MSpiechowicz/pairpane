@@ -10,15 +10,15 @@
 //! that is wanted), through the archive code's own cancel flag.
 
 use std::fmt;
+use std::fs::File;
 use std::io::{self, Read};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use crate::archive::{
-    self, ArchiveIndex, Fingerprint, Flow, HEAD_BYTES, IndexEntry, Input, PasswordFault, ReadAt, Selected,
-};
+use crate::archive::{self, ArchiveIndex, Fingerprint, Flow, HEAD_BYTES, IndexEntry, Input, PasswordFault, Selected};
 use crate::model::JobPhase;
 
 use super::control::Control;
@@ -28,6 +28,25 @@ use super::origin::Origin;
 use super::plan::{Child, Kind};
 use super::report::refusal;
 use super::transfer::{Run, Stop};
+
+/// The archive `name` of the folder `folder` (which the caller knows as `shown`), opened without following a link, and its
+/// state.
+pub(super) fn open_archive(folder: &Path, shown: &Path, name: &str) -> Result<(Child, File, Fingerprint), Stop> {
+    let found = Child::lookup(folder, name)?;
+    if found.kind != Kind::File {
+        return Err(refusal(io::ErrorKind::InvalidInput, "the archive is not a regular file").into());
+    }
+
+    let file = open::source(&found.path, &found.meta)?;
+    let print = Fingerprint::of(&shown.join(name), &file.metadata()?);
+
+    Ok((found, file, print))
+}
+
+/// The error of an archive that is not the file the caller's index was made from.
+pub(super) fn changed() -> io::Error {
+    refusal(io::ErrorKind::Other, "the archive changed; open it again")
+}
 
 /// How often the watcher looks whether the job was cancelled.
 const WATCH_EVERY: Duration = Duration::from_millis(50);
@@ -85,13 +104,7 @@ impl Run<'_> {
             .ok_or_else(|| refusal(io::ErrorKind::InvalidInput, "no archive"))?;
 
         let from = self.open_folders(&[&request.from, &request.to])?;
-        let found = Child::lookup(&from, name)?;
-        if found.kind != Kind::File {
-            return Err(refusal(io::ErrorKind::InvalidInput, "the archive is not a regular file").into());
-        }
-
-        let file = open::source(&found.path, &found.meta)?;
-        let print = Fingerprint::of(&request.from.join(name), &file.metadata()?);
+        let (found, file, print) = open_archive(&from, &request.from, name)?;
         let target = self.target_folder(&request.to)?;
         let cancel = AtomicBool::new(false);
         // Read once: every file written gets the same marker (see `origin`).
@@ -104,18 +117,7 @@ impl Run<'_> {
         let password = source.password.as_deref();
 
         watched(&job.control, &cancel, || {
-            let index = match &source.index {
-                Some(index) if source.fingerprint.as_ref() == Some(&print) => Arc::clone(index),
-                Some(_) => return Err(refusal(io::ErrorKind::Other, "the archive changed; open it again").into()),
-                None => {
-                    self.phase(JobPhase::Scanning);
-                    let format = archive::detect(name, &file.read_chunk(0, HEAD_BYTES)?).ok_or_else(|| {
-                        refusal(io::ErrorKind::InvalidInput, "this is not an archive that can be opened")
-                    })?;
-
-                    Arc::new(archive::build_index(format, &input, &cancel, password).map_err(|e| self.stopped(e))?)
-                }
-            };
+            let index = self.indexed(name, source, &print, &input, &cancel)?;
 
             let selection = index
                 .select(inner, entries)
@@ -145,6 +147,33 @@ impl Run<'_> {
 
             self.write_all(&mut *reader, &selection.items, &selection.ordinals(), target, origin)
         })
+    }
+
+    /// The index of the archive `name` that the job works on: the one the caller brought when the archive is still in the
+    /// state it was in (`print` is its state now), none when it is not (the caller must open it again), and, when the caller
+    /// brought none, one built here.
+    pub(super) fn indexed(
+        &mut self,
+        name: &str,
+        source: &ArchiveJob,
+        print: &Fingerprint,
+        input: &Input<'_>,
+        cancel: &AtomicBool,
+    ) -> Result<Arc<ArchiveIndex>, Stop> {
+        match &source.index {
+            Some(index) if source.fingerprint.as_ref() == Some(print) => Ok(Arc::clone(index)),
+            Some(_) => Err(changed().into()),
+            None => {
+                self.phase(JobPhase::Scanning);
+                let format = archive::detect(name, &input.file.read_chunk(0, HEAD_BYTES)?)
+                    .ok_or_else(|| refusal(io::ErrorKind::InvalidInput, "this is not an archive that can be opened"))?;
+                let password = source.password.as_deref();
+
+                Ok(Arc::new(
+                    archive::build_index(format, input, cancel, password).map_err(|e| self.stopped(e))?,
+                ))
+            }
+        }
     }
 
     /// Hands the entries `items` (ordinals `wanted`) from `reader` to the writing, into `target`.
@@ -223,7 +252,7 @@ impl Run<'_> {
 
 /// Runs `work` while a watcher raises `cancel` as soon as the job is cancelled, so the reading of the archive (which
 /// checkpoints do not reach) stops too.
-fn watched<T>(control: &Control, cancel: &AtomicBool, work: impl FnOnce() -> T) -> T {
+pub(super) fn watched<T>(control: &Control, cancel: &AtomicBool, work: impl FnOnce() -> T) -> T {
     let finished = AtomicBool::new(false);
 
     thread::scope(|scope| {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { above, archiveFile, crumbKey, isArchiveName, joinInner, joinPath } from './archive';
+import { above, archiveFile, crumbKey, isArchiveName, isWritableArchive, joinInner, joinPath } from './archive';
 import { entry } from '../../../tests/panes';
 
 describe('isArchiveName', () => {
@@ -24,6 +24,17 @@ describe('isArchiveName', () => {
 
   it.each(['a.txt', 'zip', '.zip', 'a.zip.bak', 'a.xz', 'a.zst', 'a.bz2'])('does not know %s', (name) =>
     expect(isArchiveName(name)).toBe(false),
+  );
+});
+
+describe('isWritableArchive', () => {
+  it.each(['a.zip', 'lib.JAR', 'a.tar', 'a.tar.gz', 'a.TGZ', 'a.tar.xz', 'a.txz', 'a.tar.zst', 'a.tzst', 'a.tar.bz2', 'a.tbz2', 'a.tbz', 'a.7z'])(
+    'can be added to: %s',
+    (name) => expect(isWritableArchive(name)).toBe(true),
+  );
+
+  it.each(['a.rar', 'a.RAR', 'notes.gz', 'a.txt', '.zip', 'a.xz'])('cannot be added to: %s', (name) =>
+    expect(isWritableArchive(name)).toBe(false),
   );
 });
 

@@ -16,6 +16,7 @@
 //!   ordinals) as bounded readers ([`Declared`] keeps each to the size it declares).
 //! - [`write`]: the writers a pack job uses (zip, tar.zst, 7z) over a `Write`; they read nothing of the disk and are fed
 //!   entries with readers by `ops`.
+//! - [`rewrite`]: an archive written again with entries added and some left out (what adding to an archive does).
 //! - [`Password`]: held in memory only, zeroized, `Debug` hides it. A password that an archive needs and lacks (or that is
 //!   wrong) surfaces as an error made by [`password_error`] and recognised by [`password_fault`].
 //! - [`check_password`]: whether a password opens an archive, judged cheaply (a zip by the verifier or check byte of its
@@ -46,6 +47,7 @@ pub mod names;
 mod open;
 pub mod password;
 pub mod rar;
+pub mod rewrite;
 pub mod sevenz;
 pub mod tar;
 pub mod write;

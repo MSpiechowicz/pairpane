@@ -9,11 +9,12 @@ import { IpcFailure } from '$lib/ipc/transport';
 
 import App from './App.svelte';
 
-import { type Answers, appWorld, key, listbox, pane } from '../tests/app';
+import { type Answers, appWorld, key, listbox, pane, withArchiveOnRight } from '../tests/app';
 import { entry } from '../tests/panes';
 import { FakeFile, numbered, viewAnswers } from '../tests/view';
 
 const READ_ONLY = 'Archives are read-only here — extract first (F5).';
+const INTO_ARCHIVE = 'Only copying works into an archive.';
 const ZIP = { archive: '/left/a.zip', dir: '' };
 
 const needsPassword = (message = 'The archive needs a password.') => {
@@ -93,23 +94,16 @@ describe('an archive is read-only', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('F5 and F6 into a pane that shows an archive are refused', async () => {
-    const backend = await world({}, false);
-    await key(document.body, 'Tab');
-    await key(listbox('Right'), 'ArrowDown');
-    await key(listbox('Right'), 'ArrowDown'); // d.tar.gz
-    await key(listbox('Right'), 'Enter');
-    await vi.waitFor(() => expect(backend.sent('archive_open')).toHaveLength(1));
-    backend.listIn('right', { archive: '/right/d.tar.gz', dir: '' }, [entry('x.txt')]);
-    await tick();
-    await key(document.body, 'Tab');
+  it('F6 into a pane that shows an archive is refused', async () => {
+    const backend = await withArchiveOnRight(invoke, 'd.tar.gz');
+    await key(listbox('Left'), 'ArrowUp'); // keep the cursor on a.zip
 
-    for (const name of ['F5', 'F6']) {
-      await key(listbox('Left'), name);
-      expect(await screen.findByText('Can’t copy into an archive.')).toBeInTheDocument();
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    }
+    await key(listbox('Left'), 'F6');
+
+    expect(await screen.findByText(INTO_ARCHIVE)).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(backend.sent('ops_start')).toEqual([]);
+    expect(backend.sent('ops_add_to_archive')).toEqual([]);
   });
 });
 

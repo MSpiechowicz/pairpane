@@ -177,6 +177,43 @@ pub(super) fn the_paths(entries: &[Seen]) -> Vec<&str> {
     entries.iter().map(|seen| seen.0.as_str()).collect()
 }
 
+/// The last progress a rig saw: bytes done and total, files done and total.
+pub(super) fn last_progress(rig: &Rig) -> (u64, u64, u32, u32) {
+    let Some(OpsEvent::Progress {
+        done_bytes,
+        total_bytes,
+        done_files,
+        total_files,
+        ..
+    }) = rig
+        .seen
+        .iter()
+        .rev()
+        .find(|event| matches!(event, OpsEvent::Progress { .. }))
+    else {
+        panic!("a progress report");
+    };
+
+    (*done_bytes, *total_bytes, *done_files, *total_files)
+}
+
+/// A rig that cancels every job at the first progress that shows bytes moved, so the cancel lands in the middle of the work.
+pub(super) fn cancelling_rig() -> Rig {
+    let hooks = Hooks {
+        every_chunk: true,
+        ..Hooks::default()
+    };
+
+    Rig::with(hooks, |engine, event| {
+        if let OpsEvent::Progress {
+            id, done_bytes: 2.., ..
+        } = event
+        {
+            let _ = engine.control(*id, ControlAction::Cancel);
+        }
+    })
+}
+
 #[test]
 fn every_format_and_level_reads_back_as_it_was_packed() {
     for (format, kind, name) in FORMATS {
@@ -202,21 +239,7 @@ fn the_progress_counts_the_bytes_of_the_files_through_scanning_and_packing() {
         let job = rig.start(pack(root.path(), &ITEMS, name, options(format, PackLevel::Fast)));
         rig.wait_ended(job);
 
-        let Some(OpsEvent::Progress {
-            done_bytes,
-            total_bytes,
-            done_files,
-            total_files,
-            ..
-        }) = rig
-            .seen
-            .iter()
-            .rev()
-            .find(|event| matches!(event, OpsEvent::Progress { .. }))
-        else {
-            panic!("a progress report");
-        };
-        let last = (*done_bytes, *total_bytes, *done_files, *total_files);
+        let last = last_progress(&rig);
 
         assert_eq!(last, (expected_bytes(), expected_bytes(), 4, 4), "{format:?}");
         assert!(
@@ -337,19 +360,7 @@ fn a_cancel_in_the_middle_of_a_file_leaves_no_archive_and_no_temporary_file() {
     for (format, _, name) in FORMATS {
         let root = scene();
         put(root.path(), "src/big.bin", &pattern(16 * 1024 * 1024));
-        let hooks = Hooks {
-            every_chunk: true,
-            ..Hooks::default()
-        };
-        // The listener cancels at the first progress that shows bytes read, so the cancel lands mid-file.
-        let mut rig = Rig::with(hooks, |engine, event| {
-            if let OpsEvent::Progress {
-                id, done_bytes: 2.., ..
-            } = event
-            {
-                let _ = engine.control(*id, ControlAction::Cancel);
-            }
-        });
+        let mut rig = cancelling_rig();
 
         let ended = rig.run(pack(root.path(), &["big.bin"], name, options(format, PackLevel::Store)));
 

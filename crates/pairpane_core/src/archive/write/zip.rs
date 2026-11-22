@@ -20,7 +20,7 @@ use flate2::Compression;
 use flate2::write::DeflateEncoder;
 
 use crate::archive::Password;
-use crate::archive::error::check;
+use crate::archive::error::{check, unreadable};
 use crate::archive::zip::winzip_aes::Sealing;
 use crate::view::refusal;
 
@@ -207,6 +207,31 @@ impl<'a, W: Write + Seek> ZipWriter<'a, W> {
         self.patch(start, &plan, &done)?;
 
         let record = self.central(&plan, start, &done);
+        self.directory.extend_from_slice(&record);
+        self.entries += 1;
+
+        Ok(())
+    }
+
+    /// Adds an entry of another zip as it is: `length` bytes of `from`, which are its local header, its data and its data
+    /// descriptor, if it has one. `record` makes the entry's record of the central directory from the offset the copy
+    /// starts at (and the limit from which an offset is a zip64 one); it is the caller's to see that it matches the bytes.
+    pub fn copy_entry(
+        &mut self,
+        from: &mut dyn Read,
+        length: u64,
+        record: impl FnOnce(u64, u64) -> io::Result<Vec<u8>>,
+    ) -> io::Result<()> {
+        check(self.cancel)?;
+
+        let record = record(self.position, self.limits.offset)?;
+        let copied = pump(&mut from.take(length), &mut self.out, self.cancel, |_| {})?;
+
+        if copied != length {
+            return Err(unreadable());
+        }
+
+        self.position += copied;
         self.directory.extend_from_slice(&record);
         self.entries += 1;
 

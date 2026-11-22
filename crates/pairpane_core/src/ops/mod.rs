@@ -79,7 +79,9 @@
 //!
 //! Extracting an archive: `extract` (the job: open, select, walk the source) and `extract_write` (folders, files, the
 //! disk reserve, modes and times). Packing files into one: `pack` (the job: plan the entries, ask about a taken name, write
-//! a temporary file, put it in place) over `tree` (the no-follow walk it shares with the checksum file). The archive formats themselves are in [`crate::archive`].
+//! a temporary file, put it in place) over `tree` (the no-follow walk it shares with the checksum file). Adding files to an archive: `add` (the job: plan the new entries
+//! against the archive's index, ask about the files it has, write a new archive beside it with [`crate::archive::rewrite`], replace
+//! the old one). The archive formats themselves are in [`crate::archive`].
 //!
 //! The file tools: `task` (the start of each and what they share), `digest` (checksums and the checksum-file
 //! format), `checksum`, `checksum_verify` and `listed` (opening the files it lists), `split`, `combine`, `held` (walking a tree by
@@ -90,6 +92,7 @@
 //! delete) and `trash` (move to the Trash, put back). Each is a plain blocking function; the caller runs it off the
 //! command thread.
 
+mod add;
 mod announce;
 mod attrs;
 mod attrs_apply;
@@ -141,6 +144,10 @@ pub(crate) fn open_listed(base: &std::path::Path, listed: &str) -> std::io::Resu
     listed::open_listed(base, listed)
 }
 
+#[cfg(test)]
+mod add_conflict_tests;
+#[cfg(test)]
+mod add_tests;
 #[cfg(test)]
 mod announce_tests;
 #[cfg(test)]

@@ -40,50 +40,73 @@ use super::transfer::{Run, Stop};
 use super::tree::{Reopen, Spot, Visitor};
 
 /// Bytes the output is gathered up to before it goes to the file.
-const OUTPUT_BUFFER: usize = 256 * 1024;
+pub(super) const OUTPUT_BUFFER: usize = 256 * 1024;
 
 /// What an entry of the archive is made from.
-enum Source {
+pub(super) enum Source {
     Folder,
     File { size: u64, open: Reopen },
 }
 
 /// One entry to write: its name in the archive, its mode and time, and its source.
-struct Planned {
-    name: String,
-    mode: u32,
-    modified: Option<i64>,
-    source: Source,
+pub(super) struct Planned {
+    pub(super) name: String,
+    pub(super) mode: u32,
+    pub(super) modified: Option<i64>,
+    pub(super) source: Source,
 }
 
 /// The walk that plans the entries (see [`Run::walk_items`]).
-struct Plan {
+pub(super) struct Plan {
     root: Arc<Held>,
-    entries: Vec<Planned>,
+    pub(super) entries: Vec<Planned>,
     /// The bytes of the files.
-    bytes: u64,
+    pub(super) bytes: u64,
     /// The bytes of the names.
     names: usize,
     /// The most entries, and the most bytes of names, the archive takes.
     limits: (usize, usize),
     /// What the names of this job's own temporary files start with.
     own: String,
+    /// What every name in the archive starts with: the folder the items are put in (`a/b/`), or nothing.
+    prefix: String,
     /// The limits were passed: that ends the job, not the item.
     refused: bool,
 }
 
 impl Plan {
+    /// A plan of the items of the folder `root` for the job `run`, whose entries are put under `prefix` (`a/b/` or
+    /// nothing) and which takes at most `limits` entries and bytes of names.
+    pub(super) fn new(run: &Run<'_>, root: &Arc<Held>, prefix: String, limits: (usize, usize)) -> Self {
+        Self {
+            root: Arc::clone(root),
+            entries: Vec::new(),
+            bytes: 0,
+            names: 0,
+            limits,
+            own: format!(".pairpane-{}-{}-", run_token(), run.job.id.0),
+            prefix,
+            refused: false,
+        }
+    }
+
+    /// The name in the archive of the node `at`.
+    pub(super) fn name_of(&self, at: &Spot<'_>) -> String {
+        format!("{}{}", self.prefix, at.rel)
+    }
+
     /// Takes the node `at` as an entry, or fails: its name must be text, a plain relative path of the kind an archive can
-    /// be read back from, and one more entry must still fit.
-    fn admit(&mut self, at: &Spot<'_>) -> Result<(), Stop> {
+    /// be read back from, and one more entry must still fit. Gives its name in the archive.
+    fn admit(&mut self, at: &Spot<'_>) -> Result<String, Stop> {
         as_text(&at.node.name)?;
 
-        if !matches!(normalize(at.rel), Ok(Some(ref plain)) if plain == at.rel) {
+        let name = self.name_of(at);
+        if !matches!(normalize(&name), Ok(Some(ref plain)) if *plain == name) {
             return Err(refusal(io::ErrorKind::InvalidInput, "the name cannot be stored in an archive").into());
         }
 
         let (most_entries, most_names) = self.limits;
-        if self.entries.len() >= most_entries || self.names.saturating_add(at.rel.len()) > most_names {
+        if self.entries.len() >= most_entries || self.names.saturating_add(name.len()) > most_names {
             self.refused = true;
 
             return Err(refusal(
@@ -93,14 +116,14 @@ impl Plan {
             .into());
         }
 
-        self.names += at.rel.len();
+        self.names += name.len();
 
-        Ok(())
+        Ok(name)
     }
 
-    fn push(&mut self, at: &Spot<'_>, source: Source) {
+    fn push(&mut self, name: String, at: &Spot<'_>, source: Source) {
         self.entries.push(Planned {
-            name: at.rel.to_owned(),
+            name,
             mode: entry_mode(at.node.mode, matches!(source, Source::Folder)),
             modified: at.node.modified,
             source,
@@ -124,13 +147,14 @@ impl Visitor for Plan {
             return Ok(());
         }
 
-        self.admit(at)?;
+        let name = self.admit(at)?;
         // A file that cannot be read fails here, as an item, and not in the middle of the archive.
         at.parent.open_file(at.node)?;
 
         run.found(at.node.size);
         self.bytes = self.bytes.saturating_add(at.node.size);
         self.push(
+            name,
             at,
             Source::File {
                 size: at.node.size,
@@ -142,8 +166,8 @@ impl Visitor for Plan {
     }
 
     fn folder(&mut self, _run: &mut Run<'_>, at: &Spot<'_>) -> Result<(), Stop> {
-        self.admit(at)?;
-        self.push(at, Source::Folder);
+        let name = self.admit(at)?;
+        self.push(name, at, Source::Folder);
 
         Ok(())
     }
@@ -155,7 +179,7 @@ impl Visitor for Plan {
 
 /// The job, shared between what the writer reads from and writes to (which the job cannot hold both at once), so that
 /// each can report the progress and look at a pause or a cancel. The writer calls one at a time, never one inside another.
-type Shared<'r, 'a, 'b> = &'r RefCell<&'a mut Run<'b>>;
+pub(super) type Shared<'r, 'a, 'b> = &'r RefCell<&'a mut Run<'b>>;
 
 /// A file as the writer reads it: counted in the progress, and stopped by a pause or a cancel (which also raises the
 /// writer's flag, so what the writer does between two reads stops too).
@@ -209,12 +233,64 @@ impl<R: Read> Read for Counted<'_, '_, '_, R> {
 }
 
 /// The temporary file as the writer writes it: the disk keeps its reserve (see `extract_write`).
-struct Output<'r, 'a, 'b> {
+pub(super) struct Output<'r, 'a, 'b> {
     file: File,
     run: Shared<'r, 'a, 'b>,
     folder: &'r Path,
     /// Bytes written since the free space was looked at.
     unchecked: u64,
+}
+
+impl<'r, 'a, 'b> Output<'r, 'a, 'b> {
+    /// The new file `file`, which is in `folder`, written for the job `run`.
+    pub(super) fn new(file: File, run: Shared<'r, 'a, 'b>, folder: &'r Path) -> Self {
+        Self {
+            file,
+            run,
+            folder,
+            // The free space is looked at before the first write.
+            unchecked: CHECK_EVERY,
+        }
+    }
+}
+
+/// Ends the archive written through `output`: what is buffered goes to the file, which is flushed to the disk.
+pub(super) fn sync_output(output: BufWriter<Output<'_, '_, '_>>) -> io::Result<()> {
+    let output = output.into_inner().map_err(io::IntoInnerError::into_error)?;
+
+    output.file.sync_all()
+}
+
+/// The entry that writes `planned`: its file is read as the writer asks, counted in the progress of `run`, and a cancel
+/// also raises `cancel`, which the writer looks at.
+pub(super) fn entry_of<'r>(run: Shared<'r, '_, '_>, cancel: &'r AtomicBool, planned: &'r Planned) -> Entry<'r> {
+    match &planned.source {
+        Source::Folder => Entry::folder(&planned.name, planned.mode, planned.modified),
+        Source::File { size, open } => {
+            let from = Counted {
+                run,
+                cancel,
+                name: &planned.name,
+                size: *size,
+                seen: 0,
+                from: Lazy::new(|| open.open()),
+                begun: false,
+                ended: false,
+            };
+
+            Entry::file(&planned.name, planned.mode, planned.modified, *size, from)
+        }
+    }
+}
+
+/// An empty file is never read, so it is finished as soon as it is added.
+pub(super) fn count_empty(run: Shared<'_, '_, '_>, planned: &Planned) {
+    if matches!(planned.source, Source::File { size: 0, .. }) {
+        let mut run = run.borrow_mut();
+
+        run.begin_file(&planned.name, 0);
+        run.end_file();
+    }
 }
 
 impl Write for Output<'_, '_, '_> {
@@ -251,11 +327,7 @@ impl Run<'_> {
         let job = self.job;
         let request = &job.request;
 
-        let from = self.open_folders(&[&request.from, &request.to])?;
-        let root = Arc::new(Held::root(&from)?);
-        let mut items = self.look_up_items(&root);
-        // The order of the archive does not depend on the order the items were selected in.
-        items.sort_by(|a, b| a.name.cmp(&b.name));
+        let (root, items) = self.sorted_items()?;
         let to = self.target_folder(&request.to)?;
 
         self.phase(JobPhase::Scanning);
@@ -296,23 +368,32 @@ impl Run<'_> {
 
     /// Walks the `items` of the folder `root` and plans the entries.
     fn plan_entries(&mut self, root: &Arc<Held>, items: &[Node]) -> Result<Plan, Stop> {
-        let mut plan = Plan {
-            root: Arc::clone(root),
-            entries: Vec::new(),
-            bytes: 0,
-            names: 0,
-            limits: self
-                .inner
-                .hooks
-                .pack_limits
-                .unwrap_or((MAX_INDEX_ENTRIES, MAX_INDEX_NAME_BYTES)),
-            own: format!(".pairpane-{}-{}-", run_token(), self.job.id.0),
-            refused: false,
-        };
+        let mut plan = Plan::new(self, root, String::new(), self.pack_limits());
 
         self.walk_items(root, items, &mut plan)?;
 
         Ok(plan)
+    }
+
+    /// The folder of the job's items, held, and the items in it in name order: the order of the entries of an archive does
+    /// not depend on the order the items were selected in.
+    pub(super) fn sorted_items(&mut self) -> Result<(Arc<Held>, Vec<Node>), Stop> {
+        let request = &self.job.request;
+
+        let from = self.open_folders(&[&request.from, &request.to])?;
+        let root = Arc::new(Held::root(&from)?);
+        let mut items = self.look_up_items(&root);
+        items.sort_by(|a, b| a.name.cmp(&b.name));
+
+        Ok((root, items))
+    }
+
+    /// The most entries, and the most bytes of names, an archive takes.
+    pub(super) fn pack_limits(&self) -> (usize, usize) {
+        self.inner
+            .hooks
+            .pack_limits
+            .unwrap_or((MAX_INDEX_ENTRIES, MAX_INDEX_NAME_BYTES))
     }
 
     /// Writes the planned entries into `file`, which is in the folder `folder`, and flushes it to the disk.
@@ -327,12 +408,7 @@ impl Run<'_> {
         let run = RefCell::new(&mut *self);
         let stop = |error: io::Error| run.borrow().stopped(error);
 
-        let output = Output {
-            file,
-            run: &run,
-            folder,
-            unchecked: CHECK_EVERY,
-        };
+        let output = Output::new(file, &run, folder);
         let mut packer = Packer::new(
             options.format,
             BufWriter::with_capacity(OUTPUT_BUFFER, output),
@@ -344,37 +420,11 @@ impl Run<'_> {
         for planned in &plan.entries {
             run.borrow_mut().checkpoint()?;
 
-            let entry = match &planned.source {
-                Source::Folder => Entry::folder(&planned.name, planned.mode, planned.modified),
-                Source::File { size, open } => {
-                    let from = Counted {
-                        run: &run,
-                        cancel: &cancel,
-                        name: &planned.name,
-                        size: *size,
-                        seen: 0,
-                        from: Lazy::new(|| open.open()),
-                        begun: false,
-                        ended: false,
-                    };
-
-                    Entry::file(&planned.name, planned.mode, planned.modified, *size, from)
-                }
-            };
-            packer.add(entry).map_err(stop)?;
-
-            // An empty file is never read: it is finished as soon as it is added.
-            if matches!(planned.source, Source::File { size: 0, .. }) {
-                let mut run = run.borrow_mut();
-
-                run.begin_file(&planned.name, 0);
-                run.end_file();
-            }
+            packer.add(entry_of(&run, &cancel, planned)).map_err(stop)?;
+            count_empty(&run, planned);
         }
 
-        let output = packer.finish().map_err(stop)?;
-        let output = output.into_inner().map_err(|error| stop(error.into_error()))?;
-        output.file.sync_all()?;
+        sync_output(packer.finish().map_err(stop)?).map_err(stop)?;
 
         Ok(())
     }

@@ -69,13 +69,15 @@ pub fn walk<F: ReadAt + ?Sized>(
     reader.seek(SeekFrom::Start(directory.start))?;
     let mut reader = BufReader::new(reader.take(directory.size));
     let mut variable = Vec::new();
+    let mut at = directory.start;
 
     for _ in 0..directory.entries {
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
         }
 
-        let entry = record(&mut reader, &mut variable, directory.base)?;
+        let entry = record(&mut reader, &mut variable, directory.base, at)?;
+        at += (RECORD + variable.len()) as u64;
 
         if visit(entry) == Flow::Stop {
             return Ok(Walked {
@@ -178,9 +180,9 @@ fn zip64_record<F: ReadAt + ?Sized>(file: &F, locator_at: u64, locator: &[u8]) -
     Err(unreadable())
 }
 
-/// The next record of the central directory, with `base` added to the offset of its local header; `variable` is a
-/// buffer for its name, extra data and comment.
-fn record<R: Read>(reader: &mut R, variable: &mut Vec<u8>, base: u64) -> io::Result<Record> {
+/// The next record of the central directory, which is at `at` in the file, with `base` added to the offset of its local
+/// header; `variable` is a buffer for its name, extra data and comment.
+fn record<R: Read>(reader: &mut R, variable: &mut Vec<u8>, base: u64, at: u64) -> io::Result<Record> {
     let mut head = [0; RECORD];
     read_exact(reader, &mut head)?;
 
@@ -247,6 +249,9 @@ fn record<R: Read>(reader: &mut R, variable: &mut Vec<u8>, base: u64) -> io::Res
             compressed,
             offset: offset.saturating_add(base),
             dos_time: le(&head, 12, 2) as u16,
+            dos_date: le(&head, 14, 2) as u16,
+            record_at: at,
+            record_len: (RECORD + variable.len()) as u32,
             made_by,
             external,
             aes,

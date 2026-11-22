@@ -12,7 +12,9 @@ use std::io::{self, Read, Seek, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use sevenz_rust2::encoder_options::{AesEncoderOptions, EncoderOptions, Lzma2Options};
-use sevenz_rust2::{ArchiveEntry, ArchiveWriter, EncoderConfiguration, EncoderMethod, Error, NtTime, SourceReader};
+use sevenz_rust2::{
+    Archive, ArchiveEntry, ArchiveWriter, EncoderConfiguration, EncoderMethod, Error, NtTime, SourceReader,
+};
 
 use crate::archive::Password;
 use crate::archive::error::{cancelled, check};
@@ -138,6 +140,39 @@ impl<'a, W: Write + Seek> SevenZWriter<'a, W> {
         if self.waiting >= self.block {
             self.flush()?;
         }
+
+        Ok(())
+    }
+
+    /// Copies the block `block` of `archive` (which was read from `source`) as it is, with its entries: its packed bytes
+    /// are not decoded. `false` when the library refuses the block (it has no checksum that the writer would have to make
+    /// up): nothing was written then, and the caller adds its entries with [`SevenZWriter::add_decoded`].
+    pub fn copy_block<R: Read + Seek>(&mut self, archive: &Archive, block: usize, source: &mut R) -> io::Result<bool> {
+        self.flush()?;
+
+        match self
+            .writer
+            .push_raw_block(archive, block, source, |entry| entry.name.clone())
+        {
+            Ok(_) => Ok(true),
+            Err(Error::Other(_)) => Ok(false),
+            Err(error) => Err(failure(error, self.cancel)),
+        }
+    }
+
+    /// Adds an entry of another archive as it is (its attributes and times) with its decoded `data`, in a block of its own
+    /// (with a password, under a new IV); an entry with no data is added as one with no stream.
+    pub fn add_decoded(&mut self, item: ArchiveEntry, data: Option<&mut dyn Read>) -> io::Result<()> {
+        self.flush()?;
+        check(self.cancel)?;
+
+        if data.is_some() {
+            self.renew()?;
+        }
+
+        self.writer
+            .push_archive_entry(item, data)
+            .map_err(|error| failure(error, self.cancel))?;
 
         Ok(())
     }

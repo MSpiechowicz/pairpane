@@ -21,7 +21,7 @@ function world(good = 'pw') {
       return taken;
     }
 
-    if (name === 'ops_extract' || name === 'archive_open' || name === 'archive_view_open') {
+    if (name === 'ops_extract' || name === 'ops_add_to_archive' || name === 'archive_open' || name === 'archive_view_open') {
       if (!taken) {
         throw required();
       }
@@ -59,6 +59,20 @@ describe('Passwords', () => {
     expect(passwords.prompt).toBeUndefined();
     expect(calls('ops_extract')).toHaveLength(2);
     expect(calls('archive_password')).toEqual([{ archive: '/a/x.zip', password: 'pw' }]);
+  });
+
+  it('asks for the password of the archive an add rewrites, and runs the add again, once, when it was taken', async () => {
+    const { ipc, passwords, calls } = world();
+    const add = { archive: '/a/x.7z', dir: 'docs', from: '/work', names: ['a.txt'] };
+
+    const started = ipc.invoke('ops_add_to_archive', add);
+    await vi.waitFor(() => expect(passwords.prompt).toMatchObject({ archive: '/a/x.7z', name: 'x.7z', reason: 'needed' }));
+
+    await passwords.submit('pw');
+
+    await expect(started).resolves.toBe(1);
+    expect(calls('ops_add_to_archive')).toEqual([add, add]);
+    expect(calls('archive_password')).toEqual([{ archive: '/a/x.7z', password: 'pw' }]);
   });
 
   it('asks again as wrong when the backend refuses the password, and keeps the command waiting', async () => {

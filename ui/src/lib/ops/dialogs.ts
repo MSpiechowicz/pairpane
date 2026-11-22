@@ -45,6 +45,13 @@ export interface Spec {
   stem?: number;
   /** Whether the job can be verified after it ran. */
   verify: boolean;
+  /** The field only shows where the job goes: it cannot be changed. */
+  fixed?: boolean;
+}
+
+/** Where an archive's folder is shown: the archive, then `▸` and the folder in it (`/` is its root). */
+export function archivePlace(archive: string, dir: string): string {
+  return `${archive} ▸ ${dir === '' ? '/' : dir}`;
 }
 
 export function specOf(request: OpRequest): Spec {
@@ -54,6 +61,16 @@ export function specOf(request: OpRequest): Spec {
       const verb = request.kind === 'copy' ? 'Copy' : 'Move';
       return { title: `${verb} ${what(request.names)} to`, confirm: verb, label: 'Target folder', initial: request.to, verify: true };
     }
+    case 'add':
+      return {
+        title: `Copy ${what(request.names)} to`,
+        confirm: 'Copy',
+        label: 'Archive folder',
+        hint: 'The archive is written again with the new items.',
+        initial: archivePlace(request.archive, request.dir),
+        verify: false,
+        fixed: true,
+      };
     case 'extract': {
       const items = request.names.length > 0 ? request.names : request.archives.map(({ archive }) => archiveName(archive));
       return { title: `Extract ${what(items)} to`, confirm: 'Extract', label: 'Target folder', initial: request.to, verify: false };
@@ -138,6 +155,9 @@ export async function perform(ipc: Transport, request: OpRequest, value: string,
     case 'copy':
     case 'move':
       await ipc.invoke('ops_start', { kind: request.kind, from: request.from, names: request.names, to: value, verify });
+      return { name: value };
+    case 'add':
+      await ipc.invoke('ops_add_to_archive', { archive: request.archive, dir: request.dir, from: request.from, names: request.names });
       return { name: value };
     case 'extract':
       // One job for each archive; one that is refused stops the rest, which the dialog shows.

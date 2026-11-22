@@ -93,3 +93,26 @@ export async function appShown(invoke: Mock, answers: Answers = {}) {
   await key(listbox('Left'), 'ArrowDown');
   return backend;
 }
+
+/**
+ * The left pane in `/left` (`a.zip`, `b.txt`, `f.7z`) with the cursor on `a.zip`, the right one inside the archive `/right/<name>` (its folder
+ * `dir`; rows `..`, docs, readme.txt, notes.txt), opened from the folder `/right` that holds just that file.
+ */
+export async function withArchiveOnRight(invoke: Mock, name: string, answers: Answers = {}, dir = '') {
+  const backend = appWorld(invoke, answers);
+  render(App);
+  await backend.ready();
+  backend.list('left', '/left', [entry('a.zip'), entry('b.txt'), entry('f.7z')]);
+  backend.list('right', '/right', [entry(name)]);
+  await tick();
+  await key(listbox('Left'), 'ArrowDown');
+  await key(document.body, 'Tab');
+  await key(listbox('Right'), 'ArrowDown');
+  await key(listbox('Right'), 'Enter');
+  await vi.waitFor(() => expect(backend.sent('archive_open')).toHaveLength(1));
+  backend.listIn('right', { archive: `/right/${name}`, dir }, [entry('docs', 'dir'), entry('readme.txt'), entry('notes.txt')]);
+  await tick();
+  await key(document.body, 'Tab');
+
+  return backend;
+}

@@ -12,7 +12,7 @@ import { type FileAction, type Notice, trashName, what } from './dialogs';
 import { chosen, type DialogKind, type OpRequest, READ_ONLY_NOTICE, refusal, requestFor, targets } from './targets';
 import { isTool, ItemTools } from './tools.svelte';
 
-/** The copy, move, extract, combine, rename, new item or link dialog that is open, and the panes it works between. */
+/** The copy, move, add to archive, extract, combine, rename, new item or link dialog that is open, and the panes it works between. */
 export interface OpenDialog {
   request: OpRequest;
   source: PaneView;
@@ -148,7 +148,7 @@ export class FileActions {
 
     if (dialog !== undefined) {
       const { request, source, other } = dialog;
-      if (request.kind === 'copy' || request.kind === 'move') {
+      if (request.kind === 'copy' || request.kind === 'move' || request.kind === 'add') {
         source.deselect(request.names);
       } else if (request.kind === 'extract') {
         source.deselect(request.names.length > 0 ? request.names : request.archives.map(({ archive }) => archiveName(archive)));

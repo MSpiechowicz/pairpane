@@ -46,7 +46,7 @@ mod sevenz_tests;
 #[cfg(test)]
 mod tar_tests;
 #[cfg(test)]
-mod testing;
+pub(crate) mod testing;
 #[cfg(test)]
 mod zip_tests;
 
@@ -227,7 +227,7 @@ impl Budget {
 
 /// Copies `reader` to `sink` in chunks until the reader ends, looking at `cancel` before each and giving each chunk to
 /// `seen` first; returns the number of bytes. A read that fails fails the copy, `Interrupted` too.
-fn pump(
+pub(crate) fn pump(
     reader: &mut dyn Read,
     sink: &mut dyn Write,
     cancel: &AtomicBool,

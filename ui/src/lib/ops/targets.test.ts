@@ -3,7 +3,18 @@ import { describe, expect, it } from 'vitest';
 import { PaneView } from '$lib/panes/view.svelte';
 
 import { deliver, entry, fakeBackend } from '../../../tests/panes';
-import { chosen, INTO_ARCHIVE_NOTICE, isFirstPart, READ_ONLY_NOTICE, refusal, requestFor, stemLength, targets } from './targets';
+import {
+  CANT_ADD_NOTICE,
+  chosen,
+  EXTRACT_INTO_ARCHIVE_NOTICE,
+  INTO_ARCHIVE_NOTICE,
+  isFirstPart,
+  READ_ONLY_NOTICE,
+  refusal,
+  requestFor,
+  stemLength,
+  targets,
+} from './targets';
 
 /** A pane that has listed `path` (rows: `..`, docs, a.txt, b.md, c.txt). */
 async function shown(path = '/work') {
@@ -205,11 +216,11 @@ describe('requestFor', () => {
   });
 });
 
-/** A pane in the archive `/work/a.zip` (rows: `..`, docs, readme, notes). */
-async function insideZip() {
+/** A pane in the folder `dir` of the archive `/work/a.zip`, or of `archive` (rows: `..`, docs, readme, notes). */
+async function insideZip(archive = '/work/a.zip', dir = '') {
   const backend = fakeBackend();
   const view = new PaneView(backend.ipc, 'left');
-  const spot = { archive: '/work/a.zip', dir: '' };
+  const spot = { archive, dir };
   await view.listing.openArchive(spot);
   const entries = [entry('docs', 'dir'), entry('readme', 'file'), entry('notes', 'file')];
   backend.last().emit({ kind: 'start', path: '/work', parent: '/', crumbs: [], total: 3, archive: spot });
@@ -275,6 +286,27 @@ describe('requestFor extract', () => {
   });
 });
 
+describe('requestFor add', () => {
+  it('copying into a pane that shows an archive adds the selection to the folder shown in it', async () => {
+    const source = await shown('/work');
+    const other = await insideZip('/backup/a.tar.zst', 'docs/img');
+    source.pick(2, 'toggle');
+    source.pick(4, 'toggle');
+
+    expect(requestFor('copy', source, other)).toEqual({
+      kind: 'add',
+      archive: '/backup/a.tar.zst',
+      dir: 'docs/img',
+      from: '/work',
+      names: ['a.txt', 'c.txt'],
+    });
+  });
+
+  it('is nothing with nothing to add', async () => {
+    expect(requestFor('copy', await shown('/work'), await insideZip())).toBeUndefined();
+  });
+});
+
 describe('refusal', () => {
   it('refuses everything but copy and extract in an archive pane, as read-only', async () => {
     const archive = await insideZip();
@@ -287,16 +319,44 @@ describe('refusal', () => {
     expect(refusal('extract', archive, folder)).toBeUndefined();
   });
 
-  it('refuses what writes into the other pane when that one is an archive', async () => {
+  it('refuses what writes into the other pane but copying, and extracting, when that one is an archive', async () => {
     const archive = await insideZip();
     const folder = await shown('/out');
 
-    for (const action of ['copy', 'move', 'symlink', 'hardlink', 'split', 'combine', 'extract'] as const) {
+    for (const action of ['move', 'symlink', 'hardlink', 'split', 'combine'] as const) {
       expect(refusal(action, folder, archive)).toBe(INTO_ARCHIVE_NOTICE);
     }
 
+    expect(refusal('extract', folder, archive)).toBe(EXTRACT_INTO_ARCHIVE_NOTICE);
     expect(refusal('trash', folder, archive)).toBeUndefined();
     expect(refusal('newFolder', folder, archive)).toBeUndefined();
+    expect(refusal('pack', folder, archive)).toBeUndefined();
+  });
+
+  it.each([
+    '/work/a.zip',
+    '/work/a.JAR',
+    '/work/a.tar',
+    '/work/a.tar.gz',
+    '/work/a.tgz',
+    '/work/a.tar.xz',
+    '/work/a.txz',
+    '/work/a.tar.zst',
+    '/work/a.tzst',
+    '/work/a.tar.bz2',
+    '/work/a.tbz2',
+    '/work/a.tbz',
+    '/work/a.7z',
+  ])('lets copying from a folder into %s through', async (path) => {
+    expect(refusal('copy', await shown('/out'), await insideZip(path))).toBeUndefined();
+  });
+
+  it.each(['/work/a.rar', '/work/notes.gz'])('refuses copying into %s as an archive that cannot be written', async (path) => {
+    expect(refusal('copy', await shown('/out'), await insideZip(path))).toBe(CANT_ADD_NOTICE);
+  });
+
+  it('refuses copying out of an archive into another one: that would extract into it', async () => {
+    expect(refusal('copy', await insideZip(), await insideZip('/other/b.7z'))).toBe(EXTRACT_INTO_ARCHIVE_NOTICE);
   });
 });
 

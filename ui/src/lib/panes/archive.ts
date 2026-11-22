@@ -22,10 +22,26 @@ const EXTENSIONS = [
   '.rar',
 ];
 
+/** Archives that can only be read: a RAR (no writer) and a lone `.gz` (one compressed file, not a collection). */
+const READ_ONLY_EXTENSIONS: readonly string[] = ['.gz', '.rar'];
+
+/** The archives files can be added to: every kind a pane opens but those that are only read. */
+const WRITABLE_EXTENSIONS = EXTENSIONS.filter((extension) => !READ_ONLY_EXTENSIONS.includes(extension));
+
+/** Whether `name` ends in one of `extensions` (matched case-insensitively; a name that is only an extension does not). */
+function endsWithAny(name: string, extensions: readonly string[]): boolean {
+  const lower = name.toLowerCase();
+  return extensions.some((extension) => lower.length > extension.length && lower.endsWith(extension));
+}
+
 /** Whether a file called `name` is an archive to open (it is not a name that is only an extension). */
 export function isArchiveName(name: string): boolean {
-  const lower = name.toLowerCase();
-  return EXTENSIONS.some((extension) => lower.length > extension.length && lower.endsWith(extension));
+  return endsWithAny(name, EXTENSIONS);
+}
+
+/** Whether files can be added to the archive called `name`: not a RAR, not a lone `.gz` (`a.tar.gz` is). */
+export function isWritableArchive(name: string): boolean {
+  return endsWithAny(name, WRITABLE_EXTENSIONS);
 }
 
 /** The path of the entry `name` in the real folder `folder`, with the folder's own kind of separator. */

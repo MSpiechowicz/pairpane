@@ -1,12 +1,13 @@
 import type { Entry } from '$lib/ipc/bindings/Entry';
-import { type ArchiveSpot, archiveFile } from '$lib/panes/archive';
+import { type ArchiveSpot, archiveFile, archiveName, isWritableArchive } from '$lib/panes/archive';
 import type { PaneView } from '$lib/panes/view.svelte';
 
 import type { FileAction } from './dialogs';
 
 /**
  * What a dialog is opened for: items to copy or move into a folder, one item to rename or link to, a new item, or
- * the first part of a split file to join in a folder, or archives (or items of one) to extract.
+ * the first part of a split file to join in a folder, archives (or items of one) to extract, or items to add to the
+ * folder of an archive.
  */
 export type OpRequest =
   | { kind: 'copy' | 'move'; from: string; names: string[]; to: string }
@@ -20,10 +21,15 @@ export type OpRequest =
    * Each of `archives` is extracted into the folder `to`: the `names` in the folder it names (the selection of an
    * archive pane), or, with no names, the whole archive (archives picked in a folder).
    */
-  | { kind: 'extract'; archives: ArchiveSpot[]; names: string[]; to: string };
+  | { kind: 'extract'; archives: ArchiveSpot[]; names: string[]; to: string }
+  /** The `names` in the folder `from` are added to the archive `archive`, into its folder `dir` (`''`: its root). */
+  | { kind: 'add'; archive: string; dir: string; from: string; names: string[] };
 
-/** The kinds of dialog a request can be for. */
-export type DialogKind = OpRequest['kind'];
+/**
+ * The kinds of dialog a key asks for. Adding to an archive is not one of them: it is what copying becomes when the
+ * other pane shows a writable archive.
+ */
+export type DialogKind = Exclude<OpRequest['kind'], 'add'>;
 
 /**
  * The names an operation acts on: the selected entries the pane shows (the quick filter hides the rest, which an
@@ -48,22 +54,41 @@ export function chosen(view: PaneView): Entry[] {
 /** What the card says when an action would change an archive's contents. */
 export const READ_ONLY_NOTICE = 'Archives are read-only here — extract first (F5).';
 
-/** What the card says when an action would write into a pane that shows an archive. */
-export const INTO_ARCHIVE_NOTICE = 'Can’t copy into an archive.';
+/** What the card says when an action other than copying would write into a pane that shows an archive. */
+export const INTO_ARCHIVE_NOTICE = 'Only copying works into an archive.';
+
+/** What the card says when files would be added to an archive of a kind that cannot be written (RAR, a lone `.gz`). */
+export const CANT_ADD_NOTICE = 'Files can’t be added to this kind of archive.';
+
+/** What the card says when an archive's items would be extracted into another archive. */
+export const EXTRACT_INTO_ARCHIVE_NOTICE = 'Can’t extract into an archive.';
 
 /** The actions that write into the other pane's folder. */
 const WRITES_TO_OTHER: ReadonlySet<FileAction> = new Set(['copy', 'move', 'symlink', 'hardlink', 'split', 'combine', 'extract']);
 
 /**
  * Why `action` cannot run between these panes, or `undefined` when it can: nothing changes an archive (copying out
- * of one is extracting), and nothing is written into one.
+ * of one is extracting), and only copying from a folder is written into one, when it is of a kind that can be.
  */
 export function refusal(action: FileAction, source: PaneView, other: PaneView): string | undefined {
   if (source.listing.readonly && action !== 'copy' && action !== 'extract') {
     return READ_ONLY_NOTICE;
   }
 
-  return other.listing.readonly && WRITES_TO_OTHER.has(action) ? INTO_ARCHIVE_NOTICE : undefined;
+  const target = other.listing.archive;
+  if (target === undefined || !WRITES_TO_OTHER.has(action)) {
+    return undefined;
+  }
+
+  if (source.listing.readonly || action === 'extract') {
+    return EXTRACT_INTO_ARCHIVE_NOTICE;
+  }
+
+  if (action !== 'copy') {
+    return INTO_ARCHIVE_NOTICE;
+  }
+
+  return isWritableArchive(archiveName(target.archive)) ? undefined : CANT_ADD_NOTICE;
 }
 
 /** The first part of a split file: the one the parts are joined from. */
@@ -74,7 +99,7 @@ export const isFirstPart = (name: string) => name.endsWith('.001');
  * folder of the other pane; rename and the links act on the entry under the cursor, a link goes to the other pane's
  * folder; so does combining, which acts on a first part (`.001`) only; a new folder or file is made in the pane's
  * folder. In an archive pane copying is extracting the selection, as it is for Extract in any pane (which takes the
- * archives that are selected in a folder).
+ * archives that are selected in a folder). Copying into a pane that shows an archive adds the items to it.
  */
 export function requestFor(kind: DialogKind, source: PaneView, other: PaneView): OpRequest | undefined {
   if (kind === 'extract' || (kind === 'copy' && source.listing.readonly)) {
@@ -108,7 +133,16 @@ export function requestFor(kind: DialogKind, source: PaneView, other: PaneView):
   }
 
   const names = targets(source);
-  return names.length > 0 ? { kind, from: path, names, to: other.listing.path ?? '' } : undefined;
+  if (names.length === 0) {
+    return undefined;
+  }
+
+  const archive = other.listing.archive;
+  if (kind === 'copy' && archive !== undefined) {
+    return { kind: 'add', archive: archive.archive, dir: archive.dir, from: path, names };
+  }
+
+  return { kind, from: path, names, to: other.listing.path ?? '' };
 }
 
 /** The archives to extract from `source`: the open archive's selection, or the archives chosen in its folder. */

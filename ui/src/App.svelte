@@ -65,7 +65,21 @@
     void panes.right.view.listing.setShowHidden(showHidden);
   }
 
-  const transfers = new Transfers(ipc);
+  /** An add to an archive ended (or stopped): the panes that show that archive list it again, from the file. */
+  function archiveChanged(archive: string) {
+    for (const tabs of [panes.left, panes.right]) {
+      const { listing } = tabs.view;
+      if (listing.archive?.archive === archive) {
+        void listing.reload();
+      }
+    }
+  }
+
+  const transfers = new Transfers(ipc, (job) => {
+    if (job.kind === 'addToArchive') {
+      archiveChanged(job.to);
+    }
+  });
   let panelOpen = $state(false);
   const files = new FileActions(ipc, panes, () => active);
   const viewer = new Viewer(ipc, panes, () => active);

@@ -41,6 +41,12 @@ pub struct ZipPlace {
     pub offset: u64,
     /// The DOS time of the entry: with flag bit 3 the check byte of ZipCrypto is its high byte.
     pub dos_time: u16,
+    /// The DOS date of the entry.
+    pub dos_date: u16,
+    /// Where the entry's record in the central directory is (counted from the start of the file) and how long it is: what
+    /// a rewrite of the archive copies as it is.
+    pub record_at: u64,
+    pub record_len: u32,
     /// The version made by: the host system in the high byte (3 is Unix), the zip version in the low one.
     pub made_by: u16,
     pub external: u32,
