@@ -48,13 +48,14 @@ impl Drop for HeldTemp {
 }
 
 impl Held {
-    /// Makes the subfolder `name` and opens it; one that is there by now is used as it is (nothing in it is ever replaced).
-    fn make_subfolder(&self, name: &str) -> io::Result<Self> {
-        match mkdirat(&self.dir, name, Mode::from_bits_truncate(0o777)) {
-            Ok(()) => {}
-            Err(errno) if errno == rustix::io::Errno::EXIST => {}
+    /// Makes the subfolder `name` and opens it, with whether this call made it; one that is there by now is used as it is
+    /// (nothing in it is ever replaced) and is not this job's to remove.
+    fn make_subfolder(&self, name: &str) -> io::Result<(Self, bool)> {
+        let made = match mkdirat(&self.dir, name, Mode::from_bits_truncate(0o777)) {
+            Ok(()) => true,
+            Err(errno) if errno == rustix::io::Errno::EXIST => false,
             Err(errno) => return Err(io::Error::from(errno)),
-        }
+        };
 
         let node = self.look(name)?;
         if node.kind != Kind::Dir {
@@ -64,7 +65,7 @@ impl Held {
             ));
         }
 
-        self.subfolder(&node)
+        Ok((self.subfolder(&node)?, made))
     }
 
     /// Renames the file `from` of this folder to `to`, replacing what is there. Both are plain names.
@@ -184,8 +185,12 @@ impl Run<'_> {
                 }
             }
 
-            held = held.make_subfolder(part)?;
-            self.created.push(path.clone());
+            let made;
+            (held, made) = held.make_subfolder(part)?;
+            // Only a folder this job made is removed again if it stops; one made by someone else meanwhile is theirs.
+            if made {
+                self.created.push(path.clone());
+            }
         }
 
         Ok(Some((held, path)))
@@ -202,10 +207,12 @@ impl Run<'_> {
         let mut file = open::source(&source.path, &source.meta)?;
         let meta = file.metadata()?;
 
+        // The handle the guard removes the temporary file through is taken first, so no failure leaves one behind.
+        let dir = folder.dir.try_clone()?;
         let (temp, mut copy) = self.make_temp(path, |temp| create_in(folder, temp))?;
         let name_of_temp = temp.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let mut guard = HeldTemp {
-            dir: folder.dir.try_clone()?,
+            dir,
             name: name_of_temp.clone(),
             committed: false,
         };
