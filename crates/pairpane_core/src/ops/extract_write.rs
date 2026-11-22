@@ -46,7 +46,7 @@ pub(super) struct Landing {
     finish: Vec<Folder>,
     /// Bytes written since the free space was looked at.
     unchecked: u64,
-    /// The marker of the archive's origin, put on each file written.
+    /// The marker of the archive's origin, put on each file written while it is still the temporary file.
     origin: Origin,
 }
 
@@ -158,12 +158,14 @@ impl Run<'_> {
 
         self.write_data(landing, data, &mut copy, &folder, entry)?;
         self.checkpoint()?;
+        // The marker goes on before the mode and time (a read-only file takes no stream, and writing one may change the
+        // time) and before the rename: the file is never at its final name without it.
+        landing.origin.apply(&copy, &temp);
         meta::apply_entry(&copy, Some(entry.mode.unwrap_or(DEFAULT_FILE_MODE)), entry.modified)?;
         drop(copy);
 
         if self.commit_with(&temp, &mut place, |run, again| run.place_entry(rel, &facts, again))? {
             guard.committed = true;
-            landing.origin.apply(place.path());
         } else {
             self.skipped += 1;
         }

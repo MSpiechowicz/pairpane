@@ -38,9 +38,6 @@ const LIST_DEADLINE: Duration = Duration::from_secs(5 * 60);
 /// How long an unpacking may take: a big archive on a slow disk takes hours, a hung `unrar` should not stay forever.
 const EXTRACT_DEADLINE: Duration = Duration::from_secs(6 * 60 * 60);
 
-/// How often a running unpacking touches its staging folder (see [`stage::touch`]).
-const TOUCH_EVERY: Duration = Duration::from_secs(5);
-
 /// A UTF-8 locale of this system; `unrar` writes names in the locale's charset.
 #[cfg(target_os = "macos")]
 pub(super) const LOCALE: &str = "en_US.UTF-8";
@@ -132,7 +129,7 @@ impl Unrar {
         let mut touched = Instant::now();
         let waited = process::wait_for_exit(&mut child, cancel, EXTRACT_DEADLINE, || {
             // The folder's age is the time since its last sign of life, for the sweep of another instance.
-            if touched.elapsed() >= TOUCH_EVERY {
+            if touched.elapsed() >= stage::TOUCH_EVERY {
                 touched = Instant::now();
                 stage::touch(staging);
             }

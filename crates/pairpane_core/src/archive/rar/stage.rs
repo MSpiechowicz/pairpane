@@ -8,6 +8,8 @@ use std::fs::{self, DirBuilder, File};
 use std::hash::{BuildHasher, Hasher};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
 /// Names tried for the folder before giving up.
@@ -18,12 +20,12 @@ const PREFIX: &str = ".pairpane-rar-";
 
 /// How old a folder of another process must be for [`sweep`] to remove it where the system cannot tell whether that
 /// process runs: longer than an unpacking may run (see `run::EXTRACT_DEADLINE`, six hours), so the folder of a process
-/// that is still working is never taken. A running unpacking also touches its folder (see [`touch`]), so its age is the
-/// time since its last sign of life.
+/// that is still working is never taken. A folder in use is touched while `unrar` runs and while its files are copied out (see
+/// [`touch`] and [`Heartbeat`]), so its age is the time since its last sign of life.
 const STALE_AFTER: Duration = Duration::from_secs(7 * 60 * 60);
 
-/// A file made and removed in a staging folder to change the folder's modification time.
-const PULSE: &str = ".pairpane-alive";
+/// How often a folder in use is touched (see [`Heartbeat`]).
+pub(super) const TOUCH_EVERY: Duration = Duration::from_secs(5);
 
 /// The folder of one unpacking.
 #[derive(Debug)]
@@ -77,6 +79,12 @@ impl Staging {
         File::open(path).ok()
     }
 
+    /// Touches the folder every [`TOUCH_EVERY`], from another thread, until the returned guard is dropped: the folder is
+    /// in use while the files in it are copied, which waits for as long as a question about a conflict is not answered.
+    pub(super) fn keep_alive(&self) -> Heartbeat {
+        Heartbeat::start(self.root.clone(), TOUCH_EVERY)
+    }
+
     /// Removes the file at `relative` once it is used, so a big archive does not hold its whole size on the disk.
     pub fn discard(&self, relative: &str) {
         let _ = fs::remove_file(self.root.join(relative));
@@ -94,7 +102,7 @@ impl Drop for Staging {
 /// drop), at start-up: folders named `.pairpane-rar-…` that are real folders (never a link), on Unix are ours, and belong
 /// to a process that is gone. Where the system tells whether a process runs (Linux) the folder of a running one is never
 /// taken, however old; elsewhere a folder is taken when it has not been touched for [`STALE_AFTER`] (longer than an
-/// unpacking may run, and a running one touches its folder, so the folder of another running instance is not taken).
+/// unpacking may run, and a folder in use is touched, so the folder of another running instance is not taken).
 /// Run off the UI's way.
 pub fn sweep() {
     sweep_in(&std::env::temp_dir(), SystemTime::now(), false);
@@ -162,14 +170,76 @@ fn running(_pid: u32) -> Option<bool> {
     None
 }
 
-/// Changes the modification time of the staging folder `root` to now, by making and removing a file in it, so the sweep
-/// of another instance sees a folder that is in use as young. Best effort: nothing is reported. A file that is there
-/// already (an entry of the archive that has the name) is left alone.
+/// Changes the modification time of the staging folder `root` to now, so the sweep of another instance sees a folder that
+/// is in use as young. Only the folder's own time changes: nothing is made or removed in it. Best effort: nothing is
+/// reported.
 pub(super) fn touch(root: &Path) {
-    let pulse = root.join(PULSE);
+    if let Ok(folder) = open_folder(root) {
+        let _ = folder.set_modified(SystemTime::now());
+    }
+}
 
-    if File::options().write(true).create_new(true).open(&pulse).is_ok() {
-        let _ = fs::remove_file(&pulse);
+/// Opens the folder `path`, not through a link, with the right to change its times.
+#[cfg(unix)]
+fn open_folder(path: &Path) -> io::Result<File> {
+    use rustix::fs::OFlags;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let flags = (OFlags::NOFOLLOW | OFlags::DIRECTORY | OFlags::CLOEXEC).bits();
+
+    File::options().read(true).custom_flags(flags as i32).open(path)
+}
+
+/// Windows `FILE_FLAG_BACKUP_SEMANTICS` (needed to open a folder) and `FILE_FLAG_OPEN_REPARSE_POINT` (a link is opened
+/// itself), and `FILE_WRITE_ATTRIBUTES` (enough to set the times).
+#[cfg(windows)]
+fn open_folder(path: &Path) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const WRITE_ATTRIBUTES: u32 = 0x0100;
+
+    File::options()
+        .access_mode(WRITE_ATTRIBUTES)
+        .custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+/// Touches a staging folder every so often, on its own thread, until it is dropped.
+pub(super) struct Heartbeat {
+    /// Dropping it ends the thread's wait.
+    stop: Option<Sender<()>>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Heartbeat {
+    pub(super) fn start(root: PathBuf, every: Duration) -> Self {
+        let (stop, stopped) = mpsc::channel::<()>();
+        // No thread (the system refuses one): the folder is just not touched.
+        let thread = thread::Builder::new()
+            .name("rar-staging-alive".to_owned())
+            .spawn(move || {
+                while stopped.recv_timeout(every) == Err(RecvTimeoutError::Timeout) {
+                    touch(&root);
+                }
+            })
+            .ok();
+
+        Self {
+            stop: Some(stop),
+            thread,
+        }
+    }
+}
+
+impl Drop for Heartbeat {
+    fn drop(&mut self) {
+        self.stop.take();
+
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 

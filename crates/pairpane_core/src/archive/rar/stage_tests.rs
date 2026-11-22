@@ -3,14 +3,14 @@
 use std::fs;
 use std::path::Path;
 #[cfg(unix)]
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 use super::stage::Staging;
 #[cfg(unix)]
-use super::stage::{sweep_in, touch};
+use super::stage::{Heartbeat, sweep_in, touch};
 
 fn names(folder: &Path) -> Vec<String> {
     let mut names = Vec::new();
@@ -137,4 +137,45 @@ fn touching_a_folder_makes_it_young_and_leaves_nothing_in_it() {
     let after = fs::metadata(staging.path()).expect("seen").modified().expect("time");
     assert!(SystemTime::now().duration_since(after).expect("past") < Duration::from_secs(60));
     assert_eq!(names(staging.path()), Vec::<String>::new());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_heartbeat_keeps_a_folder_young_until_it_is_dropped() {
+    let temp = TempDir::new().expect("temp");
+    let staging = Staging::create(temp.path()).expect("created");
+    let old = SystemTime::now() - Duration::from_secs(8 * 60 * 60);
+    let age = |folder: &Path| {
+        let modified = fs::metadata(folder).expect("seen").modified().expect("time");
+
+        SystemTime::now().duration_since(modified).unwrap_or_default()
+    };
+    fs::File::open(staging.path())
+        .expect("folder")
+        .set_modified(old)
+        .expect("old");
+    assert!(age(staging.path()) > Duration::from_secs(7 * 60 * 60));
+
+    let alive = Heartbeat::start(staging.path().to_owned(), Duration::from_millis(10));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while age(staging.path()) > Duration::from_secs(60) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        age(staging.path()) < Duration::from_secs(60),
+        "touched while the guard lives"
+    );
+    assert_eq!(names(staging.path()), Vec::<String>::new());
+
+    // Dropped: the thread is gone, so the folder is left as it is.
+    drop(alive);
+    fs::File::open(staging.path())
+        .expect("folder")
+        .set_modified(old)
+        .expect("old");
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        age(staging.path()) > Duration::from_secs(7 * 60 * 60),
+        "not touched after the drop"
+    );
 }

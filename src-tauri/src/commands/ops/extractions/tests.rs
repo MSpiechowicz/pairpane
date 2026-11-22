@@ -7,6 +7,8 @@ use std::time::Duration;
 use pairpane_core::archive::{self, PasswordFault};
 use pairpane_core::model::{IpcError, IpcErrorCode};
 
+use crate::error::CommandError;
+
 use super::*;
 
 const ARCHIVE: &str = "/data/pack.zip";
@@ -113,7 +115,7 @@ fn a_job_that_ends_before_it_is_registered_waits_for_its_entry() {
 }
 
 #[test]
-fn an_event_made_on_the_submitting_thread_does_not_wait_for_the_lock_it_holds() {
+fn an_event_made_on_the_submitting_thread_does_not_wait_for_the_lock_it_holds_and_ends_its_job() {
     let (archives, used) = remembered("one");
     let extractions = Extractions::default();
 
@@ -130,4 +132,66 @@ fn an_event_made_on_the_submitting_thread_does_not_wait_for_the_lock_it_holds() 
         .expect("queued");
 
     assert_eq!(id, JobId(1));
+    assert!(extractions.lock().is_empty(), "its entry went with its end");
+}
+
+#[test]
+fn another_job_that_ends_on_the_submitting_thread_is_settled_when_the_submission_is_done() {
+    let (archives, used) = remembered("one");
+    let extractions = Extractions::default();
+    track(&extractions, &archives, &used, 1);
+    track(&extractions, &archives, &used, 2);
+
+    extractions
+        .submit(&archives, PathBuf::from(ARCHIVE), None, || {
+            // Jobs that were waiting are stranded by the new one: one failed for a wrong password, one for another reason.
+            extractions.observe(&ended(1, IpcError::new(IpcErrorCode::Io, "the disk is full")));
+            extractions.observe(&ended(2, wrong()));
+
+            Ok(JobId(3))
+        })
+        .expect("queued");
+
+    assert!(extractions.lock().is_empty(), "both entries went");
+    assert!(
+        archives.password(Path::new(ARCHIVE)).is_none(),
+        "the wrong password was forgotten"
+    );
+}
+
+#[test]
+fn a_submission_that_fails_still_settles_the_jobs_that_ended_meanwhile() {
+    let (archives, used) = remembered("one");
+    let extractions = Extractions::default();
+    track(&extractions, &archives, &used, 1);
+
+    let queued = extractions.submit(&archives, PathBuf::from(ARCHIVE), None, || {
+        extractions.observe(&ended(1, wrong()));
+
+        Err(CommandError::new(IpcErrorCode::Io, "could not queue"))
+    });
+
+    assert!(queued.is_err());
+    assert!(extractions.lock().is_empty());
+    assert!(archives.password(Path::new(ARCHIVE)).is_none());
+}
+
+#[test]
+fn a_submission_that_panics_leaves_the_thread_settling_its_ends_at_once() {
+    let (archives, used) = remembered("one");
+    let extractions = Extractions::default();
+    track(&extractions, &archives, &used, 1);
+
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = extractions.submit(&archives, PathBuf::from(ARCHIVE), None, || -> CommandResult<JobId> {
+            panic!("the queue broke")
+        });
+    }));
+    assert!(panicked.is_err());
+
+    // The lock is free again and this thread no longer sets its ends aside.
+    extractions.observe(&ended(1, wrong()));
+
+    assert!(extractions.lock().is_empty());
+    assert!(archives.password(Path::new(ARCHIVE)).is_none());
 }

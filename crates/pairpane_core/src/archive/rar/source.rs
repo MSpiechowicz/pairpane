@@ -136,6 +136,9 @@ impl EntrySource for RarSource<'_> {
         } else {
             Some(self.unpack(&files)?)
         };
+        // The files are copied out of the folder for as long as the caller takes, which includes the wait for an answer to
+        // a question about a conflict: the folder is touched meanwhile, or another instance's sweep may take it.
+        let _alive = staging.as_ref().map(Staging::keep_alive);
 
         for entry in entries {
             check(self.cancel)?;

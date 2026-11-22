@@ -95,7 +95,7 @@ impl Run<'_> {
         let target = self.target_folder(&request.to)?;
         let cancel = AtomicBool::new(false);
         // Read once: every file written gets the same marker (see `origin`).
-        let origin = Origin::of(&found.path);
+        let origin = Origin::of(&file, &found.path);
 
         let input = Input {
             file: &file,
