@@ -1,4 +1,5 @@
-//! Archives built at run time for the tests of the archive commands: a tar and a stored zip, by hand.
+//! Archives for the tests of the archive commands: a tar and a stored zip built at run time by hand, and a 7z with
+//! encrypted headers kept as bytes.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -124,6 +125,30 @@ pub(in crate::commands) fn zip_of(items: &[Item<'_>]) -> Vec<u8> {
     zip.extend_from_slice(&[0, 0]);
 
     zip
+}
+
+/// The password of [`sevenz_with_encrypted_headers`].
+pub(in crate::commands) const SEVENZ_PASSWORD: &str = "secret";
+
+/// A 7z archive that holds one file, `a.txt` ("alpha"), whose headers are encrypted with [`SEVENZ_PASSWORD`]: its names
+/// cannot be listed without the password. Written once by the core crate's 7z writer (a dev-dependency of that crate
+/// only) and kept as bytes.
+pub(in crate::commands) fn sevenz_with_encrypted_headers() -> Vec<u8> {
+    let hex = concat!(
+        "377abcaf271c0004f669e043800000000000000053000000000000009fbfb9c6",
+        "55a3fde1139e93cd707474417c2129a3ffe5d94783977c0580ff4fc504d59b72",
+        "377f234f9693f838bc60ff00964a2122305697450f29207155b1c88ddddbd68c",
+        "c0d10760f41a74422f61cd45319e971c9690c42e72df396ed328c4733b021b3b",
+        "b0304decf6abc6fdfe8cfbe0740b39692bf88df0b5c80a786fc7157187c8f4a4",
+        "1706100109700a018745cd5000070b0100022406f1070122c8ff7d6b7ea93d55",
+        "cf1cbeb7492f5f9babafb3ef78421b679b1beac35c14fdf5230c23030101055d",
+        "0000800001000c636100080a01f5415dcd0000",
+    );
+
+    (0..hex.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).expect("hex"))
+        .collect()
 }
 
 /// The CRC-32 of `data` (the one a zip stores).

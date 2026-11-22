@@ -19,12 +19,12 @@ use pairpane_core::archive::{ArchiveIndex, Child, EntryType};
 use pairpane_core::listing::{BATCH, FIRST_BATCH, platform};
 use pairpane_core::model::{ArchiveSpot, Crumb, Entry, EntryKind, IpcError, IpcErrorCode, ListEvent, PaneId};
 use tauri::State;
-use tauri::async_runtime;
 use tauri::ipc::Channel;
 
 use super::{Claim, Panes, Slots, claim_sizing};
 use crate::commands::archives::{Archives, Target, archive_error, check_inner};
-use crate::commands::limit::Permit;
+use crate::commands::items::blocking;
+use crate::commands::ops::failed;
 use crate::error::CommandResult;
 
 #[cfg(test)]
@@ -43,9 +43,9 @@ struct Open {
     on_event: Channel<ListEvent>,
 }
 
-/// Lists the folder `dir` (`""` is the root, `a/b` a folder) of the archive file `archive` (absolute) into `pane`. A
-/// folder that is not in the archive, a password the archive needs, a missing `unrar` and a file that is not an archive
-/// arrive on `on_event` as an error, after the arguments are checked.
+/// Lists the folder `dir` (`""` is the root, `a/b` a folder) of the archive file `archive` (absolute) into `pane`, and
+/// answers when the listing is sent. A folder that is not in the archive, a password the archive needs (`passwordRequired`),
+/// a missing `unrar` and a file that is not an archive reject the command, once the arguments are checked.
 #[tauri::command]
 pub async fn archive_open(
     panes: State<'_, Panes>,
@@ -56,11 +56,12 @@ pub async fn archive_open(
     show_hidden: bool,
     on_event: Channel<ListEvent>,
 ) -> CommandResult<()> {
-    start(&panes, &archives, pane, archive, dir, show_hidden, on_event)
+    start(&panes, &archives, pane, archive, dir, show_hidden, on_event).await
 }
 
-/// Checks the arguments, takes the pane's slot and starts the listing on a blocking thread.
-fn start(
+/// Checks the arguments, takes the pane's slot, and builds the index and sends the listing on a blocking thread, which
+/// it waits for.
+async fn start(
     panes: &Panes,
     archives: &Archives,
     pane: PaneId,
@@ -91,23 +92,15 @@ fn start(
         on_event,
     };
     // The permit is held until the listing ends, however it ends.
-    async_runtime::spawn_blocking(move || open.run(permit));
-
-    Ok(())
+    blocking(permit, move || open.run()).await?.map_err(failed)
 }
 
 impl Open {
-    fn run(self, permit: Permit) {
-        let _permit = permit;
-
-        let result = self.list();
-        match result {
-            Ok(()) => {}
+    fn run(self) -> Result<(), IpcError> {
+        match self.list() {
             // A listing that was superseded stops quietly; the pane is showing the newer one.
-            Err(_) if self.cancel.load(Ordering::Relaxed) => {}
-            Err(error) => {
-                self.on_event.send(ListEvent::Error { error }).ok();
-            }
+            Err(_) if self.cancel.load(Ordering::Relaxed) => Ok(()),
+            result => result,
         }
     }
 
@@ -119,7 +112,7 @@ impl Open {
         let index = self
             .archives
             .index(&self.target, &opened, &self.cancel, None)
-            .map_err(|error| archive_error(&error))?;
+            .map_err(|error| self.archives.report(&self.target, &error))?;
 
         let started = || claim_sizing(&self.slots, self.pane, self.generation, &self.target.path);
         // A closed channel only means the page went away; the next open starts over.

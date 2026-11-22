@@ -87,7 +87,7 @@ fn open_entry(archives: &Archives, target: &Target, dir: &str, name: &str) -> Re
     let never = AtomicBool::new(false);
     let index = archives
         .index(target, &opened, &never, None)
-        .map_err(|error| archive_error(&error))?;
+        .map_err(|error| archives.report(target, &error))?;
 
     let found = index
         .find(dir, name)
@@ -111,7 +111,7 @@ fn open_entry(archives: &Archives, target: &Target, dir: &str, name: &str) -> Re
     let scratch = Scratch::create(name).map_err(|error| archive_error(&error))?;
     let mut file = scratch.open_file().map_err(|error| archive_error(&error))?;
     let mut source = archive::open_source(&index, &opened.input(), &never, password.as_deref())
-        .map_err(|error| archive_error(&error))?;
+        .map_err(|error| archives.report(target, &error))?;
 
     let mut written = false;
     source
@@ -121,7 +121,7 @@ fn open_entry(archives: &Archives, target: &Target, dir: &str, name: &str) -> Re
 
             Ok(Flow::Stop)
         })
-        .map_err(|error| archive_error(&error))?;
+        .map_err(|error| archives.report(target, &error))?;
     if !written {
         return Err(archive_error(&archive::unreadable()));
     }

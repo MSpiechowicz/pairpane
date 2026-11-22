@@ -75,7 +75,9 @@ impl Ops {
 
 /// What the job brings of the archive: the index (kept, or built now for a zip or 7z, which are read from their
 /// directory), the state of the file it was made from and the password. Opens the archive, so it runs on a blocking
-/// thread. Fails with `passwordRequired` when the chosen entries are encrypted and there is no password.
+/// thread. Fails with `passwordRequired` when the chosen entries are encrypted and there is no password, or when the
+/// archive's directory turns down the one there is (which is then forgotten, so the page asks again). A password that
+/// only fails later, while the job decrypts, ends the job with `passwordRequired` and is not forgotten here.
 fn prepare(archives: &Archives, target: &Target, dir: &str, names: &[String]) -> Result<ArchiveJob, IpcError> {
     let opened = archives.open(target).map_err(|error| archive_error(&error))?;
     let password = archives.password(&target.path);
@@ -94,7 +96,7 @@ fn prepare(archives: &Archives, target: &Target, dir: &str, names: &[String]) ->
                 Some(
                     archives
                         .index(target, &opened, &never, None)
-                        .map_err(|error| archive_error(&error))?,
+                        .map_err(|error| archives.report(target, &error))?,
                 )
             } else {
                 None

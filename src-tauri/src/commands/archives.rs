@@ -123,6 +123,22 @@ impl Archives {
         self.lock().get(archive).cloned()
     }
 
+    /// Drops the password kept for the archive, so the page is asked for one again.
+    pub(super) fn forget(&self, archive: &Path) {
+        self.lock().remove(archive);
+    }
+
+    /// [`archive_error`] of `error`, met reading the archive `target` with the password kept for it. A password that
+    /// the archive turned down is dropped: a check can accept a wrong one by chance, and it must not fail every later
+    /// read, with the page unable to ask for another.
+    pub(super) fn report(&self, target: &Target, error: &io::Error) -> IpcError {
+        if archive::password_fault(error) == Some(PasswordFault::Wrong) {
+            self.forget(&target.path);
+        }
+
+        archive_error(error)
+    }
+
     pub(super) fn remember(&self, archive: PathBuf, password: Password) {
         let mut passwords = self.lock();
 
@@ -257,7 +273,7 @@ pub async fn archive_password(archives: State<'_, Archives>, archive: String, pa
 
 impl Archives {
     /// Checks the arguments of [`archive_password`] and the password, on a blocking thread.
-    async fn remember_if_right(&self, archive: String, password: String) -> CommandResult<bool> {
+    pub(super) async fn remember_if_right(&self, archive: String, password: String) -> CommandResult<bool> {
         if password.is_empty() || password.len() > MAX_PASSWORD_BYTES {
             return Err(CommandError::new(
                 IpcErrorCode::InvalidInput,

@@ -1,11 +1,14 @@
 //! Tests of `archive_view_open`: an entry opened as a session that reads the right bytes and leaves nothing on the disk,
 //! what is refused, and the sweep of stale folders.
 
+use pairpane_core::archive::Password;
 use pairpane_core::model::ViewKind;
 use tauri::async_runtime::block_on;
 
 use super::*;
-use crate::commands::archives::fixtures::{archive_in_folder, declaring, encrypted, item, tar_of, zip_of};
+use crate::commands::archives::fixtures::{
+    archive_in_folder, declaring, encrypted, item, sevenz_with_encrypted_headers, tar_of, zip_of,
+};
 
 fn open_in(viewer: &Viewer, archives: &Archives, archive: &str, dir: &str, name: &str) -> CommandResult<ViewOpened> {
     block_on(viewer.open_archive_entry(archives, archive.to_owned(), dir.to_owned(), name.to_owned()))
@@ -165,4 +168,16 @@ fn the_sweep_never_follows_a_link_named_like_a_viewer_folder() {
         target.path().join("keep.txt").exists(),
         "what the link leads to is untouched"
     );
+}
+
+#[test]
+fn a_remembered_password_that_the_archive_turns_down_is_forgotten_so_the_page_asks_again() {
+    let (_folder, archive) = archive_in_folder("locked.7z", &sevenz_with_encrypted_headers());
+    let (viewer, archives) = (Viewer::default(), Archives::default());
+    archives.remember(PathBuf::from(&archive), Password::new("not-the-password".to_owned()));
+
+    let error = open_in(&viewer, &archives, &archive, "", "a.txt").expect_err("turned down");
+
+    assert_eq!(error.code(), IpcErrorCode::PasswordRequired);
+    assert!(archives.password(Path::new(&archive)).is_none());
 }

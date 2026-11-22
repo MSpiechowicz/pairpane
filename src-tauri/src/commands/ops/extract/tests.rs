@@ -1,14 +1,16 @@
 //! Tests of `ops_extract`: what is refused before a job starts, the check for a password, and a tar extracted for real
 //! into a folder through the engine.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use pairpane_core::model::{OpKind, OpsEvent, Outcome};
 use tauri::async_runtime::block_on;
 
 use super::*;
-use crate::commands::archives::fixtures::{archive_in_folder, encrypted, item, path_text, tar_of, zip_of};
+use crate::commands::archives::fixtures::{
+    archive_in_folder, encrypted, item, path_text, sevenz_with_encrypted_headers, tar_of, zip_of,
+};
 use crate::commands::ops::tests::{collecting_channel, received};
 use crate::commands::testing::names;
 
@@ -191,4 +193,20 @@ fn a_destination_that_is_not_an_absolute_folder_and_duplicate_names_are_handled(
         "duplicates are dropped"
     );
     assert!(checked_entries(Vec::new()).expect("none means everything").is_empty());
+}
+
+#[test]
+fn a_remembered_password_that_the_archive_turns_down_is_forgotten_so_the_page_asks_again() {
+    let (_folder, archive) = archive_in_folder("locked.7z", &sevenz_with_encrypted_headers());
+    let (ops, out, _events) = running();
+    let archives = Archives::default();
+    archives.remember(
+        PathBuf::from(&archive),
+        pairpane_core::archive::Password::new("not-the-password".to_owned()),
+    );
+
+    let error = extract_into(&ops, &archives, &archive, "", &[], out.path()).expect_err("turned down");
+
+    assert_eq!(error.code(), IpcErrorCode::PasswordRequired);
+    assert!(archives.password(Path::new(&archive)).is_none());
 }
