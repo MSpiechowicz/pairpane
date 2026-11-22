@@ -319,3 +319,156 @@ fn a_file_that_does_not_fit_forgets_only_what_it_takes_and_never_the_whole_memor
     assert_eq!(ignores.compiles(), 50);
     assert_eq!(skipped.load(std::sync::atomic::Ordering::Relaxed), 0);
 }
+
+/// Folders without ignore files: how many are asked about, more than the map of remembered folders holds.
+const PLAIN: usize = super::ignored::KEPT + 900;
+
+/// Asks about `name` in each of `folders`, one at a time, as a walk down them does.
+fn ask_each(ignores: &super::ignored::Ignores, folders: &[std::path::PathBuf], name: &str) -> usize {
+    folders
+        .iter()
+        .filter(|folder| ignores.leaves_out(&folder.join(name), false))
+        .count()
+}
+
+#[test]
+fn folders_without_ignore_files_are_remembered_within_the_bound_and_the_rules_above_still_apply() {
+    let root = temp();
+    put(root.path(), ".ignore", b"secret\n");
+    let folders: Vec<std::path::PathBuf> = (0..PLAIN).map(|index| root.path().join(format!("f{index}"))).collect();
+    for folder in &folders {
+        std::fs::create_dir(folder).expect("folder");
+    }
+
+    let (ignores, skipped) = ignores(root.path());
+
+    assert_eq!(ask_each(&ignores, &folders, "secret"), PLAIN);
+    assert_eq!(ask_each(&ignores, &folders, "other"), 0);
+    assert!(
+        ignores.remembered_peak() <= super::ignored::KEPT,
+        "{}",
+        ignores.remembered_peak()
+    );
+    assert_eq!(ignores.compiles(), 1);
+    assert_eq!(skipped.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[test]
+fn folders_without_rules_share_those_above_them_and_the_ones_with_rules_below_them_still_apply() {
+    let top = temp();
+    let root = top.path().join("proj");
+    put(&root, ".git/HEAD", b"x");
+    put(&root, ".gitignore", b"*.log\n");
+    put(&root, ".ignore", b"root.skip\n");
+    put(&root, "a/b/c/e/.ignore", b"deep.skip\n");
+    put(&root, "a/b/c/e/f/g/x", b"x");
+    // A repository below the folders without rules, with no ignore file of its own, ends the reach of the `.gitignore`.
+    put(&root, "a/b/c/n/.git/HEAD", b"x");
+    put(&root, "a/b/c/n/sub/x", b"x");
+    let c = root.join("a/b/c");
+
+    let (ignores, skipped) = ignores(&root);
+    let left_out = |path: &str| ignores.leaves_out(&c.join(path), false);
+
+    assert!(left_out("root.skip"));
+    assert!(left_out("z.log"));
+    assert!(left_out("e/deep.skip"));
+    assert!(left_out("e/f/g/deep.skip"));
+    assert!(left_out("e/f/g/root.skip"));
+    assert!(!left_out("deep.skip"));
+    assert!(!left_out("e/f/g/other"));
+
+    assert!(left_out("n/root.skip"));
+    assert!(!left_out("n/y.log"));
+    assert!(!left_out("n/sub/y.log"));
+    assert!(left_out("n/sub/root.skip"));
+    assert_eq!(skipped.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[test]
+fn rules_above_folders_without_rules_are_read_once_however_many_of_those_are_remembered_and_forgotten() {
+    let root = temp();
+    put(root.path(), "r/.ignore", b"secret\n");
+    let folders: Vec<std::path::PathBuf> = (0..PLAIN)
+        .map(|index| root.path().join(format!("r/f{index}")))
+        .collect();
+    for folder in &folders {
+        std::fs::create_dir(folder).expect("folder");
+    }
+    std::fs::create_dir(root.path().join("r/last")).expect("folder");
+
+    let (ignores, _) = ignores(root.path());
+    assert_eq!(ask_each(&ignores, &folders, "secret"), PLAIN);
+
+    // The rules were remembered through all the places made and forgotten, and are still the ones asked.
+    assert!(ignores.leaves_out(&root.path().join("r/last/secret"), false));
+    assert_eq!(ignores.compiles(), 1);
+}
+
+/// A chain of folders and a file `name` in each of them, made below `root` as `<chain>/d/d/d/...`: the folders, from the
+/// top one down.
+#[cfg(target_os = "linux")]
+fn plain_chain(root: &std::path::Path, chain: usize, levels: usize) -> Vec<std::path::PathBuf> {
+    let mut folder = root.join(format!("c{chain}"));
+    let mut folders = vec![folder.clone()];
+
+    for _ in 1..levels {
+        folder.push("d");
+        folders.push(folder.clone());
+    }
+    std::fs::create_dir_all(&folder).expect("a chain");
+
+    folders
+}
+
+// Paths this long cannot be built on macOS (1 024 bytes) or Windows (260).
+#[cfg(target_os = "linux")]
+#[test]
+fn deep_chains_of_folders_without_ignore_files_stay_within_the_bound_and_are_searched_fast() {
+    const CHAINS: usize = 21;
+    const LEVELS: usize = 400;
+    const _: () = assert!(
+        CHAINS * LEVELS > 2 * super::ignored::KEPT,
+        "the folders must outnumber the bound twice over"
+    );
+
+    let top = temp();
+    put(top.path(), ".ignore", b"secret\n");
+    let chains: Vec<Vec<std::path::PathBuf>> = (0..CHAINS)
+        .map(|chain| plain_chain(top.path(), chain, LEVELS))
+        .collect();
+    // A longer one, of a thousand folders.
+    let long = plain_chain(top.path(), CHAINS, 1_000);
+    for end in chains.iter().chain([&long]).filter_map(|chain| chain.last()) {
+        put(end, "secret", b"x");
+        put(end, "found", b"x");
+    }
+
+    let root = top.path().to_owned();
+    let walk = root.clone();
+    let (ignores, kept) = within(IN_TIME, move || {
+        let (ignores, _) = ignores(&walk);
+        let mut left_out = 0;
+
+        for chain in chains.iter().chain([&long]) {
+            left_out += ask_each(&ignores, chain, "secret");
+        }
+
+        (ignores, left_out)
+    });
+
+    // Every folder of every chain left `secret` out by the rule of the top folder, with no more than the bound of places.
+    assert_eq!(kept, CHAINS * LEVELS + 1_000);
+    assert!(
+        ignores.remembered_peak() <= super::ignored::KEPT,
+        "{}",
+        ignores.remembered_peak()
+    );
+    assert_eq!(ignores.compiles(), 1);
+
+    let found = within(IN_TIME, move || search(&root, ignoring()));
+    let found_files = found.paths().iter().filter(|path| path.ends_with("/found")).count();
+    assert_eq!(found_files, CHAINS + 1);
+    assert!(!found.paths().iter().any(|path| path.ends_with("/secret")));
+    assert_eq!(found.done().1, 0);
+}

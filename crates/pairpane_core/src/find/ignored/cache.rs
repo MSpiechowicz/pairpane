@@ -2,27 +2,55 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use super::{KEPT, Layer};
 
 /// The place of one folder's rules in the memory of the search: read once, by whichever thread comes first.
 pub(super) struct Slot {
-    pub(super) layer: Mutex<Option<Arc<Layer>>>,
+    pub(super) held: Mutex<Held>,
+    /// When the folder was last asked for.
+    pub(super) used: AtomicU64,
+}
+
+/// What a folder's place holds.
+pub(super) enum Held {
+    /// The folder was not read yet.
+    Unread,
+    /// The folder has rules (or is a repository): its own layer, which the place keeps alive.
+    Own(Arc<Layer>),
+    /// The folder has none: the layer of the nearest folder above that has stands for it. Only a weak link, so that the
+    /// folders below one cannot keep its rules from being forgotten; when they are, the folder is read again.
+    Shared(Weak<Layer>),
+}
+
+impl Held {
+    /// The layer that applies in the folder, if it is read and still alive.
+    pub(super) fn layer(&self) -> Option<Arc<Layer>> {
+        match self {
+            Self::Unread => None,
+            Self::Own(layer) => Some(Arc::clone(layer)),
+            Self::Shared(layer) => layer.upgrade(),
+        }
+    }
 }
 
 /// The folders whose rules are remembered.
 pub(super) struct Kept {
     pub(super) slots: HashMap<PathBuf, Arc<Slot>>,
-    /// The number of folders past which the idle ones are forgotten.
+    /// The number of folders at which the idle ones are forgotten, before another is added.
     pub(super) trim_at: usize,
+    /// The most folders that were remembered at once.
+    #[cfg(test)]
+    pub(super) peak: usize,
 }
 
 impl Slot {
     pub(super) fn new() -> Self {
         Self {
-            layer: Mutex::new(None),
+            held: Mutex::new(Held::Unread),
+            used: AtomicU64::new(0),
         }
     }
 }
@@ -32,6 +60,8 @@ impl Kept {
         Self {
             slots: HashMap::new(),
             trim_at: KEPT,
+            #[cfg(test)]
+            peak: 0,
         }
     }
 }
@@ -45,37 +75,37 @@ struct Idle {
     bytes: usize,
 }
 
-/// The remembered folders that nothing uses, oldest first.
+/// The remembered folders that nothing uses, oldest first. A folder without rules of its own is always idle: it holds
+/// nothing but its place.
 fn idle(slots: &mut HashMap<PathBuf, Arc<Slot>>) -> Vec<Idle> {
     let mut idle: Vec<Idle> = slots
         .iter_mut()
         .filter_map(|(dir, slot)| {
             // Only the map holds the place of the folder: no lookup is reading or waiting on it, and none can start
             // while the map is locked.
-            let held = Arc::get_mut(slot)?
-                .layer
-                .get_mut()
-                .unwrap_or_else(PoisonError::into_inner);
+            let slot = Arc::get_mut(slot)?;
+            let used = *slot.used.get_mut();
+            let held = slot.held.get_mut().unwrap_or_else(PoisonError::into_inner);
 
-            let Some(layer) = held.as_ref() else {
-                return Some(Idle {
-                    age: 0,
-                    dir: dir.clone(),
-                    lines: 0,
-                    bytes: 0,
-                });
+            let (age, lines, bytes) = match held {
+                Held::Unread => (0, 0, 0),
+                Held::Shared(layer) if layer.strong_count() == 0 => (0, 0, 0),
+                Held::Shared(_) => (used, 0, 0),
+                Held::Own(layer) => {
+                    // Held by a folder below, a thread's pin or a lookup too: the rules are in use, and dropping the
+                    // place would free nothing.
+                    if Arc::strong_count(layer) > 1 {
+                        return None;
+                    }
+
+                    let (lines, bytes) = layer.charged();
+
+                    (layer.used.load(Ordering::Relaxed), lines, bytes)
+                }
             };
 
-            // Held by a folder below, a thread's pin or a lookup too: the rules are in use, and dropping the place
-            // would free nothing.
-            if Arc::strong_count(layer) > 1 {
-                return None;
-            }
-
-            let (lines, bytes) = layer.charged();
-
             Some(Idle {
-                age: layer.used.load(Ordering::Relaxed),
+                age,
                 dir: dir.clone(),
                 lines,
                 bytes,

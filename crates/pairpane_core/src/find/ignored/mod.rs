@@ -31,7 +31,7 @@ use ignore::gitignore::{Gitignore, Glob};
 use crate::ops::open_listed;
 
 use budget::{Budget, Charge, Turns};
-use cache::{Kept, Slot, forget_older_half, forget_to_free};
+use cache::{Held, Kept, Slot, forget_older_half, forget_to_free};
 use parse::{MAX_BYTES, count_lines, listed, parse, read_limited};
 
 /// The most lines of an ignore file.
@@ -47,9 +47,9 @@ pub(super) const HELD_LINES: usize = 50_000;
 /// The most bytes of ignore files that are in use at once.
 pub(super) const HELD_BYTES: usize = 8 * 1024 * 1024;
 
-/// The most folders whose rules are remembered at once; past it the older half of those that nothing uses is dropped and
-/// read again when needed.
-const KEPT: usize = 4096;
+/// The most folders remembered at once (those with rules and those without); past it the older half of those that nothing
+/// uses is dropped and read again when needed.
+pub(super) const KEPT: usize = 4096;
 
 /// An ignore file with more lines than this waits for a turn to be compiled.
 const BIG: usize = 200;
@@ -63,7 +63,9 @@ struct Rules {
     charge: Charge,
 }
 
-/// The rules that apply in one folder: its own files and, through `parent`, those of the folders above.
+/// The rules that apply in a folder: its own files and, through `parent`, those of the folders above. A folder that has no
+/// rules and is not a repository has no layer: that of the nearest folder above that has one stands for it, so a chain of
+/// layers is as long as the number of folders with rules, not as deep as the tree.
 struct Layer {
     parent: Option<Arc<Layer>>,
     dir: PathBuf,
@@ -91,6 +93,14 @@ thread_local! {
 /// for a parent, a walk thread's pin, or a lookup. Only rules that nothing but `kept` holds are ever forgotten, so what
 /// is forgotten is freed at once, and the rules of a folder above one in use are never read a second time. The rules of
 /// the folder searched, and of those above it, are held by `top` for the whole search.
+///
+/// A folder without rules has a place in `kept` that only points (weakly) to the layer that stands for it, so the places
+/// of the folders of a deep tree with no ignore files take next to nothing and are forgotten freely, whereas a folder
+/// with rules is only forgotten when nothing uses it.
+///
+/// What cannot be promised: a folder's rules that nothing uses at the moment (a walk thread looks at only the last folder
+/// it was given) can be forgotten for room and read again later, and if the room is gone by then the file is left out and
+/// counted, as is any file that does not fit; a file left out may fit, and apply, when it is read again.
 pub(crate) struct Ignores {
     root: PathBuf,
     top: Arc<Layer>,
@@ -134,7 +144,9 @@ impl Ignores {
 
         let mut layer: Option<Arc<Layer>> = None;
         for dir in above.into_iter().chain([root]) {
-            layer = Some(Arc::new(ignores.read(layer, dir)));
+            if let Some(read) = ignores.read(layer.as_ref(), dir) {
+                layer = Some(Arc::new(read));
+            }
         }
         if let Some(layer) = layer {
             ignores.top = layer;
@@ -153,6 +165,12 @@ impl Ignores {
     #[cfg(test)]
     pub(super) fn peak(&self) -> (usize, usize) {
         self.budget.peak()
+    }
+
+    /// The most folders that were remembered at once.
+    #[cfg(test)]
+    pub(super) fn remembered_peak(&self) -> usize {
+        self.kept.read().map_or(0, |kept| kept.peak)
     }
 
     /// Whether the rules leave out `path` (below the folder searched), a folder when `is_dir`.
@@ -197,9 +215,9 @@ impl Ignores {
     /// The rules of the folder `dir`, read when they are not remembered yet. The folder and those above it count as used
     /// now, and the folder is the one this thread holds on to.
     fn layer(&self, dir: &Path) -> Arc<Layer> {
-        let layer = self.find(dir);
-
         let tick = self.clock.fetch_add(1, Ordering::Relaxed);
+        let layer = self.find(dir, tick);
+
         let mut next = Some(&layer);
         while let Some(above) = next {
             above.used.store(tick, Ordering::Relaxed);
@@ -211,30 +229,40 @@ impl Ignores {
         layer
     }
 
-    /// The rules of the folder `dir`. A folder is read once at a time: a thread that finds it being read waits for the
-    /// result.
-    fn find(&self, dir: &Path) -> Arc<Layer> {
+    /// The rules that apply in the folder `dir`, asked for at `tick`. A folder is read once at a time: a thread that finds
+    /// it being read waits for the result.
+    fn find(&self, dir: &Path, tick: u64) -> Arc<Layer> {
         if dir == self.root || !dir.starts_with(&self.root) {
             return Arc::clone(&self.top);
         }
 
         let slot = self.slot(dir);
-        let mut held = slot.layer.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(layer) = held.as_ref() {
-            return Arc::clone(layer);
+        slot.used.store(tick, Ordering::Relaxed);
+
+        let mut held = slot.held.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(layer) = held.layer() {
+            return layer;
         }
 
         let parent = dir
             .parent()
-            .map_or_else(|| Arc::clone(&self.top), |above| self.find(above));
-        let layer = Arc::new(self.read(Some(parent), dir));
+            .map_or_else(|| Arc::clone(&self.top), |above| self.find(above, tick));
 
-        *held = Some(Arc::clone(&layer));
+        // A folder with no rules of its own is the layer above.
+        let Some(layer) = self.read(Some(&parent), dir) else {
+            *held = Held::Shared(Arc::downgrade(&parent));
+
+            return parent;
+        };
+
+        let layer = Arc::new(layer);
+        *held = Held::Own(Arc::clone(&layer));
 
         layer
     }
 
-    /// The place of the folder `dir`, made when there is none. Looking one up only reads the map.
+    /// The place of the folder `dir`, made when there is none. Looking one up only reads the map; making one forgets the
+    /// older half of the idle ones first when the map is full.
     fn slot(&self, dir: &Path) -> Arc<Slot> {
         if let Ok(kept) = self.kept.read()
             && let Some(slot) = kept.slots.get(dir)
@@ -245,22 +273,27 @@ impl Ignores {
         let Ok(mut kept) = self.kept.write() else {
             return Arc::new(Slot::new());
         };
+        if let Some(slot) = kept.slots.get(dir) {
+            return Arc::clone(slot);
+        }
 
-        let slot = Arc::clone(
-            kept.slots
-                .entry(dir.to_owned())
-                .or_insert_with(|| Arc::new(Slot::new())),
-        );
-        let gone = if kept.slots.len() > kept.trim_at {
+        let gone = if kept.slots.len() >= kept.trim_at {
             let gone = forget_older_half(&mut kept.slots);
 
-            // When most of the folders are in use there is little to forget: wait for some more before looking again.
+            // What is in use cannot be forgotten: wait for some more places before looking again.
             kept.trim_at = KEPT.max(kept.slots.len() + KEPT / 8);
 
             gone
         } else {
             Vec::new()
         };
+
+        let slot = Arc::new(Slot::new());
+        kept.slots.insert(dir.to_owned(), Arc::clone(&slot));
+        #[cfg(test)]
+        {
+            kept.peak = kept.peak.max(kept.slots.len());
+        }
 
         // The rules are freed outside the lock.
         drop(kept);
@@ -307,11 +340,12 @@ impl Ignores {
         }
     }
 
-    /// The rules of the folder `dir`, below the folders of `parent`.
-    fn read(&self, parent: Option<Arc<Layer>>, dir: &Path) -> Layer {
+    /// The layer of the folder `dir`, below `parent`; `None` when the folder has no rules and is not a repository, and
+    /// there is a `parent` to stand for it.
+    fn read(&self, parent: Option<&Arc<Layer>>, dir: &Path) -> Option<Layer> {
         let git_entry = fs::symlink_metadata(dir.join(".git")).ok();
         let repository = git_entry.is_some();
-        let in_repository = repository || parent.as_ref().is_some_and(|parent| parent.in_repository);
+        let in_repository = repository || parent.is_some_and(|parent| parent.in_repository);
 
         let ignore = self.file(dir, ".ignore");
         let git = if in_repository {
@@ -327,8 +361,12 @@ impl Ignores {
             None
         };
 
-        Layer {
-            parent,
+        if parent.is_some() && ignore.is_none() && git.is_none() && exclude.is_none() && !repository {
+            return None;
+        }
+
+        Some(Layer {
+            parent: parent.cloned(),
             dir: dir.to_owned(),
             ignore,
             git,
@@ -336,12 +374,18 @@ impl Ignores {
             repository,
             in_repository,
             used: AtomicU64::new(self.clock.fetch_add(1, Ordering::Relaxed)),
-        }
+        })
     }
 
     /// The rules in the file `name` (names joined with `/`) of the folder `dir`: `None` when there is none, when it holds
     /// no rule, or when it cannot be used (which is counted).
     fn file(&self, dir: &Path, name: &str) -> Option<Rules> {
+        // Most folders have none: one look at the name tells, where opening it step by step costs a call for each folder
+        // on the way (and what is opened is checked as before).
+        if fs::symlink_metadata(dir.join(name)).is_err_and(|error| error.kind() == io::ErrorKind::NotFound) {
+            return None;
+        }
+
         let opened = match dir.strip_prefix(&self.root) {
             Ok(below) => match listed(below, name) {
                 Some(listed) => open_listed(&self.root, &listed),
