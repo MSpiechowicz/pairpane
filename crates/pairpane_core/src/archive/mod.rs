@@ -1,6 +1,6 @@
 //! Archives: reading the entries of a zip, tar (plain or compressed), gzip, 7z or RAR file without extracting anything,
-//! and, later, handing out the data of chosen entries. Nothing here writes to the disk; extraction is `ops`'s job, fed by
-//! an [`EntrySource`].
+//! and, later, handing out the data of chosen entries. Nothing here touches the disk; extraction and packing are `ops`'s
+//! job, fed by an [`EntrySource`] and feeding the [`write`] writers.
 //!
 //! # API
 //!
@@ -14,10 +14,14 @@
 //! - [`IndexCache`] and [`Fingerprint`] ([`cache`]): the last four indexes, keyed by the file's state.
 //! - [`open_source`]: an [`EntrySource`], which calls a visitor with the data of the wanted entries (ascending
 //!   ordinals) as bounded readers ([`Declared`] keeps each to the size it declares).
+//! - [`write`]: the writers a pack job uses (zip, tar.zst, 7z) over a `Write`; they read nothing of the disk and are fed
+//!   entries with readers by `ops`.
+//! - [`rewrite`]: an archive written again with entries added and some left out (what adding to an archive does).
 //! - [`Password`]: held in memory only, zeroized, `Debug` hides it. A password that an archive needs and lacks (or that is
 //!   wrong) surfaces as an error made by [`password_error`] and recognised by [`password_fault`].
 //! - [`check_password`]: whether a password opens an archive, judged cheaply (a zip by the verifier or check byte of its
-//!   first encrypted entry; [`zip::check_password`]); what `archive_password` answers with.
+//!   first encrypted entry; [`zip::check_password`]); what `archive_password` answers with. [`confirm_password`] is the
+//!   stricter check for a rewrite that seals new content with the password (a zip: a whole entry decrypted and checked).
 //!
 //! # Formats and who reads them
 //!
@@ -44,8 +48,10 @@ pub mod names;
 mod open;
 pub mod password;
 pub mod rar;
+pub mod rewrite;
 pub mod sevenz;
 pub mod tar;
+pub mod write;
 pub mod zip;
 
 #[cfg(test)]
@@ -63,6 +69,8 @@ mod names_tests;
 #[cfg(test)]
 mod open_tests;
 #[cfg(test)]
+mod sevenz_confirm_tests;
+#[cfg(test)]
 mod sevenz_tests;
 #[cfg(test)]
 pub(crate) mod testing;
@@ -71,13 +79,16 @@ mod walk_tests;
 
 pub use cache::{Fingerprint, IndexCache};
 pub use entries::{Cancellable, Declared, EntrySource, EntryType, Flow, Place, Record, Visit, Walked};
-pub use error::{PasswordFault, cancelled, fault_text, password_error, password_fault, unreadable, unsupported};
+pub use error::{
+    PasswordFault, cancelled, fault_text, password_error, password_fault, password_text, unreadable, unsupported,
+    unverified_password_error,
+};
 pub use file::{FileReader, ReadAt};
 pub use index::{ArchiveIndex, Builder, Child, IndexEntry, Selected, Selection};
 pub use kind::{HEAD_BYTES, by_extension, by_magic, detect};
 pub use names::{Unsafe, normalize};
 pub use open::{Input, build_index, open_source, records};
-pub use password::{Password, check_password};
+pub use password::{Password, check_password, confirm_password};
 
 /// The most entries an index holds; an archive with more is indexed up to here and marked truncated (a zip that declares
 /// more is refused).

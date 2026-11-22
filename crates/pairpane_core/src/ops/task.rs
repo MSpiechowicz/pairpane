@@ -1,7 +1,7 @@
 //! The file tools as jobs: how each starts, and what they share (the folders, the copy loop, the no-replace commit).
 //!
 //! A tool job looks at the paths like a copy does, then hands over to its own module: `checksum` and
-//! `checksum_verify`, `split`, `combine`, `attrs`. What a tool creates is a temporary file first (see `partial`),
+//! `checksum_verify`, `split`, `combine`, `attrs`, `pack`, `add`. What a tool creates is a temporary file first (see `partial`),
 //! put in place with a rename that refuses to replace, so a name that is taken is never overwritten.
 
 use std::fs::{self, File, OpenOptions};
@@ -37,6 +37,14 @@ impl Run<'_> {
             return self.extract(inner, entries, source);
         }
 
+        if let Task::Pack { name, options } = task {
+            return self.pack(name, options);
+        }
+
+        if let Task::AddToArchive { name, inner, source } = task {
+            return self.add_to_archive(name, inner, source);
+        }
+
         let scene = self.prepare_task(task)?;
 
         match task {
@@ -45,7 +53,7 @@ impl Run<'_> {
             Task::Split { part_size } => self.split_file(&scene, *part_size),
             Task::Combine => self.combine_parts(&scene),
             Task::Attributes(change) => self.change_attributes(&scene, change),
-            Task::Transfer | Task::Extract { .. } => {
+            Task::Transfer | Task::Extract { .. } | Task::Pack { .. } | Task::AddToArchive { .. } => {
                 Err(refusal(io::ErrorKind::InvalidInput, "this job cannot start with these items").into())
             }
         }
@@ -137,6 +145,23 @@ impl Run<'_> {
 /// (a link too, which is never followed).
 pub(super) fn create_plain(path: &Path) -> io::Result<File> {
     OpenOptions::new().write(true).create_new(true).open(path)
+}
+
+/// [`create_plain`] with the access of the owner alone on Unix (`0o600` less the umask), for a file whose content is not to be
+/// read by anyone else while it is written (the temporary file of an archive, which may hold what a password seals): the
+/// permissions it ends with are set on the open handle when it is complete. Windows has no such bits to give.
+pub(super) fn create_private(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+
+    options.open(path)
 }
 
 /// Fails with "already exists" when anything is at `path`, a link that leads nowhere included.

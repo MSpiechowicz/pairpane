@@ -57,6 +57,7 @@ function needsLook(result: JobResult): boolean {
  */
 export class Transfers {
   readonly #ipc: Transport;
+  readonly #onEnded: ((job: JobView, result: JobResult) => void) | undefined;
 
   /** Plain collections (their rows are replaced, not changed); readers track `#revision`, bumped on every change. */
   readonly #jobs = new Map<JobId, JobRow>();
@@ -88,8 +89,10 @@ export class Transfers {
     return this.#questions[0];
   });
 
-  constructor(ipc: Transport) {
+  /** `onEnded` hears of every job that ends while the page is open, after its row shows the result. */
+  constructor(ipc: Transport, onEnded?: (job: JobView, result: JobResult) => void) {
     this.#ipc = ipc;
+    this.#onEnded = onEnded;
   }
 
   /** Starts listening. The backend answers with a snapshot, so this is also how a reloaded page catches up. */
@@ -248,6 +251,8 @@ export class Transfers {
     if (!needsLook(result)) {
       this.#timers.set(id, setTimeout(() => this.#fade(id), LINGER_MS));
     }
+
+    this.#onEnded?.(job, result);
   }
 
   #fade(id: JobId) {

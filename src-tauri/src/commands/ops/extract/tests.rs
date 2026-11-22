@@ -2,7 +2,6 @@
 //! into a folder through the engine.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use pairpane_core::archive::Password;
 use pairpane_core::model::{OpKind, OpsEvent, Outcome};
@@ -12,7 +11,7 @@ use super::*;
 use crate::commands::archives::fixtures::{
     archive_in_folder, encrypted, item, path_text, sevenz_with_encrypted_headers, tar_of, zip_of,
 };
-use crate::commands::ops::tests::{collecting_channel, received};
+use crate::commands::ops::tests::{received, running, wait_for_end};
 use crate::commands::testing::names;
 
 fn extract_into(
@@ -30,31 +29,6 @@ fn extract_into(
         names(chosen),
         path_text(to),
     ))
-}
-
-fn wait_for_end(events: &std::sync::Arc<std::sync::Mutex<Vec<OpsEvent>>>) -> Outcome {
-    let deadline = Instant::now() + Duration::from_secs(20);
-
-    loop {
-        let ended = received(events).into_iter().find_map(|event| match event {
-            OpsEvent::Ended { outcome, .. } => Some(outcome),
-            _ => None,
-        });
-        if let Some(outcome) = ended {
-            return outcome;
-        }
-        assert!(Instant::now() < deadline, "the job ended");
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-/// An engine that reports to `events`, and an empty folder to extract into.
-fn running() -> (Ops, tempfile::TempDir, std::sync::Arc<std::sync::Mutex<Vec<OpsEvent>>>) {
-    let ops = Ops::default();
-    let (channel, events) = collecting_channel();
-    ops.subscribe(channel);
-
-    (ops, tempfile::tempdir().expect("target"), events)
 }
 
 fn sample() -> Vec<u8> {

@@ -97,6 +97,8 @@ pub fn run() -> ExitCode {
             commands::ops::ops_subscribe,
             commands::ops::ops_start,
             commands::ops::extract::ops_extract,
+            commands::ops::pack::ops_pack,
+            commands::ops::add::ops_add_to_archive,
             commands::ops::ops_control,
             commands::ops::ops_answer,
             commands::ops::ops_rename,

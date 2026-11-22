@@ -69,13 +69,15 @@ pub fn walk<F: ReadAt + ?Sized>(
     reader.seek(SeekFrom::Start(directory.start))?;
     let mut reader = BufReader::new(reader.take(directory.size));
     let mut variable = Vec::new();
+    let mut at = directory.start;
 
     for _ in 0..directory.entries {
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
         }
 
-        let entry = record(&mut reader, &mut variable, directory.base)?;
+        let entry = record(&mut reader, &mut variable, directory.base, at)?;
+        at += (RECORD + variable.len()) as u64;
 
         if visit(entry) == Flow::Stop {
             return Ok(Walked {
@@ -88,16 +90,38 @@ pub fn walk<F: ReadAt + ?Sized>(
     Ok(Walked::default())
 }
 
-/// Finds the central directory through the last end record in the file, and checks that it fits in the file.
-fn locate<F: ReadAt + ?Sized>(file: &F) -> io::Result<Directory> {
+/// The end of the file where the last end record is: where the tail starts in the file, the tail, and where the record is
+/// in it (the last signature with a whole record after it).
+fn find_end<F: ReadAt + ?Sized>(file: &F) -> io::Result<(u64, Vec<u8>, usize)> {
     let size = file.size()?;
     let length = size.min(EOCD_SEARCH);
     let base = size - length;
     let tail = file.read_chunk(base, usize::try_from(length).map_err(|_| unreadable())?)?;
 
-    // The last signature with a whole record after it.
     let room = tail.len().checked_sub(EOCD - 4).ok_or_else(unreadable)?;
     let at = memmem::rfind(&tail[..room], b"PK\x05\x06").ok_or_else(unreadable)?;
+
+    Ok((base, tail, at))
+}
+
+/// The comment of the zip in `file`: what follows its end record, as long as the record says (or as is left of the file).
+pub fn comment<F: ReadAt + ?Sized>(file: &F) -> io::Result<Vec<u8>> {
+    let (_, tail, at) = find_end(file)?;
+    let from = at + EOCD;
+    let length = le(&tail, at + 20, 2) as usize;
+
+    Ok(tail[from..tail.len().min(from + length)].to_vec())
+}
+
+/// The length of the data that precedes the zip in `file` (a self-extracting program): what the offsets of its entries lack.
+/// It is 0 for a zip that starts at the start of the file.
+pub fn base<F: ReadAt + ?Sized>(file: &F) -> io::Result<u64> {
+    locate(file).map(|directory| directory.base)
+}
+
+/// Finds the central directory through the last end record in the file, and checks that it fits in the file.
+fn locate<F: ReadAt + ?Sized>(file: &F) -> io::Result<Directory> {
+    let (base, tail, at) = find_end(file)?;
     let end_record = &tail[at..at + EOCD];
 
     let mut entries = le(end_record, 10, 2);
@@ -178,9 +202,9 @@ fn zip64_record<F: ReadAt + ?Sized>(file: &F, locator_at: u64, locator: &[u8]) -
     Err(unreadable())
 }
 
-/// The next record of the central directory, with `base` added to the offset of its local header; `variable` is a
-/// buffer for its name, extra data and comment.
-fn record<R: Read>(reader: &mut R, variable: &mut Vec<u8>, base: u64) -> io::Result<Record> {
+/// The next record of the central directory, which is at `at` in the file, with `base` added to the offset of its local
+/// header; `variable` is a buffer for its name, extra data and comment.
+fn record<R: Read>(reader: &mut R, variable: &mut Vec<u8>, base: u64, at: u64) -> io::Result<Record> {
     let mut head = [0; RECORD];
     read_exact(reader, &mut head)?;
 
@@ -247,6 +271,9 @@ fn record<R: Read>(reader: &mut R, variable: &mut Vec<u8>, base: u64) -> io::Res
             compressed,
             offset: offset.saturating_add(base),
             dos_time: le(&head, 12, 2) as u16,
+            dos_date: le(&head, 14, 2) as u16,
+            record_at: at,
+            record_len: (RECORD + variable.len()) as u32,
             made_by,
             external,
             aes,

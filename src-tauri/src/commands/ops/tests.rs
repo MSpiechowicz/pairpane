@@ -3,6 +3,7 @@
 
 use std::time::{Duration, Instant};
 
+use pairpane_core::model::{JobView, Outcome};
 use pairpane_core::ops::{AnswerError, MAX_NAME_UNITS, Refused, UnknownJob};
 use tauri::async_runtime::block_on;
 use tauri::ipc::InvokeResponseBody;
@@ -30,6 +31,43 @@ pub(super) fn collecting_channel() -> (Channel<OpsEvent>, Arc<Mutex<Vec<OpsEvent
 
 pub(super) fn received(events: &Arc<Mutex<Vec<OpsEvent>>>) -> Vec<OpsEvent> {
     events.lock().expect("not poisoned").clone()
+}
+
+/// The outcome of the first job that ends in `events`, waited for.
+pub(super) fn wait_for_end(events: &Arc<Mutex<Vec<OpsEvent>>>) -> Outcome {
+    let deadline = Instant::now() + Duration::from_secs(20);
+
+    loop {
+        let ended = received(events).into_iter().find_map(|event| match event {
+            OpsEvent::Ended { outcome, .. } => Some(outcome),
+            _ => None,
+        });
+        if let Some(outcome) = ended {
+            return outcome;
+        }
+        assert!(Instant::now() < deadline, "the job ended");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// The announcement of the job `id` among `events`.
+pub(super) fn added_job(events: &Arc<Mutex<Vec<OpsEvent>>>, id: JobId) -> JobView {
+    received(events)
+        .into_iter()
+        .find_map(|event| match event {
+            OpsEvent::Added { job } if job.id == id => Some(job),
+            _ => None,
+        })
+        .expect("the job was announced")
+}
+
+/// An engine that reports to the events it returns, and an empty folder to work in.
+pub(super) fn running() -> (Ops, tempfile::TempDir, Arc<Mutex<Vec<OpsEvent>>>) {
+    let ops = Ops::default();
+    let (channel, events) = collecting_channel();
+    ops.subscribe(channel);
+
+    (ops, tempfile::tempdir().expect("target"), events)
 }
 
 fn is_snapshot(event: &OpsEvent) -> bool {

@@ -13,11 +13,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::archive::MAX_NAME_BYTES;
 use crate::archive::entries::{EntryType, Flow, Place, Record, Walked, read_within};
 use crate::archive::error::{cancelled, unreadable};
+use crate::view::refusal;
 
 use super::stream::Stream;
 
 /// The size of a tar header, and the unit its entries are padded to.
-const BLOCK: u64 = 512;
+pub(crate) const BLOCK: u64 = 512;
 
 /// The bytes of a long name that are read: the longest name kept, and room for the character it may cut in two.
 const NAME_READ: usize = MAX_NAME_BYTES + 4;
@@ -55,7 +56,7 @@ impl<S: Read> Read for Data<'_, S> {
 
 /// What the entries before an entry said about it.
 #[derive(Default)]
-struct Pending {
+pub(crate) struct Pending {
     long_name: Option<Vec<u8>>,
     pax_name: Option<Vec<u8>>,
     pax_link: Option<Vec<u8>>,
@@ -78,6 +79,81 @@ impl Pending {
                 _ => {}
             }
         }
+    }
+}
+
+/// What one go at the headers of a tar finds (see [`head`]).
+pub(crate) enum Head {
+    /// The end of the archive.
+    End,
+    /// An entry that only describes the next one (a long name, PAX records), or, when `global`, all that follow.
+    Described { global: bool },
+    /// An entry: what it is, and how many bytes of data follow its header (before the padding).
+    Entry { record: Record, data: u64 },
+}
+
+/// The bytes of the headers that [`head`] goes through, kept as they are, for the copy of a tar that has entries left out
+/// (see `crate::archive::rewrite`). A header that would take more than the limit fails the copy: none of it is kept
+/// without being read, so what is read is bounded by the limit.
+pub(crate) struct Tape {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl Tape {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+        }
+    }
+
+    /// The bytes kept since the last [`Tape::clear`].
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.bytes.clear();
+    }
+
+    /// Takes back what was kept after the first `len` bytes.
+    pub(crate) fn split_off(&mut self, len: usize) -> Vec<u8> {
+        self.bytes.split_off(len)
+    }
+
+    fn room(&self, more: u64) -> io::Result<()> {
+        let kept = self.bytes.len() as u64;
+
+        if kept.saturating_add(more) > self.limit as u64 {
+            return Err(refusal(
+                io::ErrorKind::InvalidInput,
+                "a header of the archive is too large to be kept",
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn keep(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.room(bytes.len() as u64)?;
+        self.bytes.extend_from_slice(bytes);
+
+        Ok(())
+    }
+
+    /// Reads `count` bytes of `stream` and keeps them.
+    fn take<S: Read>(&mut self, stream: &mut S, count: u64, cancel: &AtomicBool) -> io::Result<()> {
+        self.room(count)?;
+
+        let at = self.bytes.len();
+        self.bytes.resize(at + count as usize, 0);
+
+        if fill(stream, &mut self.bytes[at..], cancel)? < count as usize {
+            return Err(unreadable());
+        }
+
+        Ok(())
     }
 }
 
@@ -154,58 +230,11 @@ where
     S: Stream,
     V: FnMut(Record, &mut Data<'_, S>) -> io::Result<Flow>,
 {
-    let mut header = ::tar::Header::new_old();
-    match fill(stream, header.as_mut_bytes(), cancel)? {
-        0 => return Ok(Step::End),
-        count if count < header.as_bytes().len() => return Err(unreadable()),
-        _ => {}
-    }
-
-    // A block of zeros ends the archive.
-    if header.as_bytes().iter().all(|byte| *byte == 0) {
-        return Ok(Step::End);
-    }
-
-    if !checksum_matches(&header) {
-        return Err(unreadable());
-    }
-
-    let size = header.entry_size()?;
-    let kind = header.entry_type();
-    let known = header.as_gnu().is_some() || header.as_ustar().is_some();
-
-    if known && kind.is_gnu_longname() {
-        let name = read_some(stream, size, NAME_READ, cancel)?;
-        pending.long_name =
-            Some(name.split(|byte| *byte == 0).next().unwrap_or_default().to_vec()).filter(|name| !name.is_empty());
-
-        return Ok(Step::Described);
-    }
-
-    if known && kind.is_pax_local_extensions() {
-        pending.pax(&read_some(stream, size, PAX_READ, cancel)?);
-
-        return Ok(Step::Described);
-    }
-
-    // A long link name is not read: where a link points is only shown, and links are never extracted.
-    if known && (kind.is_gnu_longlink() || kind.is_pax_global_extensions()) {
-        stream.skip(padded(size)?)?;
-
-        return Ok(Step::Described);
-    }
-
-    if kind.is_gnu_sparse() && header.as_gnu().is_some_and(::tar::GnuHeader::is_extended) {
-        skip_sparse_blocks(stream, cancel)?;
-    }
-
-    let pending = mem::take(pending);
-    let data = pending.pax_size.unwrap_or(size);
-    let shown = match pending.pax_size {
-        Some(size) => size,
-        None => header.size()?,
+    let (record, data) = match head(stream, pending, cancel, None)? {
+        Head::End => return Ok(Step::End),
+        Head::Described { .. } => return Ok(Step::Described),
+        Head::Entry { record, data } => (record, data),
     };
-    let record = record(&header, pending, shown);
 
     // The visitor takes what it wants of the data; the rest is stepped over, with the padding.
     let mut reader = Data {
@@ -227,6 +256,79 @@ where
         Err(error) if error.kind() == io::ErrorKind::Interrupted => Err(error),
         Err(_) => Ok(Step::Cut(flow)),
     }
+}
+
+/// Reads the headers of the next entry of the tar in `stream`: one entry that describes another, or an entry with its
+/// record, after what `pending` was told by those before it. The data of the entry is not read. With a `tape` every byte
+/// that was read (or stepped over, which is then read) is also kept in it.
+pub(crate) fn head<S: Stream>(
+    stream: &mut S,
+    pending: &mut Pending,
+    cancel: &AtomicBool,
+    mut tape: Option<&mut Tape>,
+) -> io::Result<Head> {
+    let mut header = ::tar::Header::new_old();
+    match fill(stream, header.as_mut_bytes(), cancel)? {
+        0 => return Ok(Head::End),
+        count if count < header.as_bytes().len() => return Err(unreadable()),
+        _ => {}
+    }
+
+    // A block of zeros ends the archive.
+    if header.as_bytes().iter().all(|byte| *byte == 0) {
+        return Ok(Head::End);
+    }
+
+    if !checksum_matches(&header) {
+        return Err(unreadable());
+    }
+
+    if let Some(tape) = tape.as_deref_mut() {
+        tape.keep(header.as_bytes())?;
+    }
+
+    let size = header.entry_size()?;
+    let kind = header.entry_type();
+    let known = header.as_gnu().is_some() || header.as_ustar().is_some();
+
+    if known && kind.is_gnu_longname() {
+        let name = read_some(stream, size, NAME_READ, cancel, tape)?;
+        pending.long_name =
+            Some(name.split(|byte| *byte == 0).next().unwrap_or_default().to_vec()).filter(|name| !name.is_empty());
+
+        return Ok(Head::Described { global: false });
+    }
+
+    if known && kind.is_pax_local_extensions() {
+        pending.pax(&read_some(stream, size, PAX_READ, cancel, tape)?);
+
+        return Ok(Head::Described { global: false });
+    }
+
+    // A long link name is not read: where a link points is only shown, and links are never extracted.
+    if known && (kind.is_gnu_longlink() || kind.is_pax_global_extensions()) {
+        pass(stream, padded(size)?, cancel, tape)?;
+
+        return Ok(Head::Described {
+            global: kind.is_pax_global_extensions(),
+        });
+    }
+
+    if kind.is_gnu_sparse() && header.as_gnu().is_some_and(::tar::GnuHeader::is_extended) {
+        skip_sparse_blocks(stream, cancel, tape)?;
+    }
+
+    let pending = mem::take(pending);
+    let data = pending.pax_size.unwrap_or(size);
+    let shown = match pending.pax_size {
+        Some(size) => size,
+        None => header.size()?,
+    };
+
+    Ok(Head::Entry {
+        record: record(&header, pending, shown),
+        data,
+    })
 }
 
 /// The record of the entry whose header is `header`, after what `pending` said of it.
@@ -302,14 +404,20 @@ pub fn header_is_valid(head: &[u8]) -> bool {
 }
 
 /// The size of an entry's data in the archive: rounded up to whole blocks.
-fn padded(size: u64) -> io::Result<u64> {
+pub(crate) fn padded(size: u64) -> io::Result<u64> {
     size.checked_add(BLOCK - 1)
         .map(|size| size & !(BLOCK - 1))
         .ok_or_else(unreadable)
 }
 
 /// The first `limit` bytes of an entry of `size` bytes; the rest of it is stepped over.
-fn read_some<S: Stream>(stream: &mut S, size: u64, limit: usize, cancel: &AtomicBool) -> io::Result<Vec<u8>> {
+fn read_some<S: Stream>(
+    stream: &mut S,
+    size: u64,
+    limit: usize,
+    cancel: &AtomicBool,
+    mut tape: Option<&mut Tape>,
+) -> io::Result<Vec<u8>> {
     let wanted = usize::try_from(size).map_or(limit, |size| size.min(limit));
     let mut bytes = vec![0; wanted];
 
@@ -317,13 +425,24 @@ fn read_some<S: Stream>(stream: &mut S, size: u64, limit: usize, cancel: &Atomic
         return Err(unreadable());
     }
 
-    stream.skip(padded(size)? - wanted as u64)?;
+    if let Some(tape) = tape.as_deref_mut() {
+        tape.keep(&bytes)?;
+    }
+    pass(stream, padded(size)? - wanted as u64, cancel, tape)?;
 
     Ok(bytes)
 }
 
+/// Moves on by `count` bytes: stepped over, or, with a `tape`, read and kept.
+fn pass<S: Stream>(stream: &mut S, count: u64, cancel: &AtomicBool, tape: Option<&mut Tape>) -> io::Result<()> {
+    match tape {
+        Some(tape) => tape.take(stream, count, cancel),
+        None => stream.skip(count),
+    }
+}
+
 /// Steps over the blocks that follow a GNU sparse header which says so, up to the one that says it is the last.
-fn skip_sparse_blocks<S: Stream>(stream: &mut S, cancel: &AtomicBool) -> io::Result<()> {
+fn skip_sparse_blocks<S: Stream>(stream: &mut S, cancel: &AtomicBool, mut tape: Option<&mut Tape>) -> io::Result<()> {
     let mut block = [0; BLOCK as usize];
 
     loop {
@@ -335,6 +454,10 @@ fn skip_sparse_blocks<S: Stream>(stream: &mut S, cancel: &AtomicBool) -> io::Res
             return Err(unreadable());
         }
 
+        if let Some(tape) = tape.as_deref_mut() {
+            tape.keep(&block)?;
+        }
+
         if block[EXTENDED_FLAG] == 0 {
             return Ok(());
         }
@@ -343,7 +466,7 @@ fn skip_sparse_blocks<S: Stream>(stream: &mut S, cancel: &AtomicBool) -> io::Res
 
 /// Reads until `buffer` is full or the stream ends; how many bytes came. An `Interrupted` error is the stream's
 /// answer to a raised `cancel`, unless the flag is down (a signal during a read), when the read is tried again.
-fn fill<S: Read>(stream: &mut S, buffer: &mut [u8], cancel: &AtomicBool) -> io::Result<usize> {
+pub(crate) fn fill<S: Read>(stream: &mut S, buffer: &mut [u8], cancel: &AtomicBool) -> io::Result<usize> {
     let mut filled = 0;
 
     while filled < buffer.len() {

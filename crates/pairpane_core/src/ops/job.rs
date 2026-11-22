@@ -5,8 +5,8 @@ use std::sync::{Mutex, MutexGuard};
 
 use crate::model::{JobId, JobPhase, JobView, OpsEvent};
 
-use super::Request;
 use super::control::{Control, locked};
+use super::{Request, Task};
 
 /// The events of a job that threads other than its worker send, waiting for the thread that is sending them (see
 /// `Inner::send`).
@@ -41,7 +41,7 @@ impl Job {
             kind: request.kind,
             label,
             from: request.from.to_string_lossy().into_owned(),
-            to: request.to.to_string_lossy().into_owned(),
+            to: shown_target(&request),
             items: u32::try_from(request.names.len()).unwrap_or(u32::MAX),
             verify: request.verify,
             phase: JobPhase::Queued,
@@ -67,5 +67,16 @@ impl Job {
 
     pub(super) fn view(&self) -> MutexGuard<'_, JobView> {
         locked(&self.view)
+    }
+}
+
+/// Where the job writes, as the queue shows it: the archive itself for a pack or an add to an archive (whose request
+/// names the folder that holds it), the destination folder otherwise.
+fn shown_target(request: &Request) -> String {
+    match &request.task {
+        Task::Pack { name, .. } | Task::AddToArchive { name, .. } => {
+            request.to.join(name).to_string_lossy().into_owned()
+        }
+        _ => request.to.to_string_lossy().into_owned(),
     }
 }

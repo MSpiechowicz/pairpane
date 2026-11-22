@@ -431,3 +431,21 @@ pub(super) fn make_fifo(path: &Path) {
         .expect("mkfifo runs");
     assert!(status.success(), "mkfifo failed");
 }
+
+/// Hooks that record the mode of the temporary file of an add or pack job when it was just made, and where the mode will be
+/// (Unix).
+#[cfg(unix)]
+pub(super) fn temp_mode_hooks() -> (Hooks, Arc<std::sync::Mutex<Option<u32>>>) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let seen = Arc::new(std::sync::Mutex::new(None));
+    let sink = Arc::clone(&seen);
+    let hooks = Hooks {
+        after_temp: Some(Arc::new(move |temp| {
+            *sink.lock().expect("lock") = Some(fs::metadata(temp).expect("metadata").permissions().mode() & 0o777);
+        })),
+        ..Hooks::default()
+    };
+
+    (hooks, seen)
+}

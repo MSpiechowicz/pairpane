@@ -1,5 +1,6 @@
 import type { ArchiveSpot } from '$lib/ipc/bindings/ArchiveSpot';
 import type { Entry } from '$lib/ipc/bindings/Entry';
+import { isWindowsPlatform } from './keys';
 
 export type { ArchiveSpot };
 
@@ -22,10 +23,26 @@ const EXTENSIONS = [
   '.rar',
 ];
 
+/** Archives that can only be read: a RAR (no writer) and a lone `.gz` (one compressed file, not a collection). */
+const READ_ONLY_EXTENSIONS: readonly string[] = ['.gz', '.rar'];
+
+/** The archives files can be added to: every kind a pane opens but those that are only read. */
+const WRITABLE_EXTENSIONS = EXTENSIONS.filter((extension) => !READ_ONLY_EXTENSIONS.includes(extension));
+
+/** Whether `name` ends in one of `extensions` (matched case-insensitively; a name that is only an extension does not). */
+function endsWithAny(name: string, extensions: readonly string[]): boolean {
+  const lower = name.toLowerCase();
+  return extensions.some((extension) => lower.length > extension.length && lower.endsWith(extension));
+}
+
 /** Whether a file called `name` is an archive to open (it is not a name that is only an extension). */
 export function isArchiveName(name: string): boolean {
-  const lower = name.toLowerCase();
-  return EXTENSIONS.some((extension) => lower.length > extension.length && lower.endsWith(extension));
+  return endsWithAny(name, EXTENSIONS);
+}
+
+/** Whether files can be added to the archive called `name`: not a RAR, not a lone `.gz` (`a.tar.gz` is). */
+export function isWritableArchive(name: string): boolean {
+  return endsWithAny(name, WRITABLE_EXTENSIONS);
 }
 
 /** The path of the entry `name` in the real folder `folder`, with the folder's own kind of separator. */
@@ -35,6 +52,44 @@ export function joinPath(folder: string, name: string): string {
   }
 
   return folder + (folder.includes('\\') && !folder.includes('/') ? '\\' : '/') + name;
+}
+
+/**
+ * Whether both paths name the same archive file. A path the backend built and one a pane holds can differ in how they
+ * are written: on Windows in the separator, a trailing one and the case; elsewhere only in a trailing `/`.
+ */
+export function sameArchivePath(a: string, b: string): boolean {
+  if (isWindowsPlatform()) {
+    return windowsKey(a) === windowsKey(b);
+  }
+
+  return withoutTrailing(a, '/') === withoutTrailing(b, '/');
+}
+
+/** `path` without trailing `separator`s, unless it is only separators (a root). */
+function withoutTrailing(path: string, separator: string): string {
+  let end = path.length;
+  while (end > 1 && path[end - 1] === separator) {
+    end -= 1;
+  }
+
+  return path.slice(0, end);
+}
+
+/**
+ * A Windows path in one form for comparing: `\` separators, no verbatim prefix (`\\?\C:\…` is `C:\…`,
+ * `\\?\UNC\host\…` is `\\host\…`), no trailing separator (a drive root `C:\` keeps it), lower case.
+ */
+function windowsKey(path: string): string {
+  let plain = path.replaceAll('/', '\\');
+  if (/^\\\\\?\\unc\\/i.test(plain)) {
+    plain = `\\\\${plain.slice('\\\\?\\UNC\\'.length)}`;
+  } else if (plain.startsWith('\\\\?\\')) {
+    plain = plain.slice('\\\\?\\'.length);
+  }
+
+  const key = withoutTrailing(plain, '\\').toLowerCase();
+  return /^[a-z]:$/.test(key) ? `${key}\\` : key;
 }
 
 /** The last name of an archive's path. */

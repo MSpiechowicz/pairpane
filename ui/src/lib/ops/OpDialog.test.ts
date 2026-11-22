@@ -324,3 +324,42 @@ describe('OpDialog combine', () => {
     expect(onDone).not.toHaveBeenCalled();
   });
 });
+
+describe('OpDialog add to an archive', () => {
+  const add: OpRequest = { kind: 'add', archive: '/backup/a.zip', dir: 'docs/img', from: '/work', names: ['a.pdf', 'b.txt'] };
+
+  it('shows the archive and its folder, which cannot be changed, and starts the add with the request', async () => {
+    const { field, calls, onDone } = open(add);
+    expect(screen.getByRole('dialog', { name: 'Copy 2 items to' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Archive folder' })).toHaveFocus();
+    expect(field).toHaveValue('/backup/a.zip ▸ docs/img');
+    expect(field).toHaveAttribute('readonly');
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+
+    await fireEvent.keyDown(field, { key: 'Enter' });
+
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+    expect(calls('ops_add_to_archive')).toEqual([{ archive: '/backup/a.zip', dir: 'docs/img', from: '/work', names: ['a.pdf', 'b.txt'] }]);
+    expect(calls('ops_start')).toEqual([]);
+  });
+
+  it('calls the root of the archive `/`', () => {
+    const { field } = open({ ...add, dir: '' });
+
+    expect(field).toHaveValue('/backup/a.zip ▸ /');
+  });
+
+  it('shows what the backend refuses (a kind it cannot write, a truncated archive) and stays', async () => {
+    const message = 'This archive can’t be changed.';
+    const { onDone } = open(add, {
+      ops_add_to_archive: async () => {
+        throw new IpcFailure({ code: 'unsupported', message });
+      },
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+    expect(onDone).not.toHaveBeenCalled();
+  });
+});

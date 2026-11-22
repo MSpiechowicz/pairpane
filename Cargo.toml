@@ -91,8 +91,10 @@ pulldown-cmark = { version = "0.13.6", default-features = false }
 tar = { version = "0.4.46", default-features = false }
 flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }
 memchr = "2.8.3"
-# The tokens of the viewer's media scheme (pairpane-media, src-tauri/src/commands/view): 128 random bits from the system's
-# generator, so a page cannot guess a token. A safe API; already in the lockfile through tauri's own dependencies.
+# Random bytes from the system's generator, a safe API that returns an error instead of panicking: the tokens of the
+# viewer's media scheme (pairpane-media, src-tauri/src/commands/view; 128 bits, so a page cannot guess one) and the salts
+# and initialisation vectors of an encrypted archive that is written (pairpane_core::archive::write). Already in the
+# lockfile through tauri's own dependencies.
 getrandom = "0.4.3"
 # HEIC pictures are decoded by the codecs the system has, never by a codec shipped with the app (HEVC is patent-encumbered).
 # Linux and the BSDs: `libloading` opens the system's libheif at run time (pairpane_core::view::heic::libheif), so the
@@ -110,18 +112,23 @@ landlock = "0.4.8"
 # system calls (pairpane_core::view::heic::kernel, Linux only, `unsafe` with a `SAFETY` comment on every block). The
 # version the lockfile has already through `landlock` (one copy, not two).
 libc = "0.2.191"
-# Archives (pairpane_core::archive), all pure Rust and safe APIs, none of them reading a file by itself: the archive code
-# hands each decoder a bounded reader. `bzip2` (the libbz2-rs-sys backend, no C library) and `ruzstd` (a decoder; the
-# encoder inside it is used by the tests only) are the codecs of a bzip2 or zstd entry in a zip and of `.tar.bz2` and
-# `.tar.zst`; `lzma-rust2` reads the XZ container of `.tar.xz` (the same copy `sevenz-rust2` uses for LZMA and LZMA2).
-# libbz2-rs-sys is licensed `bzip2-1.0.6` (see deny.toml).
+# Archives (pairpane_core::archive), all safe APIs, none of them reading a file by itself: the archive code hands each
+# decoder a bounded reader, and bytes that come from an archive are decoded by pure Rust only. `bzip2` (the libbz2-rs-sys
+# backend, no C library) and `ruzstd` (the decoder only; its encoder is used by the tests) are the codecs of a bzip2 or
+# zstd entry in a zip and of `.tar.bz2` and `.tar.zst`; `lzma-rust2` reads the XZ container of `.tar.xz` and writes the
+# LZMA2 stream of a 7z (the same copy `sevenz-rust2` uses). Its `encoder` feature is for packing. libbz2-rs-sys is
+# licensed `bzip2-1.0.6` (see deny.toml).
 bzip2 = "0.6.1"
 ruzstd = "0.9.1"
-lzma-rust2 = { version = "0.25.0", default-features = false, features = ["std", "xz", "optimization"] }
-# 7z archives (pairpane_core::archive::sevenz). Only what the format needs: the AES-256 of encrypted content and headers,
-# bzip2 and deflate next to the LZMA family it always has. Not the C `zstd`, brotli, lz4, nor PPMd. Its `compress` feature
-# (the encoders) is on in the dev dependencies only, to build the 7z files the tests read.
-sevenz-rust2 = { version = "0.25.0", default-features = false, features = ["aes256", "bzip2", "deflate"] }
+lzma-rust2 = { version = "0.25.0", default-features = false, features = ["std", "xz", "optimization", "encoder"] }
+# Packing writes `.tar.zst` with the C library libzstd (`zstd-safe` is the safe API over `zstd-sys`; BSD-2-Clause or
+# BSD-3-Clause, see deny.toml): the encoder is used only for bytes of our own, never for those of an archive, which
+# `ruzstd` decodes. No default features: no legacy formats, no bindgen, no pkg-config.
+zstd = { version = "0.14.4", default-features = false }
+# 7z archives (pairpane_core::archive::sevenz, and the writer in `archive::write`). Only what the format needs: the
+# AES-256 of encrypted content and headers, bzip2 and deflate next to the LZMA family it always has, and the `compress`
+# feature (the encoders) to write them. Not the C `zstd`, brotli, lz4, nor PPMd.
+sevenz-rust2 = { version = "0.25.0", default-features = false, features = ["aes256", "bzip2", "deflate", "compress"] }
 # WinZip AES entries of a zip (AES-128 and AES-256, AE-1 and AE-2): PBKDF2-HMAC-SHA1, AES in counter mode and an HMAC-SHA1
 # tag. On the RustCrypto generation `sevenz-rust2` uses (`aes` 0.9, digest 0.11), so there is one copy of `aes`, `cipher`
 # and `digest` of that generation; the `sha2` 0.10 above stays on digest 0.10 for the checksum files.

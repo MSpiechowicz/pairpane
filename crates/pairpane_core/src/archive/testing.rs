@@ -8,10 +8,11 @@ use flate2::write::GzEncoder;
 use sevenz_rust2::encoder_options::AesEncoderOptions;
 use sevenz_rust2::{ArchiveEntry, ArchiveWriter, EncoderConfiguration, EncoderMethod, NtTime, SourceReader};
 
-use crate::model::ArchiveFormat;
+use crate::model::{ArchiveFormat, PackLevel};
 
 use super::file::ReadAt;
-use super::{ArchiveIndex, Input, build_index, open_source};
+use super::write::{Entry, Options, SevenZWriter, ZipWriter};
+use super::{ArchiveIndex, Input, Password, build_index, open_source};
 
 /// 2021-03-04 05:06:08 as a zip stores it (MS-DOS date and time).
 pub(crate) const DOS_DATE: u16 = 21092;
@@ -19,14 +20,34 @@ pub(crate) const DOS_TIME: u16 = 10436;
 /// The same moment in milliseconds since the epoch, read as UTC.
 pub(crate) const MOMENT: i64 = 1_614_834_368_000;
 
-/// A zip of stored (not compressed) entries, written by hand: `(name, content)`; a name ending in `/` is a folder.
-pub(crate) fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let members: Vec<Member> = entries
+/// `(name, content)` pairs as entries for the writers: a name ending in `/` is a folder; files are `0o644`, folders
+/// `0o755`, modified at `MOMENT`.
+fn written<'a>(entries: &'a [(&str, &'a [u8])]) -> Vec<Entry<'a>> {
+    entries
         .iter()
-        .map(|(name, content)| Member::stored(name, content))
-        .collect();
+        .map(|(name, content)| match name.strip_suffix('/') {
+            Some(folder) => Entry::folder(folder, 0o755, Some(MOMENT)),
+            None => Entry::file(*name, 0o644, Some(MOMENT), content.len() as u64, *content),
+        })
+        .collect()
+}
 
-    zip_members(&members)
+/// A zip of stored (not compressed) entries, made by the zip writer: `(name, content)`; a name ending in `/` is a folder.
+/// Files are `0o644`, folders `0o755`, modified at `MOMENT`.
+pub(crate) fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let cancel = idle();
+    let options = Options {
+        level: PackLevel::Store,
+        password: None,
+        encrypt_names: false,
+    };
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()), &options, &cancel);
+
+    for entry in written(entries) {
+        writer.add(entry).expect("a well-formed entry");
+    }
+
+    writer.finish().expect("a zip").into_inner()
 }
 
 /// One entry of a zip as its two headers say it, whatever the data is: tests make entries that are encrypted, compressed
@@ -418,14 +439,24 @@ impl SevenZ<'_> {
         writer.finish().expect("finish").into_inner()
     }
 
-    /// The archive of `(path, content)` pairs, a path ending in `/` being a folder.
+    /// The archive of `(path, content)` pairs, a path ending in `/` being a folder, made by the 7z writer (files `0o644`,
+    /// folders `0o755`, modified at `MOMENT`; with `solid` the files share one block, else each has its own).
     pub(crate) fn of(self, entries: &[(&str, &[u8])]) -> Vec<u8> {
-        self.write(
-            entries
-                .iter()
-                .map(|(name, content)| (sevenz_entry(name, content), *content))
-                .collect(),
-        )
+        let cancel = idle();
+        let options = Options {
+            level: PackLevel::Fast,
+            password: self.password.map(|text| Password::new(text.to_owned())),
+            encrypt_names: self.encrypted_headers,
+        };
+        let mut writer = SevenZWriter::new(Cursor::new(Vec::new()), &options, &cancel)
+            .expect("a 7z writer")
+            .with_block(if self.solid { u64::MAX } else { 1 });
+
+        for entry in written(entries) {
+            writer.add(entry).expect("a well-formed entry");
+        }
+
+        writer.finish().expect("a 7z").into_inner()
     }
 }
 

@@ -3,6 +3,7 @@
 
   import AttributesDialog from './AttributesDialog.svelte';
   import ChecksumDialog from './ChecksumDialog.svelte';
+  import PackDialog from './PackDialog.svelte';
   import PropertiesDialog from './PropertiesDialog.svelte';
   import SplitDialog from './SplitDialog.svelte';
   import type { ToolDialog } from './tools.svelte';
@@ -27,6 +28,8 @@
   <AttributesDialog {ipc} path={dialog.path} entries={dialog.entries} {onClose} {onDone} />
 {:else if dialog.kind === 'checksum'}
   <ChecksumDialog {ipc} path={dialog.path} names={dialog.names} {onClose} {onDone} />
-{:else}
+{:else if dialog.kind === 'split'}
   <SplitDialog {ipc} path={dialog.path} entry={dialog.entry} to={dialog.to} {onClose} {onDone} />
+{:else}
+  <PackDialog {ipc} path={dialog.path} names={dialog.names} to={dialog.to} {onClose} {onDone} />
 {/if}

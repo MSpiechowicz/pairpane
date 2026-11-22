@@ -6,12 +6,12 @@ use std::io::{self, BufRead, BufReader, Read, Seek};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bzip2::read::MultiBzDecoder;
-use flate2::read::GzDecoder;
+use flate2::bufread::GzDecoder;
 use lzma_rust2::XzReader;
 use ruzstd::decoding::{FrameDecoder, StreamingDecoder};
 
 use crate::archive::entries::read_within;
-use crate::archive::error::{check, unreadable, unsupported};
+use crate::archive::error::{check, data_after_end, unreadable, unsupported};
 use crate::archive::file::{FileReader, ReadAt};
 use crate::model::ArchiveFormat;
 
@@ -134,6 +134,24 @@ impl<R: BufRead> Read for ZstdFrames<R> {
     }
 }
 
+/// The first member of a gzip file that fails at its end when the file holds more bytes: what a reader that lists the
+/// tar can leave unread, a rewrite would drop.
+struct GzWhole<R: BufRead> {
+    decoder: GzDecoder<R>,
+}
+
+impl<R: BufRead> Read for GzWhole<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let count = self.decoder.read(buffer)?;
+
+        if count == 0 && !buffer.is_empty() && !self.decoder.get_mut().fill_buf()?.is_empty() {
+            return Err(data_after_end());
+        }
+
+        Ok(count)
+    }
+}
+
 /// The stream of the tar in `file`, in the compression `format` names. A decoded stream ends after `scan` bytes and
 /// then sets `reached`, so a walk can tell a limit from the end of the data. An XZ, Zstandard or bzip2 file of several
 /// streams in a row is read through all of them (a gzip file is read to the end of its first member).
@@ -146,14 +164,40 @@ pub fn open<'a>(
     reached: &'a Cell<bool>,
     scan: u64,
 ) -> io::Result<Box<dyn Stream + 'a>> {
+    open_as(format, file, cancel, reached, scan, false)
+}
+
+/// [`open`] for a copy of the whole stream: a gzip file with bytes after its first member fails at the end of that member
+/// with [`data_after_end`], where [`open`] ends there (the other compressions read through every stream already).
+pub fn open_whole<'a>(
+    format: ArchiveFormat,
+    file: &'a dyn ReadAt,
+    cancel: &'a AtomicBool,
+    reached: &'a Cell<bool>,
+    scan: u64,
+) -> io::Result<Box<dyn Stream + 'a>> {
+    open_as(format, file, cancel, reached, scan, true)
+}
+
+fn open_as<'a>(
+    format: ArchiveFormat,
+    file: &'a dyn ReadAt,
+    cancel: &'a AtomicBool,
+    reached: &'a Cell<bool>,
+    scan: u64,
+    whole: bool,
+) -> io::Result<Box<dyn Stream + 'a>> {
     match format {
         ArchiveFormat::Tar => Ok(Box::new(BufReader::new(FileReader::new(file)))),
-        ArchiveFormat::TarGz => Ok(capped(
-            GzDecoder::new(BufReader::new(FileReader::new(file))),
-            scan,
-            reached,
-            cancel,
-        )),
+        ArchiveFormat::TarGz => {
+            let decoder = GzDecoder::new(BufReader::new(FileReader::new(file)));
+
+            if whole {
+                Ok(capped(GzWhole { decoder }, scan, reached, cancel))
+            } else {
+                Ok(capped(decoder, scan, reached, cancel))
+            }
+        }
         ArchiveFormat::TarXz => Ok(capped(
             XzReader::new_mem_limit(BufReader::new(FileReader::new(file)), true, XZ_MEMORY_KB),
             scan,

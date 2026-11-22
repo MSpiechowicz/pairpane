@@ -175,7 +175,7 @@ describe('TransfersPanel', () => {
 });
 
 describe('TransfersPanel file tools', () => {
-  it('names each kind of job, and says where the parts of a split or a combine go', async () => {
+  it('names each kind of job, and says where a split, a combine, a pack or an add puts its output', async () => {
     const { transfers, send } = await store();
     send(
       { kind: 'added', job: job(1, { kind: 'checksum', label: 'a.iso', to: '/data' }) },
@@ -183,10 +183,15 @@ describe('TransfersPanel file tools', () => {
       { kind: 'added', job: job(3, { kind: 'split', label: 'movie.mkv', to: '/backup' }) },
       { kind: 'added', job: job(4, { kind: 'combine', label: 'movie.mkv.001', to: '/restore' }) },
       { kind: 'added', job: job(5, { kind: 'attributes', label: '3 items', to: '/data' }) },
+      { kind: 'added', job: job(6, { kind: 'pack', label: 'photos', to: '/backup/photos.7z' }) },
+      { kind: 'added', job: job(7, { kind: 'addToArchive', label: 'notes.txt', to: '/backup/old.zip' }) },
     );
     render(TransfersPanel, { transfers, onClose: vi.fn() });
 
-    expect(['Checksum', 'Verify', 'Split', 'Combine', 'Attributes'].map((kind) => screen.getByText(kind))).toHaveLength(5);
+    const kinds = ['Checksum', 'Verify', 'Split', 'Combine', 'Attributes', 'Pack', 'Add to archive'];
+    expect(kinds.map((kind) => screen.getByText(kind))).toHaveLength(7);
+    expect(screen.getByText('→ /backup/photos.7z')).toBeInTheDocument();
+    expect(screen.getByText('→ /backup/old.zip')).toBeInTheDocument();
     expect(screen.getByText('→ /backup')).toBeInTheDocument();
     expect(screen.getByText('→ /restore')).toBeInTheDocument();
     expect(screen.queryByText('→ /data')).not.toBeInTheDocument();
@@ -199,10 +204,11 @@ describe('TransfersPanel file tools', () => {
       { kind: 'added', job: job(2, { kind: 'split', phase: 'splitting', label: 'b' }) },
       { kind: 'added', job: job(3, { kind: 'combine', phase: 'combining', label: 'c' }) },
       { kind: 'added', job: job(4, { kind: 'attributes', phase: 'changing', label: 'd' }) },
+      { kind: 'added', job: job(5, { kind: 'pack', phase: 'packing', label: 'e' }) },
     );
     render(TransfersPanel, { transfers, onClose: vi.fn() });
 
-    for (const text of ['Hashing…', 'Splitting…', 'Combining…', 'Changing…']) {
+    for (const text of ['Hashing…', 'Splitting…', 'Combining…', 'Changing…', 'Packing…']) {
       expect(screen.getByText(text)).toBeInTheDocument();
     }
   });

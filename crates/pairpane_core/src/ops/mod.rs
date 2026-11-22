@@ -71,14 +71,17 @@
 //! # Modules
 //!
 //! `engine` (queue, workers, public API), `job` (one job's shared state), `control` (pause, cancel, answers),
-//! `validate` (what `submit` checks), `volume` (scheduling key), `transfer` (one job from start to end), `plan`
+//! `request` (the request, its task and the refusals), `validate` (what `submit` checks), `volume` (scheduling key), `transfer` (one job from start to end), `plan`
 //! (looking before copying), `identity` (what makes two paths one file), `copy` (folders, files, links), `fast`
 //! (clone, kernel copy, buffered loop), `open` and `meta` (no-follow opens; times and permissions), `conflict`
 //! (existing targets and their questions), `verify` (BLAKE3), `rename` (no-replace rename), `progress` and `rate`
 //! (counters, speed), `report` (error texts), `hooks` (test switches).
 //!
 //! Extracting an archive: `extract` (the job: open, select, walk the source) and `extract_write` (folders, files, the
-//! disk reserve, modes and times). The archive formats themselves are in [`crate::archive`].
+//! disk reserve, modes and times). Packing files into one: `pack` (the job: plan the entries, ask about a taken name, write
+//! a temporary file, put it in place) over `tree` (the no-follow walk it shares with the checksum file). Adding files to an archive: `add` (the job: plan the new entries
+//! against the archive's index, ask about the files it has, write a new archive beside it with [`crate::archive::rewrite`], replace
+//! the old one). The archive formats themselves are in [`crate::archive`].
 //!
 //! The file tools: `task` (the start of each and what they share), `digest` (checksums and the checksum-file
 //! format), `checksum`, `checksum_verify` and `listed` (opening the files it lists), `split`, `combine`, `held` (walking a tree by
@@ -89,6 +92,7 @@
 //! delete) and `trash` (move to the Trash, put back). Each is a plain blocking function; the caller runs it off the
 //! command thread.
 
+mod add;
 mod announce;
 mod attrs;
 mod attrs_apply;
@@ -113,6 +117,7 @@ mod listed;
 mod meta;
 mod open;
 mod origin;
+mod pack;
 mod partial;
 mod plan;
 mod progress;
@@ -120,11 +125,13 @@ mod props;
 mod rate;
 mod rename;
 mod report;
+mod request;
 mod runnable;
 mod split;
 mod task;
 mod transfer;
 mod trash;
+mod tree;
 mod validate;
 mod verify;
 mod volume;
@@ -137,6 +144,14 @@ pub(crate) fn open_listed(base: &std::path::Path, listed: &str) -> std::io::Resu
     listed::open_listed(base, listed)
 }
 
+#[cfg(test)]
+mod add_conflict_tests;
+#[cfg(test)]
+mod add_refusal_tests;
+#[cfg(test)]
+mod add_tests;
+#[cfg(all(test, unix))]
+mod add_unix_tests;
 #[cfg(test)]
 mod announce_tests;
 #[cfg(test)]
@@ -174,9 +189,17 @@ mod move_tests;
 #[cfg(test)]
 mod origin_tests;
 #[cfg(test)]
+mod pack_conflict_tests;
+#[cfg(test)]
+mod pack_tests;
+#[cfg(all(test, unix))]
+mod pack_unix_tests;
+#[cfg(test)]
 mod plan_tests;
 #[cfg(test)]
 mod props_tests;
+#[cfg(test)]
+mod request_tests;
 #[cfg(test)]
 mod split_tests;
 #[cfg(test)]
@@ -193,6 +216,7 @@ pub use items::{ItemFailure, MAX_FOLDER_DEPTH};
 pub(crate) use open::OPEN_REPARSE_POINT;
 pub(crate) use open::create_new;
 pub(crate) use partial::{Partial, run_token};
+pub use request::{AnswerError, PackJob, Refused, Request, Task, UnknownJob};
 pub use trash::{CAN_UNTRASH, Trashed, UntrashFailure};
 pub use validate::name_fits;
 
@@ -200,9 +224,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::model::{
-    AttributeChange, HashAlgorithm, IpcError, IpcErrorCode, ItemProperties, LinkKind, OpKind, OpsEvent,
-};
+use crate::model::{ItemProperties, LinkKind, OpsEvent};
 
 /// Most destination volumes that copy at the same time.
 pub const MAX_WORKERS: usize = 4;
@@ -227,141 +249,6 @@ pub const MIN_PART_SIZE: u64 = 1_024;
 
 /// The most parts a split may make: the numbers of the parts (`.001`) have three digits.
 pub const MAX_PARTS: u64 = 999;
-
-/// What a job does. [`Task::Transfer`] is the copy or move that [`Request::kind`] names; every other task has
-/// its own [`OpKind`] (see [`Task::kind`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Task {
-    /// A copy or a move.
-    Transfer,
-    /// Writes the checksum file `output` (a plain file name) into `from`, for all the items.
-    Checksum { algorithm: HashAlgorithm, output: String },
-    /// Checks the files that the checksum file (the one item) lists, relative to the folder it is in.
-    VerifyChecksum,
-    /// Cuts the file (the one item) into parts of `part_size` bytes ([`MIN_PART_SIZE`] or more) in `to`.
-    Split { part_size: u64 },
-    /// Joins the parts of the file whose first part (`.001`) is the one item, into `to`.
-    Combine,
-    /// Changes permissions and times of the items in place.
-    Attributes(AttributeChange),
-    /// Extracts entries of the archive (the one item, a file of `from`) into `to`: the `entries` (plain names; none means
-    /// everything) of the archive's folder `inner` (`""` is its root, `a/b` a folder), folders with all that is below.
-    Extract {
-        inner: String,
-        entries: Vec<String>,
-        source: ArchiveJob,
-    },
-}
-
-impl Task {
-    /// The kind of job of this task; `None` for [`Task::Transfer`], which is a copy or a move by [`Request::kind`].
-    #[must_use]
-    pub fn kind(&self) -> Option<OpKind> {
-        match self {
-            Self::Transfer => None,
-            Self::Checksum { .. } => Some(OpKind::Checksum),
-            Self::VerifyChecksum => Some(OpKind::VerifyChecksum),
-            Self::Split { .. } => Some(OpKind::Split),
-            Self::Combine => Some(OpKind::Combine),
-            Self::Attributes(_) => Some(OpKind::Attributes),
-            Self::Extract { .. } => Some(OpKind::Extract),
-        }
-    }
-}
-
-/// A job to start. Paths are what the webview sent, already checked for syntax by the caller
-/// (`check_folder` for the folders, `is_plain_name` for every name); the engine resolves them on its worker.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Request {
-    /// Copy or move for a [`Task::Transfer`]; the kind of the task otherwise (`submit` refuses a mismatch).
-    pub kind: OpKind,
-    /// The folder the items are in.
-    pub from: PathBuf,
-    /// The items, as plain names inside `from`. At least 1 and at most [`MAX_NAMES`], without duplicates; exactly 1
-    /// for a verify, a split and a combine.
-    pub names: Vec<String>,
-    /// The folder to put the items into; created when missing. For a task that works in place (checksum, verify,
-    /// attributes) it is `from`.
-    pub to: PathBuf,
-    /// Re-read and hash each copied file before committing it.
-    pub verify: bool,
-    pub task: Task,
-}
-
-impl Request {
-    /// A request for `task`, with the kind the task has, no verification and `to` as the target folder. A
-    /// [`Task::Transfer`] is made a copy; set `kind` to [`OpKind::Move`] for a move.
-    #[must_use]
-    pub fn task(from: PathBuf, names: Vec<String>, to: PathBuf, task: Task) -> Self {
-        Self {
-            kind: task.kind().unwrap_or(OpKind::Copy),
-            from,
-            names,
-            to,
-            verify: false,
-            task,
-        }
-    }
-}
-
-/// Why `submit` did not accept a request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Refused {
-    /// [`MAX_JOBS`] jobs exist already; trying again later may work.
-    Busy,
-    /// The request has no names, more than [`MAX_NAMES`], a name twice, or a name that is not a plain file name.
-    InvalidNames,
-    /// A name is longer than [`MAX_NAME_UNITS`], or the names together take more than [`MAX_NAMES_BYTES`].
-    NamesTooLarge,
-    /// The kind and the task do not belong together, a verify, split or combine has other than one name, a part is
-    /// shorter than [`MIN_PART_SIZE`], or an attribute change is empty, out of range or not for this system.
-    InvalidTask,
-}
-
-/// A job that is not known: it never existed, or it has ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UnknownJob;
-
-/// Why `answer` was not accepted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnswerError {
-    /// The job is not known (see [`UnknownJob`]).
-    UnknownJob,
-    /// The job has no open question with that number: it was answered already, or the number is made up.
-    StaleQuestion,
-}
-
-impl From<Refused> for IpcError {
-    fn from(refused: Refused) -> Self {
-        match refused {
-            Refused::Busy => Self::new(IpcErrorCode::Busy, "too many transfers are running; try again shortly"),
-            Refused::InvalidNames => Self::new(
-                IpcErrorCode::InvalidInput,
-                "choose between 1 and 100000 different items",
-            ),
-            Refused::NamesTooLarge => Self::new(
-                IpcErrorCode::InvalidInput,
-                "an item name, or the names together, are too long",
-            ),
-            Refused::InvalidTask => Self::new(IpcErrorCode::InvalidInput, "this job cannot start with these items"),
-        }
-    }
-}
-
-impl From<UnknownJob> for IpcError {
-    fn from(_: UnknownJob) -> Self {
-        Self::new(IpcErrorCode::NotFound, "that transfer is not running")
-    }
-}
-
-impl From<AnswerError> for IpcError {
-    fn from(error: AnswerError) -> Self {
-        match error {
-            AnswerError::UnknownJob => UnknownJob.into(),
-            AnswerError::StaleQuestion => Self::new(IpcErrorCode::InvalidInput, "that question is no longer open"),
-        }
-    }
-}
 
 /// Renames `from` to `to` inside `folder`, never replacing anything. For the rename shortcut, not a job.
 ///

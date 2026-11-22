@@ -18,6 +18,9 @@ allow = [
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
   "BSD-3-Clause",
+  # zstd-sys (the C libzstd that writes `.tar.zst`): "BSD-3-Clause AND BSD-2-Clause", both permissive and compatible with
+  # the GPL.
+  "BSD-2-Clause",
   "Unicode-3.0",
   "Zlib",
   "MPL-2.0",

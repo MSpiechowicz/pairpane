@@ -15,6 +15,8 @@ import type { MdDocument } from './bindings/MdDocument';
 import type { MenuCommand } from './bindings/MenuCommand';
 import type { OpKind } from './bindings/OpKind';
 import type { OpsEvent } from './bindings/OpsEvent';
+import type { PackFormat } from './bindings/PackFormat';
+import type { PackLevel } from './bindings/PackLevel';
 import type { PaneId } from './bindings/PaneId';
 import type { SavedState } from './bindings/SavedState';
 import type { SearchHit } from './bindings/SearchHit';
@@ -58,6 +60,19 @@ export const commands = {
   ops_start: cmd<{ kind: OpKind; from: string; names: string[]; to: string; verify: boolean }, JobId>(),
   ops_extract: cmd<{ archive: string; dir: string; names: string[]; to: string }, JobId>(),
   ops_task: cmd<{ from: string; names: string[]; task: JobTask }, JobId>(),
+  ops_pack: cmd<
+    {
+      from: string;
+      names: string[];
+      archive: string;
+      format: PackFormat;
+      level: PackLevel;
+      password: string | null;
+      encryptNames: boolean;
+    },
+    JobId
+  >(),
+  ops_add_to_archive: cmd<{ archive: string; dir: string; from: string; names: string[] }, JobId>(),
   ops_control: cmd<{ job: JobId; action: ControlAction }, null>(),
   ops_answer: cmd<{ job: JobId; question: number; answer: Answer; all: boolean }, null>(),
   ops_rename: cmd<{ path: string; from: string; to: string }, null>(),

@@ -19,6 +19,8 @@
     "allow-ops-subscribe",
     "allow-ops-start",
     "allow-ops-extract",
+    "allow-ops-pack",
+    "allow-ops-add-to-archive",
     "allow-ops-control",
     "allow-ops-answer",
     "allow-ops-rename",

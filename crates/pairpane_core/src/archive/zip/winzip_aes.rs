@@ -3,7 +3,7 @@
 //! verifier; the cipher is AES in CTR mode with a little-endian counter that starts at 1; the tag is HMAC-SHA1 of the
 //! ciphertext, cut to 10 bytes.
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 
 use aes::{Aes128, Aes192, Aes256};
 use ctr::Ctr128LE;
@@ -92,23 +92,6 @@ impl Keys {
     pub fn accepts(&self, stored: [u8; VERIFIER]) -> bool {
         self.verifier == stored
     }
-
-    /// The verifier these keys write (used by the tests).
-    #[cfg(test)]
-    pub fn verifier(&self) -> [u8; VERIFIER] {
-        self.verifier
-    }
-
-    /// Encrypts `bytes` in place and returns the tag to put after the last of them (used by the tests, which build
-    /// encrypted zips); `bytes` is the whole ciphertext.
-    #[cfg(test)]
-    pub fn seal(mut self, bytes: &mut [u8]) -> [u8; TAG] {
-        self.cipher.apply(bytes);
-        self.mac.update(bytes);
-        let full = self.mac.finalize().into_bytes();
-
-        full[..TAG].try_into().expect("a tag")
-    }
 }
 
 /// Decrypts `length` bytes of ciphertext from `inner`, and checks the tag that follows them once they are all read.
@@ -187,5 +170,69 @@ impl<R: Read> Opening<R> {
         self.checked = true;
 
         Ok(())
+    }
+}
+
+/// The bytes of ciphertext made at a time by [`Sealing`].
+const SEAL_CHUNK: usize = 8192;
+
+/// Encrypts what is written to it and writes `salt | verifier | ciphertext | tag` to `inner`: the data of one entry (the
+/// reverse of [`Opening`]). [`Sealing::finish`] writes the tag and must be called once all the data is written.
+pub struct Sealing<W: Write> {
+    inner: W,
+    cipher: Cipher,
+    mac: Hmac<Sha1>,
+    chunk: Vec<u8>,
+}
+
+impl<W: Write> Sealing<W> {
+    /// Starts an AES-256 entry with a random salt, which is written to `inner` with the verifier of `password`. Fails
+    /// when the system has no random numbers to give (the entry is not written with a salt that is not random).
+    pub fn start(inner: W, password: &Password) -> io::Result<Self> {
+        let key = 32;
+        let mut salt = vec![0; salt_length(key)];
+        getrandom::fill(&mut salt)
+            .map_err(|_| refusal(io::ErrorKind::Other, "the system has no random numbers to encrypt with"))?;
+
+        Self::begin(inner, &salt, Keys::derive(password, &salt, key))
+    }
+
+    /// Starts an entry with the given `salt` and the `keys` derived from it (the tests make theirs fixed).
+    pub fn begin(mut inner: W, salt: &[u8], keys: Keys) -> io::Result<Self> {
+        inner.write_all(salt)?;
+        inner.write_all(&keys.verifier)?;
+
+        Ok(Self {
+            inner,
+            cipher: keys.cipher,
+            mac: keys.mac,
+            chunk: Vec::with_capacity(SEAL_CHUNK),
+        })
+    }
+
+    /// Writes the tag after the last byte and gives `inner` back.
+    pub fn finish(mut self) -> io::Result<W> {
+        let tag = self.mac.finalize().into_bytes();
+        self.inner.write_all(&tag[..TAG])?;
+
+        Ok(self.inner)
+    }
+}
+
+impl<W: Write> Write for Sealing<W> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        for part in buffer.chunks(SEAL_CHUNK) {
+            self.chunk.clear();
+            self.chunk.extend_from_slice(part);
+            self.cipher.apply(&mut self.chunk);
+            self.mac.update(&self.chunk);
+            self.inner.write_all(&self.chunk)?;
+        }
+
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
     }
 }

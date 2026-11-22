@@ -26,6 +26,7 @@ use super::open;
 use super::report::refusal;
 
 /// One entry of a folder, as the walk saw it. A link is a link whatever it points at.
+#[derive(Clone)]
 pub(super) struct Node {
     pub(super) name: OsString,
     pub(super) kind: Kind,
@@ -33,6 +34,8 @@ pub(super) struct Node {
     pub(super) size: u64,
     /// The Unix permission bits (`0o755`, with setuid, setgid and sticky); 0 on Windows.
     pub(super) mode: u32,
+    /// The last modification in milliseconds since the Unix epoch (negative before it), when the filesystem says.
+    pub(super) modified: Option<i64>,
     /// The filesystem it is on (Unix).
     pub(super) device: Option<u64>,
     /// Device and inode (Unix): what the entry is, to compare with what a handle opened.
@@ -100,6 +103,7 @@ impl Node {
             kind,
             size: u64::try_from(stat.st_size).unwrap_or(0),
             mode: stat.st_mode as u32 & 0o7777,
+            modified: Some((stat.st_mtime as i64).saturating_mul(1000) + stat.st_mtime_nsec as i64 / 1_000_000),
             device: Some(device),
             id: Some((device, inode)),
         }
@@ -201,12 +205,26 @@ impl Held {
     }
 }
 
+/// Milliseconds since the Unix epoch (negative before it).
+#[cfg(windows)]
+fn millis(time: std::time::SystemTime) -> Option<i64> {
+    use std::time::UNIX_EPOCH;
+
+    let (sign, span) = match time.duration_since(UNIX_EPOCH) {
+        Ok(after) => (1, after),
+        Err(before) => (-1, before.duration()),
+    };
+
+    i64::try_from(span.as_millis()).ok().map(|millis| sign * millis)
+}
+
 #[cfg(windows)]
 impl From<super::plan::Child> for Node {
     fn from(child: super::plan::Child) -> Self {
         Self {
             size: child.meta.len(),
             mode: 0,
+            modified: child.meta.modified().ok().and_then(millis),
             device: crate::listing::platform::device(&child.meta),
             name: child.name,
             kind: child.kind,

@@ -16,6 +16,7 @@
     { action: 'verifyChecksum', label: 'Verify checksum file' },
     { action: 'split', label: 'Split file…' },
     { action: 'combine', label: 'Combine files…' },
+    { action: 'pack', label: 'Pack…', keys: 'Alt+F5' },
     { action: 'extract', label: 'Extract…', keys: 'Alt+F9' },
   ];
 

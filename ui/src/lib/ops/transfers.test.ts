@@ -99,6 +99,19 @@ describe('Transfers', () => {
   });
 
   describe('when a job ends', () => {
+    it('tells the owner which job, and how it ended, once its row shows the result; an unknown job is not told', async () => {
+      const backend = opsBackend();
+      const heard: unknown[] = [];
+      const transfers = new Transfers(backend.ipc, (ended, result) =>
+        heard.push({ id: ended.id, kind: ended.kind, to: ended.to, outcome: result.outcome, shown: transfers.jobs[0].result !== undefined }),
+      );
+      await transfers.subscribe();
+
+      backend.send({ kind: 'added', job: job(1, { kind: 'addToArchive', to: '/work/a.zip' }) }, done(1), done(7));
+
+      expect(heard).toEqual([{ id: 1, kind: 'addToArchive', to: '/work/a.zip', outcome: { kind: 'done' }, shown: true }]);
+    });
+
     it('a clean one stays for a while as finished, then fades and goes', async () => {
       const { transfers, send } = await subscribed();
       send({ kind: 'added', job: job(1) }, done(1));
