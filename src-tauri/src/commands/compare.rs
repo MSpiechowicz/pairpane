@@ -17,6 +17,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use pairpane_core::archive::Fingerprint;
 use pairpane_core::compare::{self, Side};
 use pairpane_core::model::{
     CompareEvent, CompareId, CompareOptions, CompareRoot, IpcError, IpcErrorCode, JobId, SyncItem, SyncRemoval,
@@ -68,11 +69,12 @@ impl Root {
     }
 }
 
-/// One scan: its stop flag, and whether its walk has returned.
+/// One scan: its stop flag, whether its walk has returned, and the state of the archive it read (when a side is one).
 #[derive(Debug, Default)]
 struct Scan {
     cancel: AtomicBool,
     finished: AtomicBool,
+    archive: Mutex<Option<Fingerprint>>,
 }
 
 impl Scan {
@@ -131,6 +133,7 @@ impl Scan {
             Root::Folder(path) => Ok(Side::Folder(path)),
             Root::Archive { target, dir } => {
                 let opened = archives.open(&target).map_err(|error| archive_error(&error))?;
+                *self.archive.lock().unwrap_or_else(PoisonError::into_inner) = Some(opened.fingerprint.clone());
                 let index = archives
                     .index(&target, &opened, &self.cancel, None)
                     .map_err(|error| archives.report(&target, &error))?;
@@ -217,6 +220,14 @@ impl Comparer {
         Ok(())
     }
 
+    /// The state of the archive the scan `id` read; `None` when it read none (yet). An unknown id is `notFound`.
+    pub(super) fn archive_read(&self, id: CompareId) -> CommandResult<Option<Fingerprint>> {
+        let scan = self.get(id)?;
+        let read = scan.archive.lock().unwrap_or_else(PoisonError::into_inner).clone();
+
+        Ok(read)
+    }
+
     fn get(&self, id: CompareId) -> CommandResult<Arc<Scan>> {
         self.lock().get(&id).cloned().ok_or_else(unknown)
     }
@@ -300,15 +311,29 @@ pub async fn compare_forget(comparer: State<'_, Comparer>, id: CompareId) -> Com
 /// Queues the one job that copies `items` between `left` and `right`, each the way its direction says, then removes
 /// `removals` (a mirror: to the Trash, or for good when `permanent`), and returns its id at once. An item that is not as the
 /// scan saw it by then is skipped and counted. An archive may only be copied from, and only one side may be one.
+///
+/// `scan` is the comparison the items come from: a job that writes to an archive side is refused unless the archive is
+/// still the file that comparison read.
 #[tauri::command]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the arguments of the command, as the page names them"
+)]
 pub async fn ops_sync(
     ops: State<'_, Ops>,
     archives: State<'_, Archives>,
+    comparer: State<'_, Comparer>,
+    scan: CompareId,
     left: CompareRoot,
     right: CompareRoot,
     items: Vec<SyncItem>,
     removals: Vec<SyncRemoval>,
     permanent: bool,
 ) -> CommandResult<JobId> {
-    ops.sync(&archives, (left, right), items, (removals, permanent)).await
+    // A comparison that is no longer kept read nothing the job can rely on: only a job that writes to an archive needs it,
+    // and that one is then refused.
+    let read = comparer.archive_read(scan).unwrap_or(None);
+
+    ops.sync(&archives, (left, right), items, (removals, permanent), read)
+        .await
 }

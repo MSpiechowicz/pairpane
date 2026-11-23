@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { IpcFailure } from '$lib/ipc/transport';
 
 import { compareBackend, facts, finished, folder, MODIFIED, row, rows } from '../../../tests/compare';
-import { actions, ARCHIVE, paths, planned, ROOTS, setup, started } from '../../../tests/syncer';
+import { actions, ARCHIVE, paths, planned, RAR, ROOTS, setup, started } from '../../../tests/syncer';
 import { Syncer } from './syncer.svelte';
 
 describe('Syncer scan', () => {
@@ -224,8 +224,17 @@ describe('Syncer actions', () => {
     expect(entry.action).toBe('skip');
   });
 
-  it('cannot point into an archive: the default is then to skip', async () => {
+  it('points into an archive that is written, as into a folder', async () => {
     const s = setup({}, { left: folder('/left'), right: ARCHIVE });
+    const scan = await started(s);
+    scan.emit(rows(row('lo', 'leftOnly', facts(), null), row('ro', 'rightOnly', null, facts()), row('ln', 'leftNewer')));
+
+    expect(actions(s.syncer)).toEqual(['toRight', 'toLeft', 'toRight']);
+    expect(s.syncer.choose(s.syncer.at(1)!, 'remove')).toBe(true);
+  });
+
+  it('cannot point into an archive that is only read: the default is then to skip', async () => {
+    const s = setup({}, { left: folder('/left'), right: RAR });
     const scan = await started(s);
     scan.emit(rows(row('lo', 'leftOnly', facts(), null), row('ro', 'rightOnly', null, facts()), row('ln', 'leftNewer')));
 
@@ -317,6 +326,7 @@ describe('Syncer apply', () => {
 
     expect(s.calls('ops_sync')).toEqual([
       {
+        scan: 1,
         ...ROOTS,
         items: [
           { path: 'new.txt', direction: 'toRight', source: { kind: 'file', size: 100, modified: MODIFIED }, target: null },

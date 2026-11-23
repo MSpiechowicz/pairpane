@@ -143,6 +143,7 @@ mod runnable;
 mod split;
 mod sync;
 mod sync_archive;
+mod sync_into;
 mod sync_remove;
 mod sync_terms;
 mod sync_unlink;
@@ -247,6 +248,8 @@ mod request_tests;
 mod split_tests;
 #[cfg(test)]
 mod sync_archive_tests;
+#[cfg(test)]
+mod sync_into_tests;
 #[cfg(test)]
 mod sync_race_tests;
 #[cfg(test)]

@@ -60,10 +60,11 @@ pub enum Task {
     /// Copies the items between two folders that are compared, each the way its [`SyncPlan`] says, then removes the items
     /// of `removals` (a mirror). The names are paths below the two roots (see [`super::is_item_path`], none inside
     /// another): first one for each plan, in order, then one for each removal. An item that is not as the scan saw it is
-    /// skipped, only a folder can be copied onto or removed from, and a removal goes to the Trash unless `permanent`.
+    /// skipped, and a removal from a folder goes to the Trash unless `permanent`.
     ///
-    /// Where the folders are: for two folders `from` is the left and `to` the right one. When one side is an archive
-    /// (the other is then written to), `from` is the folder that holds the archive file and `to` the other folder.
+    /// Where the folders are: for two folders `from` is the left and `to` the right one. When one side is an archive, `from`
+    /// is the folder that holds the archive file and `to` the other folder. An archive of a format that is written takes
+    /// copies and removals too, all in one rewrite of it (see `sync_into`).
     Sync {
         left: SyncRoot,
         right: SyncRoot,
@@ -79,7 +80,6 @@ pub enum SyncRoot {
     /// A folder on disk (see [`Task::Sync`] for which one).
     Folder,
     /// The folder `inner` (`""` is the root, `a/b` a folder) of the archive `name`, a file of the request's `from`.
-    /// Only ever copied from.
     Archive {
         name: String,
         inner: String,

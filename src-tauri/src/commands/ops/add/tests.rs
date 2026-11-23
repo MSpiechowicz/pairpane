@@ -202,7 +202,7 @@ fn the_password_given_earlier_goes_into_the_job_with_the_index_and_the_state_of_
     archives.remember(PathBuf::from(&archive), Password::new("pw".to_owned()));
     let target = Target::parse(archive).expect("valid");
 
-    let source = prepare(&archives, &target, "").expect("no password is missing");
+    let source = prepare_rewrite(&archives, &target, "").expect("no password is missing");
 
     assert_eq!(source.password.as_deref().map(Password::as_str), Some("pw"));
     assert!(source.index.is_some());
@@ -214,7 +214,7 @@ fn a_tar_without_a_kept_index_is_listed_now_because_the_checks_need_it() {
     let (_folder, archive) = archive_in_folder("pack.tar", &sample_tar());
     let target = Target::parse(archive).expect("valid");
 
-    let source = prepare(&Archives::default(), &target, "docs").expect("prepared");
+    let source = prepare_rewrite(&Archives::default(), &target, "docs").expect("prepared");
 
     assert!(source.index.is_some_and(|index| index.has_dir("docs")));
     assert!(source.password.is_none());

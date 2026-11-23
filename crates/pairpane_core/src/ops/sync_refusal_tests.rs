@@ -83,15 +83,16 @@ fn a_plan_that_a_copy_cannot_carry_out_is_refused_when_the_job_is_submitted() {
 }
 
 #[test]
-fn a_copy_into_an_archive_and_two_archives_are_refused_when_the_job_is_submitted() {
+fn a_copy_into_an_archive_that_is_not_written_and_two_archives_are_refused_when_the_job_is_submitted() {
     let pair = Pair::new();
     file(&pair.left().join("a.txt"), b"a", 100);
     let good = plan(&pair.left(), &pair.right(), "a.txt", ToRight);
-    let archive = SyncRoot::Archive {
-        name: "x.zip".to_owned(),
+    let named = |name: &str| SyncRoot::Archive {
+        name: name.to_owned(),
         inner: String::new(),
         source: ArchiveJob::default(),
     };
+    let (archive, rar, gz) = (named("x.zip"), named("x.rar"), named("x.gz"));
     let engine = Rig::new().engine;
     let submit = |left: &SyncRoot, right: &SyncRoot, plan: SyncPlan| {
         engine.submit(task(
@@ -108,13 +109,15 @@ fn a_copy_into_an_archive_and_two_archives_are_refused_when_the_job_is_submitted
         ))
     };
 
-    let into_archive = submit(&SyncRoot::Folder, &archive, good);
-    let both = submit(&archive, &archive, good);
-    let from_archive = submit(&archive, &SyncRoot::Folder, good);
-
-    assert_eq!(into_archive.unwrap_err(), Refused::InvalidTask);
-    assert_eq!(both.unwrap_err(), Refused::InvalidTask);
-    assert!(from_archive.is_ok());
+    assert_eq!(submit(&SyncRoot::Folder, &rar, good).unwrap_err(), Refused::InvalidTask);
+    assert_eq!(submit(&SyncRoot::Folder, &gz, good).unwrap_err(), Refused::InvalidTask);
+    assert_eq!(submit(&archive, &archive, good).unwrap_err(), Refused::InvalidTask);
+    // An archive is written only with the index and the state the caller read it in.
+    assert_eq!(
+        submit(&SyncRoot::Folder, &archive, good).unwrap_err(),
+        Refused::InvalidTask
+    );
+    assert!(submit(&rar, &SyncRoot::Folder, good).is_ok(), "a rar is only read");
 }
 
 #[cfg(windows)]

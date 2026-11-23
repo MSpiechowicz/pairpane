@@ -106,7 +106,7 @@ export const commands = {
   ops_rename: cmd<{ path: string; from: string; to: string }, null>(),
   rename_preview: cmd<{ path: string; names: string[]; rule: RenameRule }, RenamePreview>(),
   ops_rename_undo: cmd<{ job: JobId }, JobId>(),
-  ops_sync: cmd<{ left: CompareRoot; right: CompareRoot; items: SyncItem[]; removals: SyncRemoval[]; permanent: boolean }, JobId>(),
+  ops_sync: cmd<{ scan: CompareId; left: CompareRoot; right: CompareRoot; items: SyncItem[]; removals: SyncRemoval[]; permanent: boolean }, JobId>(),
   ops_trash: cmd<{ path: string; names: string[]; within?: ResultFolder }, TrashOutcome>(),
   ops_untrash: cmd<{ token: number }, number>(),
   ops_delete: cmd<{ path: string; names: string[]; within?: ResultFolder }, null>(),

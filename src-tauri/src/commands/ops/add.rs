@@ -58,7 +58,7 @@ impl Ops {
         let shared = archives.clone();
         let (folder, name, path) = (target.folder.clone(), target.name.clone(), target.path.clone());
         let inner = dir.clone();
-        let source = blocking(permit, move || prepare(&shared, &target, &inner))
+        let source = blocking(permit, move || prepare_rewrite(&shared, &target, &inner))
             .await?
             .map_err(failed)?;
 
@@ -78,7 +78,7 @@ impl Ops {
 }
 
 /// Refuses an archive of a format that is not written, by its extension (the check needs no disk).
-fn check_writable(target: &Target) -> CommandResult<()> {
+pub(super) fn check_writable(target: &Target) -> CommandResult<()> {
     match archive::by_extension(&target.name) {
         None | Some(ArchiveFormat::Rar | ArchiveFormat::Gz) => Err(CommandError::new(
             IpcErrorCode::Unsupported,
@@ -90,7 +90,7 @@ fn check_writable(target: &Target) -> CommandResult<()> {
 
 /// What the job brings of the archive, after the checks that need its index (see the module documentation). Opens the
 /// archive, so it runs on a blocking thread.
-fn prepare(archives: &Archives, target: &Target, dir: &str) -> Result<ArchiveJob, IpcError> {
+pub(super) fn prepare_rewrite(archives: &Archives, target: &Target, dir: &str) -> Result<ArchiveJob, IpcError> {
     let source = load(archives, target, true)?;
     let Some(index) = &source.index else {
         return Err(IpcError::new(IpcErrorCode::Internal, "the archive could not be listed"));

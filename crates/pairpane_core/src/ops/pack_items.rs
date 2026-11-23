@@ -19,12 +19,12 @@ use super::transfer::{Run, Stop};
 use super::tree::{Spot, Trail};
 
 /// An item found below the root: the folder it is in, held, the entry, and the folders on the way.
-struct Found {
-    parent: Arc<Held>,
-    node: Node,
-    trail: Trail,
+pub(super) struct Found {
+    pub(super) parent: Arc<Held>,
+    pub(super) node: Node,
+    pub(super) trail: Trail,
     /// How many folders the item is below the root.
-    depth: usize,
+    pub(super) depth: usize,
 }
 
 impl Run<'_> {
@@ -33,7 +33,7 @@ impl Run<'_> {
     /// # Errors
     ///
     /// Fails when a step is gone, is not a folder (a link is not one), or is not the folder that was seen.
-    fn find(&self, root: &Arc<Held>, rel: &str) -> io::Result<Found> {
+    pub(super) fn find(&self, root: &Arc<Held>, rel: &str) -> io::Result<Found> {
         let mut parent = Arc::clone(root);
         let mut trail = Trail::default();
         let (mut start, mut depth) = (0, 0);

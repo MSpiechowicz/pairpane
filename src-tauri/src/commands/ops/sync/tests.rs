@@ -9,6 +9,7 @@ use pairpane_core::model::{EntryKind, IpcErrorCode, OpKind, OpsEvent, Outcome, P
 use tauri::async_runtime::block_on;
 
 use super::*;
+use crate::commands::archives::Target;
 use crate::commands::archives::fixtures::{archive_in_folder, encrypted, item, tar_of, zip_of};
 use crate::commands::compare::tests::{archive, folder};
 use crate::commands::ops::tests::{received, running, wait_for_end};
@@ -62,7 +63,19 @@ fn mirror(
     items: Vec<SyncItem>,
     removals: Vec<SyncRemoval>,
 ) -> CommandResult<JobId> {
-    block_on(ops.sync(&Archives::default(), (left, right), items, (removals, true)))
+    let read = [&left, &right].into_iter().find_map(|root| match root {
+        CompareRoot::Archive { archive, .. } => Some(read_of(archive)),
+        CompareRoot::Folder { .. } => None,
+    });
+
+    block_on(ops.sync(&Archives::default(), (left, right), items, (removals, true), read))
+}
+
+/// The state of the archive at `path` now, as a comparison that read it keeps it.
+fn read_of(path: &str) -> Fingerprint {
+    let target = Target::parse(path.to_owned()).expect("an archive path");
+
+    Archives::default().open(&target).expect("opened").fingerprint
 }
 
 fn removal_of(path: &str, side: PaneId, seen: SyncFacts) -> SyncRemoval {
@@ -170,16 +183,43 @@ fn an_archive_is_copied_from_on_either_side() {
     );
 }
 
+/// Whether the tar `bytes` holds a file named `name` (its name is in a header, plain).
+fn tar_names(bytes: &[u8], name: &str) -> bool {
+    bytes.windows(name.len()).any(|window| window == name.as_bytes())
+}
+
 #[test]
-fn an_archive_is_never_copied_into_and_two_archives_are_refused() {
-    let bytes = tar_of(&[item("readme.txt", b"hello")]);
+fn a_tar_is_copied_into_and_removed_from_in_one_job_and_a_rar_or_two_archives_are_refused() {
+    let bytes = tar_of(&[item("readme.txt", b"hello"), item("old.txt", b"older")]);
     let (_folder, archive_path) = archive_in_folder("pack.tar", &bytes);
     let tar = || archive(Path::new(&archive_path), "");
     let (source, source_path) = folder_with(&[("a.txt", b"alpha")]);
-    let (ops, _, _events) = running();
+    let (ops, _, events) = running();
     let item = to_right("a.txt", facts_of(&source.path().join("a.txt")));
 
-    refused_as_invalid(between(&ops, folder(&source_path), tar(), vec![item.clone()]));
+    let id = mirror(
+        &ops,
+        (folder(&source_path), tar()),
+        vec![item.clone()],
+        vec![removal_of("old.txt", PaneId::Right, entry_of(5))],
+    )
+    .expect("accepted");
+
+    assert_eq!(wait_for_end(&events), Outcome::Done);
+    assert!(was_added_as_sync(&events, id));
+    let written = fs::read(&archive_path).expect("the archive");
+    assert!(tar_names(&written, "a.txt") && tar_names(&written, "alpha"));
+    assert!(tar_names(&written, "readme.txt"));
+    assert!(!tar_names(&written, "old.txt"), "removed from the archive");
+
+    let (_other, rar_path) = archive_in_folder("pack.rar", b"Rar!");
+    let unsupported = between(
+        &ops,
+        folder(&source_path),
+        archive(Path::new(&rar_path), ""),
+        vec![item.clone()],
+    );
+    assert_eq!(unsupported.expect_err("refused").code(), IpcErrorCode::Unsupported);
     refused_as_invalid(between(&ops, tar(), tar(), vec![item]));
 }
 
@@ -246,20 +286,13 @@ fn a_mirror_copies_and_removes_what_only_the_target_has_in_one_job() {
 }
 
 #[test]
-fn removals_alone_run_and_an_archive_is_never_removed_from() {
+fn removals_alone_beside_an_archive_read_nothing_of_it() {
     let bytes = tar_of(&[item("readme.txt", b"hello")]);
     let (_folder, archive_path) = archive_in_folder("pack.tar", &bytes);
     let tar = || archive(Path::new(&archive_path), "");
     let (right, right_path) = folder_with(&[("extra.txt", b"extra")]);
     let (ops, _, events) = running();
     let extra = facts_of(&right.path().join("extra.txt"));
-
-    refused_as_invalid(mirror(
-        &ops,
-        (tar(), folder(&right_path)),
-        Vec::new(),
-        vec![removal_of("readme.txt", PaneId::Left, entry_of(5))],
-    ));
 
     // Only removals, on the folder side of an archive: nothing of the archive is read.
     mirror(
@@ -272,4 +305,36 @@ fn removals_alone_run_and_an_archive_is_never_removed_from() {
 
     assert_eq!(wait_for_end(&events), Outcome::Done);
     assert!(!right.path().join("extra.txt").exists());
+}
+
+#[test]
+fn an_archive_changed_since_the_comparison_is_never_written() {
+    let bytes = tar_of(&[item("readme.txt", b"hello")]);
+    let (_folder, archive_path) = archive_in_folder("pack.tar", &bytes);
+    let compared = read_of(&archive_path);
+    let changed = tar_of(&[item("readme.txt", b"hello"), item("theirs.txt", b"someone else's")]);
+    fs::write(&archive_path, &changed).expect("rewritten by another program");
+    let (source, source_path) = folder_with(&[("a.txt", b"alpha")]);
+    let (ops, _, _events) = running();
+    let item = to_right("a.txt", facts_of(&source.path().join("a.txt")));
+    let tar = archive(Path::new(&archive_path), "");
+
+    let stale = block_on(ops.sync(
+        &Archives::default(),
+        (folder(&source_path), tar.clone()),
+        vec![item.clone()],
+        (Vec::new(), false),
+        Some(compared),
+    ));
+    let unread = block_on(ops.sync(
+        &Archives::default(),
+        (folder(&source_path), tar),
+        vec![item],
+        (Vec::new(), false),
+        None,
+    ));
+
+    refused_as_invalid(stale);
+    refused_as_invalid(unread);
+    assert_eq!(fs::read(&archive_path).expect("the archive"), changed);
 }

@@ -4,6 +4,8 @@ import { Syncer } from '../src/lib/compare/syncer.svelte';
 
 export const ROOTS = { left: folder('/left'), right: folder('/right') };
 export const ARCHIVE = { kind: 'archive', archive: '/right/a.zip', dir: '' } as const;
+/** An archive that is only read: it is only copied from. */
+export const RAR = { kind: 'archive', archive: '/right/a.rar', dir: '' } as const;
 
 /** A Syncer open on `roots`, over a fake backend that answers with `answers`. */
 export function setup(answers: Parameters<typeof compareBackend>[0] = {}, roots: Parameters<Syncer['show']>[0] = ROOTS) {

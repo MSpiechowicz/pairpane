@@ -5,6 +5,7 @@ import type { CompareStatus } from '$lib/ipc/bindings/CompareStatus';
 import type { SyncItem } from '$lib/ipc/bindings/SyncItem';
 import type { SyncRemoval } from '$lib/ipc/bindings/SyncRemoval';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
+import { isWritableArchive } from '$lib/panes/archive';
 import { parseMask } from '$lib/panes/mask';
 
 import {
@@ -91,7 +92,7 @@ export class Syncer {
   #rows: SyncRow[] = [];
   #revision = $state(0);
   #counts = noCounts();
-  #archives: Archives = { left: false, right: false };
+  #archives: Archives = { left: false, right: false, leftReadOnly: false, rightReadOnly: false };
   /** The options the rows on the table were scanned with; `undefined` before the first scan. */
   #scanned = $state.raw<ScanOptions | undefined>();
   #id: CompareId | undefined;
@@ -254,7 +255,13 @@ export class Syncer {
       this.#clear();
       this.roots = roots;
       this.hidden = hidden;
-      this.#archives = { left: roots.left.kind === 'archive', right: roots.right.kind === 'archive' };
+      const readOnly = (root: CompareRoot) => root.kind === 'archive' && !isWritableArchive(root.archive);
+      this.#archives = {
+        left: roots.left.kind === 'archive',
+        right: roots.right.kind === 'archive',
+        leftReadOnly: readOnly(roots.left),
+        rightReadOnly: readOnly(roots.right),
+      };
       this.content = this.content && this.contentAllowed;
     }
   }
@@ -402,8 +409,14 @@ export class Syncer {
     const roots = this.roots;
     const items = this.items;
     const removals = this.removals;
+    // The scan the rows come from: a job that writes to an archive needs it to be the archive that scan read.
+    const scan = this.#id;
     if (roots !== undefined && items.length + removals.length > 0) {
-      await this.#ipc.invoke('ops_sync', { left: roots.left, right: roots.right, items, removals, permanent: this.permanent });
+      if (scan === undefined) {
+        throw new IpcFailure({ code: 'invalidInput', message: 'The comparison is not ready yet: try again.' });
+      }
+
+      await this.#ipc.invoke('ops_sync', { scan, left: roots.left, right: roots.right, items, removals, permanent: this.permanent });
     }
   }
 
