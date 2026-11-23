@@ -1,3 +1,10 @@
+# [0.24.0](https://github.com/MSpiechowicz/pairpane/compare/v0.23.0...v0.24.0) (2026-11-23)
+
+
+### Features
+
+* **diff:** compare files inside archives by content (#49) ([3571bc9](https://github.com/MSpiechowicz/pairpane/commit/3571bc9dca95677371ca1945ae097f214c2d2973)), closes [#43](https://github.com/MSpiechowicz/pairpane/issues/43)
+
 # [0.23.0](https://github.com/MSpiechowicz/pairpane/compare/v0.22.0...v0.23.0) (2026-11-23)
 
 
