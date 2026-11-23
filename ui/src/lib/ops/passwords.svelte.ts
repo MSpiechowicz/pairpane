@@ -3,7 +3,13 @@ import { IpcFailure, type InvokeOptions, type Transport } from '$lib/ipc/transpo
 import { archiveName } from '$lib/panes/archive';
 
 /** What the commands that read inside an archive, or rewrite one, ask for; the others never need its password. */
-const GUARDED: ReadonlySet<string> = new Set<CommandName>(['archive_open', 'ops_extract', 'archive_view_open', 'ops_add_to_archive']);
+const GUARDED: ReadonlySet<string> = new Set<CommandName>([
+  'archive_open',
+  'ops_extract',
+  'archive_view_open',
+  'archive_edit_open',
+  'ops_add_to_archive',
+]);
 
 /** The password the dialog asks for: whose it is, why it is asked, and why the last one was not taken. */
 export interface Prompt {

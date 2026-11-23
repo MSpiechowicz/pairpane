@@ -1,4 +1,5 @@
-//! `archive_view_open`: an entry of an archive opened in the viewer.
+//! `archive_view_open`: an entry of an archive opened in the viewer; and `archive_edit_open`: one read as text for a
+//! comparison (Shift+F2), into memory only, at most what the editor takes, and read-only.
 //!
 //! The viewer reads a file at offsets, so the entry is extracted first, into a file of a private temporary folder
 //! (`pairpane-view-<random>` in the system's temporary folder, mode 0700 on Unix, the file created new with mode 0600),
@@ -17,7 +18,7 @@ use pairpane_core::edit::{self, MAX_EDIT};
 use pairpane_core::listing::platform;
 use pairpane_core::model::{EditOpened, IpcError, IpcErrorCode, ViewOpened};
 use pairpane_core::ops::name_fits;
-use pairpane_core::view::{self as files, Opened, refusal};
+use pairpane_core::view::{self as files, Opened, is_known_encoding, refusal};
 use tauri::State;
 
 use super::Viewer;
@@ -77,6 +78,13 @@ async fn edit_entry(
     most: u64,
 ) -> CommandResult<EditOpened> {
     let target = checked(archive, &dir, &name)?;
+    // An encoding that is not known is refused before anything is read, as `edit_open` does.
+    if encoding.as_deref().is_some_and(|label| !is_known_encoding(label)) {
+        return Err(CommandError::new(
+            IpcErrorCode::InvalidInput,
+            "the encoding is not known",
+        ));
+    }
     let permit = archives.begin()?;
     let shared = archives.clone();
 
@@ -239,7 +247,7 @@ fn read_entry(
     let mut bytes = Vec::new();
     extract(archives, target, &found, &mut |reader| {
         bytes.clear();
-        reader.take(most + 1).read_to_end(&mut bytes).map(drop)
+        read_capped(reader, &mut bytes, most)
     })?;
 
     Ok((bytes.len() as u64 <= most).then_some(bytes))
@@ -270,6 +278,25 @@ fn copy_capped(reader: &mut dyn Read, file: &mut File) -> io::Result<()> {
         }
         file.write_all(&buffer[..count])?;
     }
+}
+
+/// Reads what `reader` yields into `bytes`, at most `most` bytes and one more (which tells there was more). A read loop of
+/// its own, as [`copy_capped`] is: `read_to_end` retries an `Interrupted` read, which is how a raised stop flag is told,
+/// and would never stop.
+fn read_capped(reader: &mut dyn Read, bytes: &mut Vec<u8>, most: u64) -> io::Result<()> {
+    let mut buffer = vec![0_u8; 64 * 1024];
+    let limit = usize::try_from(most).unwrap_or(usize::MAX).saturating_add(1);
+
+    while bytes.len() < limit {
+        let want = buffer.len().min(limit - bytes.len());
+        let count = reader.read(&mut buffer[..want])?;
+        if count == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..count]);
+    }
+
+    Ok(())
 }
 
 fn not_a_file(folder: bool) -> IpcError {

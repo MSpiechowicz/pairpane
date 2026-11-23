@@ -175,7 +175,8 @@ export class EditSession {
 
   /** Writes the text. `force` saves over a file that changed (or went) since it was read. */
   async save(force: boolean): Promise<SaveResult> {
-    if (this.status !== 'ready' || this.readOnly || this.unavailable || this.saving) {
+    // An entry of an archive is never written, whatever it says: the archive is not a folder.
+    if (this.status !== 'ready' || this.readOnly || this.inside !== undefined || this.unavailable || this.saving) {
       return 'failed';
     }
 

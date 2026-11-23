@@ -21,7 +21,7 @@ function world(good = 'pw') {
       return taken;
     }
 
-    if (name === 'ops_extract' || name === 'ops_add_to_archive' || name === 'archive_open' || name === 'archive_view_open') {
+    if (['ops_extract', 'ops_add_to_archive', 'archive_open', 'archive_view_open', 'archive_edit_open'].includes(name)) {
       if (!taken) {
         throw required();
       }
@@ -128,6 +128,17 @@ describe('Passwords', () => {
     expect(calls('archive_password')).toHaveLength(1);
     expect(calls('ops_extract')).toHaveLength(2);
     expect(calls('archive_view_open')).toHaveLength(2);
+  });
+
+  it('asks for the password of an entry read as text for a comparison, and reads it again', async () => {
+    const { ipc, passwords, calls } = world();
+    const read = ipc.invoke('archive_edit_open', { archive: '/a/x.zip', dir: '', name: 'f', encoding: null });
+    await vi.waitFor(() => expect(passwords.prompt?.archive).toBe('/a/x.zip'));
+
+    await passwords.submit('pw');
+    await read;
+
+    expect(calls('archive_edit_open')).toHaveLength(2);
   });
 
   it('asks for one archive at a time', async () => {
