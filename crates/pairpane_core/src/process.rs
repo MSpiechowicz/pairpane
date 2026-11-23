@@ -77,6 +77,18 @@ where
     command
 }
 
+/// Sets the soft and the hard limit of `resource` for the calling process to `value`: what the helper processes do to
+/// themselves before they read a byte (`view::heic::sandbox`, `view::thumb::macos`).
+#[cfg(unix)]
+pub(crate) fn lower_limit(resource: rustix::process::Resource, value: u64) -> io::Result<()> {
+    let limit = rustix::process::Rlimit {
+        current: Some(value),
+        maximum: Some(value),
+    };
+
+    Ok(rustix::process::setrlimit(resource, limit)?)
+}
+
 /// Why [`wait_for`] gave up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Wait {

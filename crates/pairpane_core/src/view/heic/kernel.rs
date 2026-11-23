@@ -1,4 +1,4 @@
-//! The raw Linux system calls of the helper's confinement (`sandbox.rs` says what it is for): the seccomp filter, the
+//! The raw Linux system calls of the helper's confinement (`sandbox.rs` says what it is for): the seccomp filters, the
 //! closing of the descriptors the helper inherits and the probe of the Landlock version. Each is a few calls with no
 //! state, and none of them has a safe wrapper in a crate the app already uses.
 #![allow(
@@ -19,6 +19,17 @@ const AUDIT_ARCH: Option<u32> = Some(0xC000_003E);
 const AUDIT_ARCH: Option<u32> = Some(0xC000_00B7);
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 const AUDIT_ARCH: Option<u32> = None;
+
+/// Which seccomp filter a helper takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::view) enum Filter {
+    /// Refuse the calls of [`DENIED`] and allow the rest: for the HEIC helper, whose codecs (and their plugins) make calls
+    /// that differ between libheif's builds and distributions.
+    DenyList,
+    /// Allow only the calls of [`ALLOWED`] and refuse the rest: for the thumbnail helper, which, once it is confined, only
+    /// reads its input, allocates, computes and writes its answer.
+    AllowList,
+}
 
 /// The call numbers the filter refuses with `EPERM`:
 ///
@@ -86,6 +97,36 @@ const DENIED: &[c_long] = &[
     libc::SYS_setns,
 ];
 
+/// The calls the allow-list filter lets through, which are those of the Rust runtime and the C library's allocator and
+/// exit once the thumbnail helper is confined (measured, with a margin for the ones that other versions of the libraries
+/// make): reading the input and writing the answer (`readv` and `writev` too), the memory (`brk`, `mmap` and `mprotect`
+/// without `PROT_EXEC`, `munmap`, `mremap`, `madvise`), a lock that is not free (`futex`) and a yield, the random keys of
+/// a hash map, the clock, the process and thread number (the C library's `abort` and exit ask), the alternate stack of
+/// the signal handlers that the runtime removes when it ends, the return from one, and the end of the process or of its
+/// one thread. Nothing opens, creates, signals, maps a file or starts anything.
+const ALLOWED: &[c_long] = &[
+    libc::SYS_read,
+    libc::SYS_readv,
+    libc::SYS_write,
+    libc::SYS_writev,
+    libc::SYS_close,
+    libc::SYS_brk,
+    libc::SYS_munmap,
+    libc::SYS_mremap,
+    libc::SYS_madvise,
+    libc::SYS_futex,
+    libc::SYS_sched_yield,
+    libc::SYS_getrandom,
+    libc::SYS_clock_gettime,
+    libc::SYS_getpid,
+    libc::SYS_gettid,
+    libc::SYS_sigaltstack,
+    libc::SYS_rt_sigreturn,
+    libc::SYS_restart_syscall,
+    libc::SYS_exit,
+    libc::SYS_exit_group,
+];
+
 /// The bit of the number of a call of the x32 ABI on x86-64, which the kernel runs under the same `AUDIT_ARCH` and which
 /// has other numbers for the same calls.
 #[cfg(target_arch = "x86_64")]
@@ -105,10 +146,29 @@ const ARCH: u32 = 4;
 const ARG0_LOW: u32 = 16;
 const ARG0_HIGH: u32 = 20;
 
+/// The offset of the low half of the third argument of the call: the protection of `mmap` and `mprotect`.
+const ARG2_LOW: u32 = 32;
+
 const RET_KILL_PROCESS: u32 = 0x8000_0000;
 const RET_ALLOW: u32 = 0x7fff_0000;
 const RET_EPERM: u32 = 0x0005_0000 | libc::EPERM as u32;
 const RET_ENOSYS: u32 = 0x0005_0000 | libc::ENOSYS as u32;
+
+/// One instruction of a classic BPF program.
+fn instruction(code: u16, jt: u8, jf: u8, k: u32) -> sock_filter {
+    sock_filter { code, jt, jf, k }
+}
+
+/// The start of both filters: the wrong architecture kills the process, and then the call number is loaded.
+fn header(arch: u32) -> Vec<sock_filter> {
+    vec![
+        instruction(BPF_LD_W_ABS, 0, 0, ARCH),
+        // The architecture is right: skip the kill that follows.
+        instruction(BPF_JEQ_K, 1, 0, arch),
+        instruction(BPF_RET_K, 0, 0, RET_KILL_PROCESS),
+        instruction(BPF_LD_W_ABS, 0, 0, NR),
+    ]
+}
 
 /// The classic BPF program of the filter for the process `pid` (the helper's own):
 ///
@@ -132,15 +192,7 @@ fn program(pid: u32) -> Option<Vec<sock_filter>> {
     tests.push((BPF_JSET_K, X32_BIT));
     tests.extend(DENIED.iter().map(|&number| (BPF_JEQ_K, number as u32)));
 
-    let instruction = |code: u16, jt: u8, jf: u8, k: u32| sock_filter { code, jt, jf, k };
-
-    let mut program = vec![
-        instruction(BPF_LD_W_ABS, 0, 0, ARCH),
-        // The architecture is right: skip the kill that follows.
-        instruction(BPF_JEQ_K, 1, 0, arch),
-        instruction(BPF_RET_K, 0, 0, RET_KILL_PROCESS),
-        instruction(BPF_LD_W_ABS, 0, 0, NR),
-    ];
+    let mut program = header(arch);
 
     // The tail below, numbered; a jump of n lands n instructions after the one that follows the jump. Each test of
     // the list jumps over the tests left after it and the tail up to its `EPERM` return.
@@ -188,16 +240,58 @@ fn program(pid: u32) -> Option<Vec<sock_filter>> {
     Some(program)
 }
 
+/// The classic BPF program of [`Filter::AllowList`]:
+///
+/// - the wrong architecture kills the process;
+/// - a call of [`ALLOWED`] is allowed, and `mmap` and `mprotect` are allowed unless they ask for `PROT_EXEC`, so the
+///   process can map no code (a call of the x32 ABI has a number that is none of these);
+/// - every other call is refused with `EPERM`.
+///
+/// `None` where [`AUDIT_ARCH`] is `None`.
+fn allow_program() -> Option<Vec<sock_filter>> {
+    let arch = AUDIT_ARCH?;
+    let mut program = header(arch);
+
+    // The tail below, numbered; each test of the list jumps over the tests left after it and the tail up to its allow
+    // (the last instruction, `TAIL_ALLOW`).
+    const TAIL_ALLOW: usize = 5;
+    for (at, &number) in ALLOWED.iter().enumerate() {
+        let to_allow = u8::try_from(ALLOWED.len() - at - 1 + TAIL_ALLOW).ok()?;
+        program.push(instruction(BPF_JEQ_K, to_allow, 0, number as u32));
+    }
+
+    program.extend([
+        // 0: `mmap` → its protection (2); else on to 1.
+        instruction(BPF_JEQ_K, 1, 0, libc::SYS_mmap as u32),
+        // 1: `mprotect` → its protection (2); else `EPERM` (4).
+        instruction(BPF_JEQ_K, 0, 2, libc::SYS_mprotect as u32),
+        // 2.
+        instruction(BPF_LD_W_ABS, 0, 0, ARG2_LOW),
+        // 3: asks for `PROT_EXEC` → `EPERM` (4), else allow (5).
+        instruction(BPF_JSET_K, 0, 1, libc::PROT_EXEC as u32),
+        // 4.
+        instruction(BPF_RET_K, 0, 0, RET_EPERM),
+        // 5.
+        instruction(BPF_RET_K, 0, 0, RET_ALLOW),
+    ]);
+
+    Some(program)
+}
+
 /// Whether this architecture has a seccomp filter (x86-64 and aarch64).
 pub(super) fn has_filter() -> bool {
     AUDIT_ARCH.is_some()
 }
 
-/// Installs the seccomp filter of [`program`] (for this process) on every thread of the process (`SECCOMP_FILTER_FLAG_TSYNC`, so a thread
-/// a library started earlier is held too), and for every thread started later. Needs `PR_SET_NO_NEW_PRIVS` to be set
-/// already (`limit` does). `Unsupported` on an architecture without a filter.
-pub(super) fn deny_syscalls() -> io::Result<()> {
-    let Some(mut filters) = program(std::process::id()) else {
+/// Installs the seccomp filter `filter` (for this process) on every thread of the process (`SECCOMP_FILTER_FLAG_TSYNC`,
+/// so a thread a library started earlier is held too), and for every thread started later. Needs `PR_SET_NO_NEW_PRIVS`
+/// to be set already (`limit` does). `Unsupported` on an architecture without a filter.
+pub(super) fn deny_syscalls(filter: Filter) -> io::Result<()> {
+    let program = match filter {
+        Filter::DenyList => program(std::process::id()),
+        Filter::AllowList => allow_program(),
+    };
+    let Some(mut filters) = program else {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "no seccomp filter for this architecture",
@@ -353,4 +447,44 @@ pub(super) fn refused_errnos() -> [i32; 5] {
     }));
 
     [fork, clone3, shm, signal, prlimit]
+}
+
+/// The error number of the `mmap` of a page with `prot`, or `0` when it worked (the page is unmapped at once).
+#[cfg(test)]
+/// The error number of the `mmap` of a page with `prot`, or 0 when it worked.
+pub(super) fn mmap_errno(prot: libc::c_int) -> i32 {
+    // SAFETY: an anonymous private mapping of one page, no address asked for: it only makes (or refuses) a mapping of its
+    // own; the page is unmapped again below.
+    let page = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            4096,
+            prot,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        )
+    };
+    if page == libc::MAP_FAILED {
+        return std::io::Error::last_os_error().raw_os_error().unwrap_or(-1);
+    }
+
+    // SAFETY: `page` is the mapping just made and nothing uses it.
+    unsafe { libc::munmap(page, 4096) };
+
+    0
+}
+
+/// The error number of a `uname` call, or `0` when it worked: a call that the allow-list filter does not list.
+#[cfg(test)]
+pub(super) fn uname_errno() -> i32 {
+    // SAFETY: `uname` writes a `utsname` into the structure it is given, which lives through the call.
+    unsafe {
+        let mut name: libc::utsname = std::mem::zeroed();
+        if libc::uname(&raw mut name) == 0 {
+            0
+        } else {
+            io::Error::last_os_error().raw_os_error().unwrap_or(-1)
+        }
+    }
 }

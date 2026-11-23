@@ -13,6 +13,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub(super) struct ThreadCap(Arc<AtomicUsize>);
 
 impl ThreadCap {
+    /// Whether one of the `max` places is free now. Not a reservation: another thread may take it before this one does,
+    /// so it only tells a request that would be refused anyway that it will be, before it spends its time.
+    pub(super) fn has_room(&self, max: usize) -> bool {
+        self.0.load(Ordering::Acquire) < max
+    }
+
     /// Takes one of the `max` places, or `None` when all are taken. The place is given back when the permit is dropped,
     /// which must happen when the thread ends (move the permit into its closure).
     pub(super) fn acquire(&self, max: usize) -> Option<Permit> {
@@ -51,6 +57,20 @@ mod tests {
         drop(first);
         let _third = cap.acquire(2).expect("a freed place");
         assert!(cap.acquire(2).is_none(), "full again");
+    }
+
+    #[test]
+    fn room_is_told_without_taking_a_place() {
+        let cap = ThreadCap::default();
+        assert!(cap.has_room(1));
+        assert!(cap.has_room(1), "looking takes nothing");
+
+        let permit = cap.acquire(1).expect("place");
+        assert!(!cap.has_room(1));
+        assert!(cap.has_room(2));
+
+        drop(permit);
+        assert!(cap.has_room(1));
     }
 
     #[test]

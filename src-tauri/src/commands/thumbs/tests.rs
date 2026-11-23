@@ -7,7 +7,8 @@ use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
 use pairpane_core::model::IpcErrorCode;
-use pairpane_core::view::refusal;
+use pairpane_core::view::thumb;
+use pairpane_core::view::{MAX_IMAGE_BYTES, refusal};
 use tauri::async_runtime::block_on;
 
 use super::*;
@@ -40,20 +41,24 @@ fn shown(result: CommandResult<Arc<[u8]>>) -> (IpcErrorCode, String) {
     (error.code(), json["message"].as_str().expect("message").to_owned())
 }
 
-/// What is kept for the file `name` of `folder` as a picture of `size`, as the command would have made it.
-fn keep(thumbs: &Thumbs, folder: &std::path::Path, name: &str, size: u32, picture: &[u8]) {
-    let path = folder.join(name);
-    let meta = std::fs::metadata(&path).expect("metadata");
+/// What is kept for the file `name` of `folder` as a picture of `size`, as the command would have kept it.
+fn keep(thumbs: &Thumbs, folder: &std::path::Path, name: &str, size: u32, value: Cached) {
+    let source = thumb::open(folder, name).expect("a picture");
     let key = Key {
-        path: std::fs::canonicalize(&path).expect("canonical"),
+        path: folder.join(name),
         size,
     };
     let stamp = Stamp {
-        len: meta.len(),
-        modified: meta.modified().ok(),
+        len: source.len,
+        modified: source.modified,
+        identity: source.identity,
     };
 
-    thumbs.cache().insert(key, stamp, picture.into());
+    thumbs.cache().insert(key, stamp, value);
+}
+
+fn picture(bytes: &[u8]) -> Cached {
+    Cached::Picture(bytes.into())
 }
 
 impl Thumbs {
@@ -137,7 +142,7 @@ fn a_full_lookup_cap_refuses_as_busy() {
 fn a_miss_with_every_helper_busy_is_busy_and_a_hit_is_not_held_up_by_them() {
     let (folder, path) = folder_with(&[("a.png", PNG_HEAD), ("b.png", PNG_HEAD)]);
     let thumbs = Thumbs::default();
-    keep(&thumbs, folder.path(), "a.png", 128, b"the picture of a");
+    keep(&thumbs, folder.path(), "a.png", 128, picture(b"the picture of a"));
     let _helpers = fill(&thumbs.helpers, HELPER_THREADS);
 
     let (code, message) = shown(get(&thumbs, &path, "b.png", 128));
@@ -177,7 +182,7 @@ fn the_places_are_given_back_when_a_request_ends() {
 fn sizes_that_share_a_bucket_share_a_picture() {
     let (folder, path) = folder_with(&[("a.png", PNG_HEAD)]);
     let thumbs = Thumbs::default();
-    keep(&thumbs, folder.path(), "a.png", 128, b"the picture at 128");
+    keep(&thumbs, folder.path(), "a.png", 128, picture(b"the picture at 128"));
 
     for size in [97, 100, 110, 128] {
         let picture = get(&thumbs, &path, "a.png", size).expect("a hit");
@@ -196,7 +201,7 @@ fn sizes_that_share_a_bucket_share_a_picture() {
 fn a_file_that_changed_is_made_again_and_not_served_from_the_cache() {
     let (folder, path) = folder_with(&[("a.png", PNG_HEAD)]);
     let thumbs = Thumbs::default();
-    keep(&thumbs, folder.path(), "a.png", 128, b"the old picture");
+    keep(&thumbs, folder.path(), "a.png", 128, picture(b"the old picture"));
     assert!(get(&thumbs, &path, "a.png", 128).is_ok());
 
     // Longer: the length differs.
@@ -216,7 +221,7 @@ fn a_file_that_changed_is_made_again_and_not_served_from_the_cache() {
 fn a_file_with_a_new_time_and_the_same_length_is_made_again() {
     let (folder, path) = folder_with(&[("a.png", PNG_HEAD)]);
     let thumbs = Thumbs::default();
-    keep(&thumbs, folder.path(), "a.png", 128, b"the old picture");
+    keep(&thumbs, folder.path(), "a.png", 128, picture(b"the old picture"));
 
     let file = std::fs::File::options()
         .write(true)
@@ -294,4 +299,157 @@ fn what_the_page_is_told_is_fixed_text_that_never_holds_a_path() {
         assert_eq!(told.code(), code, "{error}");
         assert!(!json["message"].as_str().expect("text").contains(secret), "{error}");
     }
+}
+
+/// A file that is a PNG by its first bytes and over the cap, which is too big to be read.
+fn too_big_file(folder: &std::path::Path, name: &str) {
+    std::fs::write(folder.join(name), PNG_HEAD).expect("a file");
+    std::fs::File::options()
+        .write(true)
+        .open(folder.join(name))
+        .expect("open")
+        .set_len(MAX_IMAGE_BYTES + 1)
+        .expect("a sparse file");
+}
+
+#[test]
+fn a_file_that_cannot_be_made_into_a_picture_is_remembered_and_not_tried_again() {
+    let (folder, path) = folder_with(&[]);
+    too_big_file(folder.path(), "huge.png");
+    let thumbs = Thumbs::default();
+
+    let first = shown(get(&thumbs, &path, "huge.png", 128));
+    assert_eq!(
+        first,
+        (
+            IpcErrorCode::InvalidInput,
+            "the image is too big to show here".to_owned()
+        )
+    );
+    assert_eq!(thumbs.cache().bytes(), cache::FAILURE_BYTES, "a small fixed cost");
+
+    // Every place for reading and for the helpers is taken: only what is remembered can answer.
+    let _readers = fill(&thumbs.readers, READER_THREADS);
+    let _helpers = fill(&thumbs.helpers, HELPER_THREADS);
+    for _ in 0..3 {
+        assert_eq!(
+            shown(get(&thumbs, &path, "huge.png", 128)),
+            first,
+            "the same code and text"
+        );
+    }
+
+    // Another size is another try, which finds the places taken.
+    assert_eq!(shown(get(&thumbs, &path, "huge.png", 400)).0, IpcErrorCode::Busy);
+}
+
+#[test]
+fn a_remembered_failure_is_forgotten_when_the_file_changes() {
+    let (folder, path) = folder_with(&[]);
+    too_big_file(folder.path(), "huge.png");
+    let thumbs = Thumbs::default();
+    assert_eq!(
+        shown(get(&thumbs, &path, "huge.png", 128)).0,
+        IpcErrorCode::InvalidInput
+    );
+
+    // The file is now a small one: its length differs, so it is tried again (and the helper is not there).
+    std::fs::write(folder.path().join("huge.png"), PNG_HEAD).expect("rewritten");
+
+    assert_eq!(shown(get(&thumbs, &path, "huge.png", 128)).0, IpcErrorCode::Io);
+    assert_eq!(thumbs.cache().bytes(), 0);
+}
+
+#[test]
+fn a_failure_of_the_system_is_not_remembered() {
+    let (_folder, path) = folder_with(&[("a.png", PNG_HEAD)]);
+    let thumbs = Thumbs::default();
+
+    // The helper is not there: not the file's fault, and the next request tries again.
+    assert_eq!(shown(get(&thumbs, &path, "a.png", 128)).0, IpcErrorCode::Io);
+    assert_eq!(thumbs.cache().bytes(), 0);
+
+    thumbs.shut_down();
+    assert_eq!(shown(get(&thumbs, &path, "a.png", 128)).1, "the read was cancelled");
+    assert_eq!(thumbs.cache().bytes(), 0, "a cancelled request is not a bad picture");
+}
+
+#[test]
+fn a_miss_with_every_reader_busy_is_busy_and_a_hit_is_not() {
+    let (folder, path) = folder_with(&[("a.png", PNG_HEAD), ("b.png", PNG_HEAD)]);
+    let thumbs = Thumbs::default();
+    keep(&thumbs, folder.path(), "a.png", 128, picture(b"the picture of a"));
+    let _readers = fill(&thumbs.readers, READER_THREADS);
+
+    assert_eq!(shown(get(&thumbs, &path, "b.png", 128)).0, IpcErrorCode::Busy);
+    assert!(get(&thumbs, &path, "a.png", 128).is_ok());
+}
+
+#[test]
+fn a_helper_place_is_not_held_while_the_file_is_read() {
+    let (folder, path) = folder_with(&[]);
+    too_big_file(folder.path(), "huge.png");
+    let thumbs = Thumbs::default();
+    // One place of the helpers is free: the request takes the room and reads, and is stopped by the file, not the cap.
+    let _helpers = fill_all_but_one(&thumbs.helpers, HELPER_THREADS);
+
+    assert_eq!(
+        shown(get(&thumbs, &path, "huge.png", 128)).0,
+        IpcErrorCode::InvalidInput
+    );
+    // And whatever the read took, no place of the helpers is left taken by it.
+    assert!(thumbs.helpers.has_room(HELPER_THREADS));
+    assert!(thumbs.readers.has_room(1), "nor one of the readers");
+}
+
+fn fill_all_but_one(cap: &ThreadCap, max: usize) -> Vec<Permit> {
+    (0..max - 1).map(|_| cap.acquire(max).expect("a place")).collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_that_replaced_another_of_the_same_length_and_time_is_made_again() {
+    let (folder, path) = folder_with(&[("a.png", PNG_HEAD), ("new.png", PNG_HEAD)]);
+    let time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+    for name in ["a.png", "new.png"] {
+        std::fs::File::options()
+            .write(true)
+            .open(folder.path().join(name))
+            .expect("open")
+            .set_modified(time)
+            .expect("a time");
+    }
+    let thumbs = Thumbs::default();
+    keep(
+        &thumbs,
+        folder.path(),
+        "a.png",
+        128,
+        picture(b"the picture of the old file"),
+    );
+    assert!(get(&thumbs, &path, "a.png", 128).is_ok());
+
+    std::fs::rename(folder.path().join("new.png"), folder.path().join("a.png")).expect("replaced");
+
+    assert_eq!(
+        shown(get(&thumbs, &path, "a.png", 128)).0,
+        IpcErrorCode::Io,
+        "made again, not served"
+    );
+    assert_eq!(thumbs.cache().bytes(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_is_never_followed_for_a_picture_or_a_key() {
+    let (folder, path) = folder_with(&[("a.png", PNG_HEAD)]);
+    std::os::unix::fs::symlink("a.png", folder.path().join("link.png")).expect("a link");
+    let thumbs = Thumbs::default();
+    keep(&thumbs, folder.path(), "a.png", 128, picture(b"the picture of a"));
+
+    // The picture of the file the link leads to is not given for the link.
+    let (code, _) = shown(get(&thumbs, &path, "link.png", 128));
+
+    assert_eq!(code, IpcErrorCode::InvalidInput);
+    assert!(get(&thumbs, &path, "a.png", 128).is_ok());
 }

@@ -58,6 +58,10 @@ uzers.workspace = true
 landlock.workspace = true
 libc.workspace = true
 
+# The thumbnail helper confines itself on macOS (view::thumb::macos): the sandbox's C interface and `close`.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true
+
 # The freedesktop Trash is done in pairpane_core::ops::trash::freedesktop on these systems.
 [target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
 libloading.workspace = true

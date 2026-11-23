@@ -1,17 +1,27 @@
-//! The thumbnails made so far, kept in memory so that a folder visited again shows at once.
+//! The thumbnails made so far, and the pictures that could not be made, kept in memory so that a folder visited again
+//! shows at once and a file that is bad or slow to decode is not tried again and again.
 //!
-//! A thumbnail is kept under the file's canonical path and the size it was made at, together with the length and the
-//! modification time of the file it was made of (its stamp). A lookup with another stamp is a miss and drops the entry
-//! (the file changed, so it is made again), so a changed file never leaves a stale picture behind. The cache is bound by
-//! the bytes of the pictures: when a new one does not fit, the ones used longest ago go first. A picture that is bigger
-//! than the whole budget is not kept.
+//! A thumbnail is kept under the file's path and the size it was made at, together with what the file was when it was
+//! made of (its stamp: length, modification time and identity). A lookup with another stamp is a miss and drops the entry
+//! (the file changed, so it is made again), so a changed file never leaves a stale picture behind. What is kept is
+//! either the picture or the failure (`Failed`: the code and the fixed text the page was told, which are told again), and
+//! a failure costs [`FAILURE_BYTES`] of the budget. The cache is bound by the bytes: when a new entry does not fit, the
+//! ones used longest ago go first. A picture that is bigger than the whole budget is not kept.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-/// What a thumbnail is of: the file, by its canonical path, and the size it was made at (see `thumb::bucket`).
+use pairpane_core::model::IpcErrorCode;
+use pairpane_core::view::thumb::Identity;
+
+/// What a failure costs of the budget, whatever its text: a file that is bad is remembered cheaply.
+pub(super) const FAILURE_BYTES: usize = 256;
+
+/// What a thumbnail is of: the file, by its path in the folder the page named (the folder with links resolved where
+/// the system needs it, joined with the name, never a link on the last component), and the size it was made at (see
+/// `thumb::bucket`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct Key {
     pub(super) path: PathBuf,
@@ -23,16 +33,42 @@ pub(super) struct Key {
 pub(super) struct Stamp {
     pub(super) len: u64,
     pub(super) modified: Option<SystemTime>,
+    pub(super) identity: Option<Identity>,
+}
+
+/// Why no thumbnail could be made, as the page was told: a bad picture, one that is too big, one that is of no format
+/// that has a thumbnail (or has no decoder here). The same code and text are given again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Failed {
+    pub(super) code: IpcErrorCode,
+    pub(super) message: String,
+}
+
+/// What is kept for a file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Cached {
+    Picture(Arc<[u8]>),
+    Failed(Failed),
+}
+
+impl Cached {
+    /// What it takes of the budget.
+    fn bytes(&self) -> usize {
+        match self {
+            Self::Picture(picture) => picture.len(),
+            Self::Failed(_) => FAILURE_BYTES,
+        }
+    }
 }
 
 struct Entry {
     stamp: Stamp,
-    picture: Arc<[u8]>,
+    value: Cached,
     /// When it was last used: the key of its place in `Cache::order`.
     used: u64,
 }
 
-/// The pictures, at most `budget` bytes of them together.
+/// The entries, at most `budget` bytes of them together.
 pub(super) struct Cache {
     budget: usize,
     bytes: usize,
@@ -54,9 +90,9 @@ impl Cache {
         }
     }
 
-    /// The picture kept for `key` when it was made of a file with this `stamp`, which counts as a use. One made of a file
+    /// What is kept for `key` when it was made of a file with this `stamp`, which counts as a use. What was made of a file
     /// with another stamp is dropped and is not given.
-    pub(super) fn get(&mut self, key: &Key, stamp: &Stamp) -> Option<Arc<[u8]>> {
+    pub(super) fn get(&mut self, key: &Key, stamp: &Stamp) -> Option<Cached> {
         let entry = self.entries.get(key)?;
         if entry.stamp != *stamp {
             self.remove(key);
@@ -70,40 +106,42 @@ impl Cache {
         entry.used = self.clock;
         self.order.insert(self.clock, key.clone());
 
-        Some(Arc::clone(&entry.picture))
+        Some(entry.value.clone())
     }
 
-    /// Keeps `picture` for `key`, made of a file with this `stamp`, in place of what was kept for it. The pictures used
+    /// Keeps `value` for `key`, made of a file with this `stamp`, in place of what was kept for it. The entries used
     /// longest ago are dropped until it fits; one that cannot fit at all is not kept.
-    pub(super) fn insert(&mut self, key: Key, stamp: Stamp, picture: Arc<[u8]>) {
+    pub(super) fn insert(&mut self, key: Key, stamp: Stamp, value: Cached) {
         self.remove(&key);
-        if picture.len() > self.budget {
+
+        let size = value.bytes();
+        if size > self.budget {
             return;
         }
 
-        while self.bytes + picture.len() > self.budget {
+        while self.bytes + size > self.budget {
             let Some((_, oldest)) = self.order.pop_first() else {
                 break;
             };
             if let Some(gone) = self.entries.remove(&oldest) {
-                self.bytes -= gone.picture.len();
+                self.bytes -= gone.value.bytes();
             }
         }
 
         self.clock += 1;
-        self.bytes += picture.len();
+        self.bytes += size;
         self.order.insert(self.clock, key.clone());
         self.entries.insert(
             key,
             Entry {
                 stamp,
-                picture,
+                value,
                 used: self.clock,
             },
         );
     }
 
-    /// How many bytes of pictures are kept.
+    /// How many bytes of the budget are used.
     #[cfg(test)]
     pub(super) fn bytes(&self) -> usize {
         self.bytes
@@ -112,7 +150,7 @@ impl Cache {
     fn remove(&mut self, key: &Key) {
         if let Some(gone) = self.entries.remove(key) {
             self.order.remove(&gone.used);
-            self.bytes -= gone.picture.len();
+            self.bytes -= gone.value.bytes();
         }
     }
 }
@@ -134,11 +172,26 @@ mod tests {
         Stamp {
             len,
             modified: Some(UNIX_EPOCH + Duration::from_secs(seconds)),
+            identity: None,
         }
     }
 
-    fn picture(bytes: usize, fill: u8) -> Arc<[u8]> {
-        vec![fill; bytes].into()
+    fn picture(bytes: usize, fill: u8) -> Cached {
+        Cached::Picture(vec![fill; bytes].into())
+    }
+
+    fn failed(text: &str) -> Cached {
+        Cached::Failed(Failed {
+            code: IpcErrorCode::InvalidInput,
+            message: text.to_owned(),
+        })
+    }
+
+    /// The identity of the file `name` that `folder` holds.
+    fn identity_of(folder: &std::path::Path, name: &str) -> Option<Identity> {
+        pairpane_core::view::thumb::open(folder, name)
+            .expect("a picture")
+            .identity
     }
 
     #[test]
@@ -146,10 +199,7 @@ mod tests {
         let mut cache = Cache::new(1000);
         cache.insert(key("a", 128), stamp(10, 1), picture(100, 1));
 
-        assert_eq!(
-            cache.get(&key("a", 128), &stamp(10, 1)).as_deref(),
-            Some(&[1_u8; 100][..])
-        );
+        assert_eq!(cache.get(&key("a", 128), &stamp(10, 1)), Some(picture(100, 1)));
         assert!(
             cache.get(&key("a", 64), &stamp(10, 1)).is_none(),
             "another size is another picture"
@@ -163,14 +213,12 @@ mod tests {
 
     #[test]
     fn a_file_that_changed_in_length_or_time_is_made_again_and_its_old_picture_is_dropped() {
-        for changed in [
-            stamp(11, 1),
-            stamp(10, 2),
-            Stamp {
-                len: 10,
-                modified: None,
-            },
-        ] {
+        let no_time = Stamp {
+            modified: None,
+            ..stamp(10, 1)
+        };
+
+        for changed in [stamp(11, 1), stamp(10, 2), no_time] {
             let mut cache = Cache::new(1000);
             cache.insert(key("a", 128), stamp(10, 1), picture(100, 1));
 
@@ -181,6 +229,64 @@ mod tests {
                 "and is not given back later"
             );
         }
+    }
+
+    #[test]
+    fn a_file_that_was_replaced_by_one_of_the_same_length_and_time_is_another_file() {
+        let folder = tempfile::tempdir().expect("a folder");
+        let head = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+        std::fs::write(folder.path().join("a.png"), head).expect("a file");
+        std::fs::write(folder.path().join("b.png"), head).expect("a file");
+        let (Some(a), Some(b)) = (identity_of(folder.path(), "a.png"), identity_of(folder.path(), "b.png")) else {
+            eprintln!("this system does not tell which file is which");
+
+            return;
+        };
+        assert_ne!(a, b, "two files are two identities");
+        let same = |identity| Stamp {
+            identity: Some(identity),
+            ..stamp(10, 1)
+        };
+
+        let mut cache = Cache::new(1000);
+        cache.insert(key("a", 128), same(a), picture(100, 1));
+
+        assert!(cache.get(&key("a", 128), &same(b)).is_none());
+        assert_eq!(cache.bytes(), 0);
+    }
+
+    #[test]
+    fn a_failure_is_kept_for_a_small_fixed_cost_and_given_back_as_it_was() {
+        let mut cache = Cache::new(1000);
+        let kept = failed("the image cannot be decoded");
+
+        cache.insert(key("bad", 128), stamp(5, 1), kept.clone());
+
+        assert_eq!(cache.bytes(), FAILURE_BYTES);
+        assert_eq!(cache.get(&key("bad", 128), &stamp(5, 1)), Some(kept));
+        assert!(
+            cache.get(&key("bad", 128), &stamp(6, 1)).is_none(),
+            "a file that changed may be a good picture now"
+        );
+        assert_eq!(cache.bytes(), 0);
+    }
+
+    #[test]
+    fn failures_take_their_turn_with_the_pictures_when_the_bytes_run_out() {
+        let mut cache = Cache::new(2 * FAILURE_BYTES + 100);
+        cache.insert(key("a", 128), stamp(1, 1), failed("one"));
+        cache.insert(key("b", 128), stamp(1, 1), failed("two"));
+        cache.insert(key("c", 128), stamp(1, 1), picture(100, 1));
+        assert_eq!(cache.bytes(), 2 * FAILURE_BYTES + 100);
+
+        // The picture of 300 bytes needs room: the failure used longest ago goes, and then the next one.
+        cache.insert(key("d", 128), stamp(1, 1), picture(300, 2));
+
+        assert!(cache.get(&key("a", 128), &stamp(1, 1)).is_none());
+        assert!(cache.get(&key("b", 128), &stamp(1, 1)).is_none());
+        assert!(cache.get(&key("c", 128), &stamp(1, 1)).is_some());
+        assert!(cache.get(&key("d", 128), &stamp(1, 1)).is_some());
+        assert!(cache.bytes() <= 2 * FAILURE_BYTES + 100);
     }
 
     #[test]
@@ -239,10 +345,7 @@ mod tests {
         cache.insert(key("a", 128), stamp(2, 2), picture(150, 2));
 
         assert_eq!(cache.bytes(), 150);
-        assert_eq!(
-            cache.get(&key("a", 128), &stamp(2, 2)).as_deref(),
-            Some(&[2_u8; 150][..])
-        );
+        assert_eq!(cache.get(&key("a", 128), &stamp(2, 2)), Some(picture(150, 2)));
         assert!(cache.get(&key("a", 128), &stamp(1, 1)).is_none());
     }
 
@@ -252,12 +355,17 @@ mod tests {
         for round in 0..200_u32 {
             let name = format!("f{}", round % 17);
             if cache.get(&key(&name, 64), &stamp(1, 1)).is_none() {
-                cache.insert(key(&name, 64), stamp(1, 1), picture(90 + (round % 5) as usize, 0));
+                let value = if round % 7 == 0 {
+                    failed("bad")
+                } else {
+                    picture(90 + (round % 5) as usize, 0)
+                };
+                cache.insert(key(&name, 64), stamp(1, 1), value);
             }
 
             assert!(cache.bytes() <= 1000);
             assert_eq!(cache.entries.len(), cache.order.len());
-            let sum: usize = cache.entries.values().map(|entry| entry.picture.len()).sum();
+            let sum: usize = cache.entries.values().map(|entry| entry.value.bytes()).sum();
             assert_eq!(sum, cache.bytes());
         }
     }

@@ -1,5 +1,6 @@
 //! The confinement of the helper process on Linux, done by the helper itself (the parent cannot do it before the exec).
-//! The thumbnail helper (`view::thumb`) takes the same three steps with a smaller address space and loads no codec first.
+//! The thumbnail helper (`view::thumb`) takes the same three steps with a smaller address space, loads no codec first and
+//! has an allow-list seccomp filter instead of the deny-list that the HEIC helper's codecs need ([`Filter`]).
 //!
 //! Done in three steps (see [`child_main`](super::child_main)):
 //!
@@ -37,8 +38,9 @@
 //! Best effort by design, and it is the kernel that decides how much applies: a kernel without Landlock (older than 5.13,
 //! or with it switched off) runs the helper with the limits, `PR_SET_NO_NEW_PRIVS` and the seccomp filter only (the
 //! parent logs that once, [`note_kernel`]), so the files stay readable by it; one with an older ABI enforces the rights
-//! it knows. On an architecture other than x86-64 and aarch64 there is no seccomp filter. Not done: an allow-list
-//! seccomp filter (the calls of a codec differ between libheif's plugins and distributions), and a namespace of its own
+//! it knows. On an architecture other than x86-64 and aarch64 there is no seccomp filter. The HEIC helper has no allow-list
+//! seccomp filter (the calls of a codec differ between libheif's plugins and distributions; the thumbnail helper has one,
+//! which allows the dozen calls it makes and refuses the rest, `PROT_EXEC` mappings included). Not done: a namespace of its own
 //! (needs privileges or user namespaces, which distributions switch off).
 //!
 //! The parent's death is seen by the kernel only if it is the thread that started the helper that ends: the decode runs
@@ -48,10 +50,14 @@ use std::io;
 use std::sync::Once;
 
 use landlock::{ABI, Access, AccessFs, AccessNet, Ruleset, RulesetAttr, RulesetStatus, Scope};
-use rustix::process::{Resource, Rlimit, Signal, getppid, setrlimit};
+use rustix::process::{Resource, Signal, getppid};
 use rustix::thread::set_no_new_privs;
 
+use crate::process::lower_limit;
+
 use super::kernel;
+
+pub(in crate::view) use super::kernel::Filter;
 
 /// The most CPU time of the helper, over all its threads. A 64-megapixel picture takes a few seconds of it.
 const CPU_SECONDS: u64 = 60;
@@ -67,8 +73,9 @@ const MAX_FILES: u64 = 64;
 pub(in crate::view) const ADDRESS_SPACE: u64 = 3 * 1024 * 1024 * 1024;
 
 /// The address space of the thumbnail helper above what it has mapped when it starts: the input (64 MiB), the decoded
-/// picture (at most 256 MiB, see `view::thumb`) and what the decoder keeps beside it (never more than the 512 MiB its
-/// allocation limit allows), which is under 1 GiB; 1.5 GiB is that and room to spare.
+/// picture (at most 256 MiB, see `view::thumb`) and what the decoder keeps beside it (PNG is held to a 512 MiB allocation
+/// limit; the other decoders keep a few planes of the picture, which the limit on the picture's size bounds), which is
+/// under 1 GiB; 1.5 GiB is that and room to spare. The same room is the memory limit of the Windows job.
 pub(in crate::view) const THUMBNAIL_ADDRESS_SPACE: u64 = 1536 * 1024 * 1024;
 
 /// Step 1 (see the module). Whatever cannot be closed stays open.
@@ -111,18 +118,19 @@ pub(in crate::view) fn limit() -> io::Result<()> {
         (Resource::Cpu, CPU_SECONDS),
         (Resource::Nofile, MAX_FILES),
     ] {
-        lower(resource, value)?;
+        lower_limit(resource, value)?;
     }
 
     Ok(())
 }
 
-/// Step 3 (see the module), with the address space limited to `address_space` bytes above what is mapped now. The
-/// limit and Landlock are best effort (what the kernel cannot do is left undone); the seccomp filter is not: where
-/// this architecture has one and it cannot be installed, this fails and the helper exits without reading the picture.
-pub(in crate::view) fn confine(address_space: u64) -> io::Result<()> {
+/// Step 3 (see the module), with the address space limited to `address_space` bytes above what is mapped now and the
+/// seccomp filter `filter`. The limit and Landlock are best effort (what the kernel cannot do is left undone); the
+/// seccomp filter is not: where this architecture has one and it cannot be installed, this fails and the helper exits
+/// without reading the picture.
+pub(in crate::view) fn confine(address_space: u64, filter: Filter) -> io::Result<()> {
     if let Some(mapped) = mapped_bytes()
-        && let Err(error) = lower(Resource::As, mapped.saturating_add(address_space))
+        && let Err(error) = lower_limit(Resource::As, mapped.saturating_add(address_space))
     {
         tracing::debug!(%error, "the address space of the helper is not limited");
     }
@@ -134,7 +142,7 @@ pub(in crate::view) fn confine(address_space: u64) -> io::Result<()> {
     }
 
     // The filter is the last thing set, so nothing above needs a call it refuses.
-    match kernel::deny_syscalls() {
+    match kernel::deny_syscalls(filter) {
         Ok(()) => Ok(()),
         // No filter for this architecture: the parent says so once (`note_kernel`).
         Err(error) if error.kind() == io::ErrorKind::Unsupported => Ok(()),
@@ -154,16 +162,6 @@ pub(in crate::view) fn single_threaded() -> io::Result<()> {
     }
 
     Ok(())
-}
-
-/// Sets the soft and the hard limit of `resource` to `value`.
-fn lower(resource: Resource, value: u64) -> io::Result<()> {
-    let limit = Rlimit {
-        current: Some(value),
-        maximum: Some(value),
-    };
-
-    Ok(setrlimit(resource, limit)?)
 }
 
 /// `PR_SET_PDEATHSIG` with `signal`.

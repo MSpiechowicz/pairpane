@@ -115,7 +115,8 @@ pub fn frame(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
 
 /// A picture in the answer's form (the header and RGBA) shrunk to fit `size`; the same buffer when it fits already.
 /// Only resizes pixels: there is nothing to parse, so the app's process may do it with the helper's output. A buffer
-/// whose length does not match its header is undecodable.
+/// whose length does not match its header is undecodable. The parent never holds more than the picture it was given
+/// and the smaller one.
 pub fn shrink(mut picture: Vec<u8>, size: u32) -> std::io::Result<Vec<u8>> {
     let header: [u8; HEADER] = picture
         .get(..HEADER)
@@ -134,7 +135,9 @@ pub fn shrink(mut picture: Vec<u8>, size: u32) -> std::io::Result<Vec<u8>> {
         return Ok(picture);
     }
 
-    let image = RgbaImage::from_raw(width, height, picture.split_off(HEADER)).ok_or_else(undecodable)?;
+    // The header is taken off in place: the picture can be a quarter of a gigabyte, and a copy of it would double that.
+    picture.drain(..HEADER);
+    let image = RgbaImage::from_raw(width, height, picture).ok_or_else(undecodable)?;
     let small = imageops::thumbnail(&image, new_width, new_height);
 
     Ok(frame(new_width, new_height, small.as_raw()))

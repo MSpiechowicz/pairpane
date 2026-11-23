@@ -1,20 +1,28 @@
 //! The thumbnail helper's own end: the child process that decodes an untrusted picture.
 //!
 //! The child is the app's own executable started with [`CHILD_ARG`](super::CHILD_ARG) and the side of the thumbnail
-//! (`--pairpane-thumbnail 128`); the shell hands it to [`child_main`] before anything else starts. On Linux it first
-//! closes the descriptors it inherited, limits itself, and then gives up the file system and the network and installs
-//! its seccomp filter, all before the first byte is read (`heic/sandbox.rs`: there is no codec to load first, so it is
-//! confined from the start). It reads the file from its standard input (at most `MAX_IMAGE_BYTES`), decodes it with the
-//! pure Rust decoders of the `image` crate, shrinks it and writes the answer in the framing of the HEIC helper
-//! (`heic/process.rs`): a status byte, then the 8-byte header and the RGBA pixels of a picture that fits the side.
+//! (`--pairpane-thumbnail 128`); the shell hands it to [`child_main`] before anything else starts. It confines itself
+//! before it reads a byte (there is no codec to load first):
+//!
+//! - Linux (`heic/sandbox.rs`): it closes the descriptors it inherited, limits itself, gives up the file system and the
+//!   network (Landlock) and takes an allow-list seccomp filter, which lets through the dozen calls it still makes and
+//!   refuses the rest;
+//! - macOS (`macos.rs`): the same descriptors and limits, and the Seatbelt sandbox with every operation denied;
+//! - Windows: the parent puts it in a Job Object that bounds its memory and its processes (`heic/job.rs`).
+//!
+//! It reads the file from its standard input (at most `MAX_IMAGE_BYTES`), decodes it with the pure Rust decoders of the
+//! `image` crate, shrinks it and writes the answer in the framing of the HEIC helper (`heic/process.rs`): a status byte,
+//! then the 8-byte header and the RGBA pixels of a picture that fits the side.
 //!
 //! A picture that claims more than it may is refused before a byte of it is decoded: the decoder reports its size from
 //! the header, and a side over `MAX_IMAGE_SIDE`, more pixels than `MAX_IMAGE_PIXELS` or a decoded picture of more than
-//! [`MAX_DECODED_BYTES`] is `too big`. The decoders also run under `image::Limits` (the same sides, an allocation limit),
-//! and the address space of the process is limited, so a picture that lies about its size, or a decoder that wants
-//! more than it should, fails as an error or ends the process, which the parent counts as a picture that cannot be
-//! decoded; it never takes the app's memory. A GIF and a WebP give their first frame only, and the EXIF orientation of
-//! a picture is applied.
+//! [`MAX_DECODED_BYTES`] is `too big`. What the decoders do beside that is bound by what each one honours of
+//! `image::Limits` (see [`limits`]): every one is held to the sides; PNG also to the allocation limit; JPEG, WebP and
+//! BMP to the sides only (their buffers are the decoded picture, which the check above bounds, and what the JPEG decoder
+//! keeps beside it is a few planes of it); the `gif` crate has a limit of its own (50 MB for a frame's buffers). The
+//! address space of the process is limited on Linux (and the memory of the job on Windows), so a decoder that wants more
+//! than it should fails or ends the process, which the parent counts as a picture that cannot be decoded; it never takes
+//! the app's memory. A GIF and a WebP give their first frame only, and the EXIF orientation of a picture is applied.
 
 use std::io::{self, Cursor, Read, Write};
 
@@ -32,13 +40,13 @@ use super::not_a_picture;
 /// channel. What the decoder allocates beside it is bound by [`limits`] and by the address space of the process.
 pub(super) const MAX_DECODED_BYTES: u64 = 256 * 1024 * 1024;
 
-/// The most the decoders may allocate at any one time, output included (not strict for every decoder; the address
-/// space of the process is the other bound).
+/// The most the decoders may allocate at any one time, output included. Only PNG keeps to it (see the module); the
+/// address space of the process is the bound for the rest.
 const MAX_ALLOC: u64 = 512 * 1024 * 1024;
 
-/// The entry of the child: reads the side of the thumbnail from its arguments, confines itself (on Linux) and then
-/// serves one file from the standard input to the standard output. Returns the exit code of the process (0 when an answer
-/// was written, which a failed decoding is too).
+/// The entry of the child: reads the side of the thumbnail from its arguments, confines itself (on Linux and macOS) and
+/// then serves one file from the standard input to the standard output. Returns the exit code of the process (0 when an
+/// answer was written, which a failed decoding is too).
 pub fn child_main() -> i32 {
     // The side comes from the app that started this process; a missing or garbled one is no answer to give.
     let size = std::env::args_os()
@@ -49,6 +57,9 @@ pub fn child_main() -> i32 {
         return 1;
     };
 
+    // The streams are taken before the confinement, which only closes what is not these.
+    let (input, output) = (io::stdin().lock(), io::stdout().lock());
+
     #[cfg(target_os = "linux")]
     if let Err(error) = confine() {
         tracing::debug!(%error, "the thumbnail helper cannot confine itself");
@@ -56,19 +67,26 @@ pub fn child_main() -> i32 {
         return 1;
     }
 
-    run_child(io::stdin().lock(), io::stdout().lock(), size)
+    #[cfg(target_os = "macos")]
+    if let Err(error) = super::macos::confine() {
+        tracing::debug!(%error, "the thumbnail helper cannot confine itself");
+
+        return 1;
+    }
+
+    run_child(input, output, size)
 }
 
 /// The three steps of `heic/sandbox.rs`, in order, before the first byte is read.
 #[cfg(target_os = "linux")]
 fn confine() -> io::Result<()> {
-    use crate::view::heic::sandbox;
+    use crate::view::heic::sandbox::{self, Filter};
 
     sandbox::close_inherited_fds();
     sandbox::limit()?;
     sandbox::single_threaded()?;
 
-    sandbox::confine(sandbox::THUMBNAIL_ADDRESS_SPACE)
+    sandbox::confine(sandbox::THUMBNAIL_ADDRESS_SPACE, Filter::AllowList)
 }
 
 /// [`child_main`] over any input and output.
@@ -76,7 +94,7 @@ pub(super) fn run_child(input: impl Read, output: impl Write, size: u32) -> i32 
     serve(input, output, |bytes| thumbnail(bytes, size))
 }
 
-/// The limits the decoders run under.
+/// The limits the decoders run under: the sides (every decoder honours these) and the allocation ([`MAX_ALLOC`]).
 fn limits() -> Limits {
     let mut limits = Limits::default();
     limits.max_image_width = Some(MAX_IMAGE_SIDE);

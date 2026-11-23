@@ -100,6 +100,16 @@ pub(super) fn decode_isolated(
     program: &Path,
     args: &[&str],
 ) -> io::Result<Vec<u8>> {
+    let bytes = read_checked(file, cancel)?;
+
+    run_checked(bytes, cancel, program, args)
+}
+
+/// The first half of [`decode`]: the whole file, read under the caps, checked to be HEVC-coded HEIF (the brands and every
+/// item it lists). Nothing is started and nothing of the file is parsed by a codec. A caller that has to take a place
+/// for the helper (the thumbnails) reads first and takes it for [`run_checked`] only. On a system without a decoder this
+/// fails with `Unsupported` at once.
+pub(super) fn read_checked(file: &ViewFile, cancel: &AtomicBool) -> io::Result<Vec<u8>> {
     #[cfg(any(
         windows,
         all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))
@@ -110,6 +120,28 @@ pub(super) fn decode_isolated(
             return Err(not_heic());
         }
 
+        Ok(bytes)
+    }
+
+    #[cfg(not(any(
+        windows,
+        all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))
+    )))]
+    {
+        let _ = (file, cancel);
+
+        Err(no_decoder())
+    }
+}
+
+/// The second half of [`decode`]: the file `bytes` that [`read_checked`] gave, decoded by the helper `program` started
+/// with `args`.
+pub(super) fn run_checked(bytes: Vec<u8>, cancel: &AtomicBool, program: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
+    #[cfg(any(
+        windows,
+        all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))
+    ))]
+    {
         process::run(program, args, bytes, cancel, process::DEADLINE)
     }
 
@@ -118,7 +150,7 @@ pub(super) fn decode_isolated(
         all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))
     )))]
     {
-        let _ = (file, cancel, program, args);
+        let _ = (bytes, cancel, program, args);
 
         Err(no_decoder())
     }

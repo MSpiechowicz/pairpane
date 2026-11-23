@@ -75,6 +75,13 @@
     }
   });
 
+  // Another folder: what was in view belonged to the last one. The grid tells the new ranges once it is laid out.
+  $effect.pre(() => {
+    void listing.location;
+    visible = { first: 0, last: 0 };
+    near = { first: 0, last: 0 };
+  });
+
   // The thumbnails to fetch are those of the pictures in view, then those near it; none when the pane shows no tiles.
   $effect(() => {
     thumbs.want(thumbnails ? wantedBy(view, visible, near, thumbs.size) : []);

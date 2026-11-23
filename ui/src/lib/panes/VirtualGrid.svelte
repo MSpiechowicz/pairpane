@@ -46,9 +46,10 @@
 
   const across = $derived(fits(width, tileWidth));
   const cellWidth = $derived(width > 0 ? width / across : tileWidth);
-  // Not laid out yet (no width, or under one row of tiles): no rows, rather than one per item, whose spacer would be
+  // Not laid out yet (no width or no height): no rows, rather than one per item, whose spacer would be
   // millions of pixels high.
-  const rows = $derived(width <= 0 || height < tileHeight ? 0 : Math.ceil(count / across));
+  // A pane shorter than a tile still shows one row (cut), and the keys move by it.
+  const rows = $derived(width <= 0 || height <= 0 ? 0 : Math.ceil(count / across));
   const inView = $derived(windowOf(scrollTop, height, tileHeight, 0, rows));
   const rendered = $derived(windowOf(scrollTop, height, tileHeight, overscan, rows));
   const first = $derived(rendered.first * across);

@@ -9,11 +9,16 @@ use std::process::Command;
 
 use rustix::process::{Resource, getrlimit};
 
-use super::kernel::{io_uring_setup_errno, refused_errnos};
-use super::sandbox::{ADDRESS_SPACE, confine, limit};
+use super::kernel::{io_uring_setup_errno, mmap_errno, refused_errnos, uname_errno};
+use crate::view::testing::run_probe;
+
+use super::sandbox::{ADDRESS_SPACE, Filter, THUMBNAIL_ADDRESS_SPACE, confine, limit};
 
 /// Set in the test program that plays the helper.
 const PROBE: &str = "PAIRPANE_SANDBOX_PROBE";
+
+/// Set in the test program that plays the thumbnail helper, which has the allow-list filter.
+const ALLOW_PROBE: &str = "PAIRPANE_SANDBOX_ALLOW_PROBE";
 
 /// The name of the test that is the probe when [`PROBE`] is set.
 const TEST: &str = "view::heic::sandbox_tests::the_helper_confines_itself";
@@ -34,7 +39,7 @@ fn probe() -> String {
         .expect("status")
         .lines()
         .any(|line| line.starts_with("NoNewPrivs:") && line.ends_with('1'));
-    confine(ADDRESS_SPACE).expect("the helper confines itself");
+    confine(ADDRESS_SPACE, Filter::DenyList).expect("the helper confines itself");
 
     let limits = [Resource::Core, Resource::Cpu, Resource::Nofile].map(|resource| getrlimit(resource).current);
     let space = getrlimit(Resource::As).current.expect("a limit on the address space");
@@ -68,24 +73,10 @@ fn the_helper_confines_itself() {
         return;
     }
 
-    let output = Command::new(std::env::current_exe().expect("the test program"))
-        .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
-        .env(PROBE, "1")
-        .output()
-        .expect("the probe starts");
-    let text = String::from_utf8_lossy(&output.stdout);
-    // The report follows the name of the test on its line.
-    let report = text
-        .lines()
-        .find_map(|line| line.split_once("PROBE "))
-        .map_or("", |(_, report)| report);
+    let probe = run_probe(PROBE, TEST);
+    let report = probe.report.as_str();
 
-    assert!(
-        output.status.success(),
-        "{:?} {text} {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(probe.success, "{}", probe.output);
     assert!(report.contains("no_new_privs=true"), "{report}");
     assert!(report.contains("limits=[Some(0), Some(60), Some(64)]"), "{report}");
     assert!(report.contains("space=true"), "{report}");
@@ -138,4 +129,67 @@ fn kernel_at_least(major: u32, minor: u32) -> bool {
         .filter_map(|part| part.parse::<u32>().ok());
 
     (numbers.next(), numbers.next()) >= (Some(major), Some(minor))
+}
+
+/// The name of the test that is the probe when [`ALLOW_PROBE`] is set.
+const ALLOW_TEST: &str = "view::heic::sandbox_tests::the_thumbnail_helper_may_make_only_the_calls_it_needs";
+
+/// What the process that has the allow-list filter reports, one line.
+fn allow_probe() -> String {
+    limit().expect("the limits are set");
+    confine(THUMBNAIL_ADDRESS_SPACE, Filter::AllowList).expect("the helper confines itself");
+
+    let opens = File::open("/proc/self/status").is_ok();
+    let starts = Command::new("/bin/true").status().is_ok();
+    let socket = UdpSocket::bind("127.0.0.1:0")
+        .err()
+        .and_then(|error| error.raw_os_error());
+    let threads = std::thread::Builder::new().spawn(|| 7).is_ok();
+    let uname = uname_errno();
+    let memory = mmap_errno(libc::PROT_READ | libc::PROT_WRITE);
+    let code = mmap_errno(libc::PROT_READ | libc::PROT_EXEC);
+    let written = std::io::Write::write_all(&mut std::io::stdout(), b"").is_ok();
+
+    format!(
+        "PROBE opens={opens} starts={starts} socket_errno={} threads={threads} uname_errno={uname} memory_errno={memory} \
+         code_errno={code} written={written}",
+        socket.unwrap_or(0)
+    )
+}
+
+#[test]
+fn the_thumbnail_helper_may_make_only_the_calls_it_needs() {
+    if std::env::var_os(ALLOW_PROBE).is_some() {
+        println!("{}", allow_probe());
+        // The test harness would make calls the filter refuses on its way out.
+        std::process::exit(0);
+    }
+
+    let probe = run_probe(ALLOW_PROBE, ALLOW_TEST);
+    let report = probe.report.as_str();
+    let text = probe.output.as_str();
+    let eperm = libc::EPERM;
+
+    assert!(
+        report.contains("written=true"),
+        "the probe ran to its end: {report} {text}"
+    );
+    // Not one of them needs Landlock: the allow-list is the filter's.
+    assert!(report.contains("opens=false"), "no file is opened: {report}");
+    assert!(report.contains("starts=false"), "no program is started: {report}");
+    assert!(
+        report.contains(&format!("socket_errno={eperm} ")),
+        "no socket: {report}"
+    );
+    assert!(report.contains("threads=false"), "no thread is started: {report}");
+    assert!(
+        report.contains(&format!("uname_errno={eperm} ")),
+        "a call that is not listed is refused: {report}"
+    );
+    // Memory is what the helper needs; code in memory is what it never does.
+    assert!(report.contains("memory_errno=0 "), "memory can be mapped: {report}");
+    assert!(
+        report.contains(&format!("code_errno={eperm} ")),
+        "no memory can be made executable: {report}"
+    );
 }

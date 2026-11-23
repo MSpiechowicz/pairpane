@@ -119,11 +119,11 @@ describe('Thumbs', () => {
     expect(thumbs.get(target('a'))).toBeDefined();
   });
 
-  it('asks again when a request is refused as busy, after a wait, and holds the others back meanwhile', async () => {
-    let refused = false;
+  it('asks for nothing new for a while when the backend is busy, longer each time it says so again', async () => {
+    let refusals = 2;
     const { thumbs, askedNames } = world(({ name }) => {
-      if (name === 'a' && !refused) {
-        refused = true;
+      if (name === 'a' && refusals > 0) {
+        refusals -= 1;
         throw refusal('busy');
       }
 
@@ -132,16 +132,47 @@ describe('Thumbs', () => {
 
     thumbs.want(names('a', 'b', 'c', 'd'));
     await settled();
-    expect(askedNames()).toEqual(['a', 'b', 'c']); // d waits: the backend is full
-    expect(thumbs.get(target('a'))).toBeUndefined();
-
-    await vi.advanceTimersByTimeAsync(299);
+    // The backend is full: d waits with a, though b and c have answered.
     expect(askedNames()).toEqual(['a', 'b', 'c']);
 
+    await vi.advanceTimersByTimeAsync(300);
+    expect(askedNames()).toEqual(['a', 'b', 'c', 'a', 'd']); // busy again: the next wait is twice as long
+
+    await vi.advanceTimersByTimeAsync(599);
+    expect(askedNames()).toHaveLength(5);
     await vi.advanceTimersByTimeAsync(1);
-    expect(askedNames()).toEqual(['a', 'b', 'c', 'a', 'd']);
+    expect(askedNames()).toEqual(['a', 'b', 'c', 'a', 'd', 'a']);
     expect(thumbs.get(target('a'))).toBeDefined();
-    expect(thumbs.get(target('d'))).toBeDefined();
+  });
+
+  it('asks again later for a picture not read for a passing reason, and never for one that is not a picture', async () => {
+    let failures = 0;
+    const { thumbs, askedNames } = world(({ name }) => {
+      if (name === 'flaky' && failures === 0) {
+        failures += 1;
+        throw refusal('io');
+      }
+      if (name === 'notes') {
+        throw refusal('unsupported');
+      }
+
+      return picture(1, 1);
+    });
+
+    thumbs.want(names('flaky', 'notes'));
+    await settled();
+    expect(thumbs.get(target('flaky'))).toBeUndefined();
+
+    thumbs.want(names('flaky', 'notes'));
+    await settled();
+    expect(askedNames()).toEqual(['flaky', 'notes']); // neither is asked for again yet
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    thumbs.want(names('flaky', 'notes'));
+    await settled();
+
+    expect(askedNames()).toEqual(['flaky', 'notes', 'flaky']);
+    expect(thumbs.get(target('flaky'))).toBeDefined();
   });
 
   it('does not ask again for a picture that went out of view while the backend was busy', async () => {

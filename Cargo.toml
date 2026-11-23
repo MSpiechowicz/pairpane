@@ -118,8 +118,9 @@ windows = { version = "0.62.2", default-features = false, features = ["std", "Wi
 # (`libc`, `enumflags2`, `thiserror`) are in the lockfile already. `rustix` (above) sets the other limits.
 landlock = "0.4.8"
 # The same helper's seccomp filter, the descriptors it closes at its start and the probe of Landlock's version are raw
-# system calls (pairpane_core::view::heic::kernel, Linux only, `unsafe` with a `SAFETY` comment on every block). The
-# version the lockfile has already through `landlock` (one copy, not two).
+# system calls (pairpane_core::view::heic::kernel, Linux only, `unsafe` with a `SAFETY` comment on every block); on macOS
+# the thumbnail helper closes its descriptors with it (pairpane_core::view::thumb::macos). The version the lockfile has
+# already through `landlock` (one copy, not two).
 libc = "0.2.191"
 # Archives (pairpane_core::archive), all safe APIs, none of them reading a file by itself: the archive code hands each
 # decoder a bounded reader, and bytes that come from an archive are decoded by pure Rust only. `bzip2` (the libbz2-rs-sys

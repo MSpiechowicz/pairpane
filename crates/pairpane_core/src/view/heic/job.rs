@@ -1,9 +1,9 @@
-//! The Job Object that holds the HEIC helper process on Windows.
+//! The Job Object that holds the HEIC helper process (and the thumbnail helper, with a smaller memory limit) on Windows.
 //!
 //! The parent creates a job and puts the helper in it right after the start, before a byte is sent to it, so the codec
 //! has nothing to parse while it is not yet held. The job has three limits: closing the last handle to it ends every
 //! process in it (so the helper cannot outlive the app, even when the app is killed: the system closes the handle), at
-//! most [`MEMORY`] of committed memory for a process in it (a runaway allocation fails instead of growing), and one
+//! most the memory `contain` is given of committed memory for a process in it (a runaway allocation fails instead of growing), and one
 //! active process, which is the helper itself (the codec cannot start another). Its UI restrictions also keep the
 //! helper from the handles of other processes' windows, the clipboard, the desktop, the display settings, ending the
 //! session, global atoms and system parameters.
@@ -32,10 +32,6 @@ use windows_sys::Win32::System::JobObjects::{
 
 use crate::process::job::Job;
 
-/// The committed memory a process of the job may have, in bytes: what a picture of the pixel cap needs (the input, the
-/// decoder's planes, the converted pixels and the answer, together well under 2 GiB) and room to spare.
-const MEMORY: usize = 3 * 1024 * 1024 * 1024;
-
 /// The UI restrictions of the job (see the module).
 const UI_LIMITS: u32 = JOB_OBJECT_UILIMIT_HANDLES
     | JOB_OBJECT_UILIMIT_READCLIPBOARD
@@ -46,9 +42,10 @@ const UI_LIMITS: u32 = JOB_OBJECT_UILIMIT_HANDLES
     | JOB_OBJECT_UILIMIT_GLOBALATOMS
     | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS;
 
-/// Creates the job with its limits and puts `child` in it. The job must be kept until the child is reaped; dropping it
-/// ends every process still in it (the kill-on-close limit).
-pub(super) fn contain(child: &Child) -> io::Result<Job> {
+/// Creates the job with its limits, `memory` bytes of committed memory for a process in it (see `process::MEMORY` for the
+/// HEIC helper, and `view::thumb` for the thumbnail helper's), and puts `child` in it. The job must be kept until the
+/// child is reaped; dropping it ends every process still in it (the kill-on-close limit).
+pub(super) fn contain(child: &Child, memory: usize) -> io::Result<Job> {
     let job = Job::new()?;
 
     // SAFETY: the structure holds only integers and has no invalid bit pattern, so all-zero is a valid value.
@@ -56,7 +53,7 @@ pub(super) fn contain(child: &Child) -> io::Result<Job> {
     limits.BasicLimitInformation.LimitFlags =
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
     limits.BasicLimitInformation.ActiveProcessLimit = 1;
-    limits.ProcessMemoryLimit = MEMORY;
+    limits.ProcessMemoryLimit = memory;
 
     // SAFETY: `job.handle()` is a live job handle, and the pointer and the length are those of `limits`, the structure
     // that the `JobObjectExtendedLimitInformation` class takes, which lives through the call.

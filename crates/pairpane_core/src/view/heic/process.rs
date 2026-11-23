@@ -43,6 +43,11 @@ const STATUS_TOO_BIG: u8 = 3;
 /// still at it after this is hung, and is killed.
 pub(in crate::view) const DEADLINE: Duration = Duration::from_secs(60);
 
+/// The committed memory a HEIC helper may have on Windows (the Job Object's limit; Linux limits the address space in
+/// `sandbox.rs`), in bytes: what a picture of the pixel cap needs (the input, the decoder's planes, the converted pixels
+/// and the answer, together well under 2 GiB) and room to spare.
+pub(super) const MEMORY: usize = 3 * 1024 * 1024 * 1024;
+
 /// The environment variables the helper is given on top of the ones every child gets ([`process::command`]: a Windows
 /// process needs its system directory and its temporary folder, the Imaging Component reads them); it starts with no
 /// others. The loader and libheif need these to find the libraries and the plugins the app was started with (an AppImage
@@ -73,8 +78,8 @@ pub fn child_main() -> i32 {
     }
 
     #[cfg(target_os = "linux")]
-    if let Err(error) =
-        super::sandbox::single_threaded().and_then(|()| super::sandbox::confine(super::sandbox::ADDRESS_SPACE))
+    if let Err(error) = super::sandbox::single_threaded()
+        .and_then(|()| super::sandbox::confine(super::sandbox::ADDRESS_SPACE, super::sandbox::Filter::DenyList))
     {
         tracing::debug!(%error, "the helper cannot confine itself");
 
@@ -239,10 +244,11 @@ pub(super) fn run(
     cancel: &AtomicBool,
     deadline: Duration,
 ) -> io::Result<Vec<u8>> {
-    run_within(program, args, bytes, cancel, deadline, MAX_IMAGE_SIDE)
+    run_within(program, args, bytes, cancel, deadline, MAX_IMAGE_SIDE, MEMORY)
 }
 
-/// [`run`] for a helper whose picture has no side over `max_side` (see [`read_picture`]).
+/// [`run`] for a helper whose picture has no side over `max_side` (see [`read_picture`]) and which, on Windows, may
+/// commit `memory` bytes (the Job Object's limit; unused elsewhere).
 pub(in crate::view) fn run_within(
     program: &Path,
     args: &[&str],
@@ -250,7 +256,11 @@ pub(in crate::view) fn run_within(
     cancel: &AtomicBool,
     deadline: Duration,
     max_side: u32,
+    memory: usize,
 ) -> io::Result<Vec<u8>> {
+    #[cfg(not(windows))]
+    let _ = memory;
+
     if cancel.load(Ordering::Relaxed) {
         return Err(cancelled());
     }
@@ -268,7 +278,7 @@ pub(in crate::view) fn run_within(
     // The job is made before a byte is sent, so the helper has nothing to run that is not in it. It is kept until the
     // child is reaped below; closing it ends whatever is still in it.
     #[cfg(windows)]
-    let _job = match super::job::contain(&child) {
+    let _job = match super::job::contain(&child, memory) {
         Ok(job) => job,
         Err(error) => {
             tracing::debug!(%error, "the helper cannot be contained");

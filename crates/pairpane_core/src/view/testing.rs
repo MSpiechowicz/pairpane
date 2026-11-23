@@ -84,3 +84,38 @@ pub(super) fn ftyp(major: &[u8; 4], compatible: &[&[u8; 4]]) -> Vec<u8> {
 
     bytes
 }
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// What a probe, the test program started again to confine itself and report (see [`run_probe`]), said and how it ended.
+pub(crate) struct Probe {
+    /// Whether the process ended with success.
+    pub(crate) success: bool,
+    /// What it wrote to its standard output and to its standard error, for the message of a failed assertion.
+    pub(crate) output: String,
+    /// The one line it reported after `PROBE `, or nothing.
+    pub(crate) report: String,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// Starts this test program again to run the single test `test` as a probe: with the environment variable `variable`
+/// set, the test is to confine its process and print one line that starts with `PROBE `. (Confining the process of the
+/// test itself would confine the other tests with it.)
+pub(crate) fn run_probe(variable: &str, test: &str) -> Probe {
+    let output = std::process::Command::new(std::env::current_exe().expect("the test program"))
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(variable, "1")
+        .output()
+        .expect("the probe starts");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    // The report follows the name of the test on its line.
+    let report = stdout
+        .lines()
+        .find_map(|line| line.split_once("PROBE "))
+        .map_or(String::new(), |(_, report)| report.to_owned());
+
+    Probe {
+        success: output.status.success(),
+        output: format!("{stdout} {}", String::from_utf8_lossy(&output.stderr)),
+        report,
+    }
+}

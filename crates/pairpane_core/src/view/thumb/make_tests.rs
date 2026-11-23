@@ -10,7 +10,7 @@ use image::ImageFormat::Png;
 use pretty_assertions::assert_eq;
 
 use super::fixtures::{encode, size_of, solid};
-use super::{make, open};
+use super::{has_thumbnail, make, open, read};
 use crate::view::heic::HEADER;
 use crate::view::heic::process::read_picture;
 use crate::view::testing::{idle, put, temp};
@@ -113,7 +113,7 @@ fn a_file_over_the_cap_is_too_big_without_being_read_or_a_helper_started() {
         .expect("sparse");
     let source = open(folder.path(), "huge.png").expect("a picture by its header");
 
-    let error = make(&source, 64, &idle(), Path::new(NOWHERE)).expect_err("too big");
+    let error = read(&source, &idle()).expect_err("too big");
 
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     assert!(is_refusal(&error), "refused by us, not a helper that failed to start");
@@ -127,18 +127,33 @@ fn a_flag_raised_before_the_start_starts_nothing() {
     let source = open(folder.path(), "a.png").expect("a picture");
     let cancel = AtomicBool::new(true);
 
-    let error = make(&source, 64, &cancel, Path::new(NOWHERE)).expect_err("cancelled");
+    let error = read(&source, &cancel).expect_err("cancelled");
 
     assert_eq!(error.kind(), io::ErrorKind::Interrupted);
 }
 
-#[test]
-fn a_helper_that_is_not_there_is_a_failure_without_text_of_ours() {
+/// The error of making the thumbnail of a small PNG, which is read with the flag down, with `cancel` as the flag of the
+/// helper and no helper where it would be.
+fn make_without_a_helper(cancel: &AtomicBool) -> io::Error {
     let folder = temp();
     put(folder.path(), "a.png", &encode(Png, 4, 4));
     let source = open(folder.path(), "a.png").expect("a picture");
+    let bytes = read(&source, &idle()).expect("the file is read");
 
-    let error = make(&source, 64, &idle(), Path::new(NOWHERE)).expect_err("no helper");
+    make(&source, bytes, 64, cancel, Path::new(NOWHERE)).expect_err("no thumbnail")
+}
+
+#[test]
+fn a_flag_raised_between_the_read_and_the_helper_starts_no_helper() {
+    let error = make_without_a_helper(&AtomicBool::new(true));
+
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    assert!(is_refusal(&error), "ours, not a helper that did not start");
+}
+
+#[test]
+fn a_helper_that_is_not_there_is_a_failure_without_text_of_ours() {
+    let error = make_without_a_helper(&idle());
 
     assert!(!is_refusal(&error));
     assert_ne!(error.kind(), io::ErrorKind::NotFound, "not mistaken for a missing file");
@@ -170,4 +185,68 @@ fn the_picture_of_an_answer_is_framed_as_the_helper_frames_it() {
     let mut answer = vec![0];
     answer.extend_from_slice(&framed);
     assert_eq!(read_picture(&answer[..], 64).expect("a picture"), framed);
+}
+
+#[test]
+fn heic_has_no_thumbnail_on_windows_and_every_other_format_has_one_everywhere() {
+    use super::Format::{Bmp, Gif, Heic, Jpeg, Png, Webp};
+
+    for format in [Png, Jpeg, Gif, Webp, Bmp] {
+        assert!(has_thumbnail(format, true), "{format:?}");
+        assert!(has_thumbnail(format, false), "{format:?}");
+    }
+
+    assert!(!has_thumbnail(Heic, true));
+    assert!(has_thumbnail(Heic, false));
+}
+
+/// Gives the files `names` of `folder` one and the same modification time.
+fn same_time(folder: &Path, names: &[&str]) {
+    let time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+
+    for name in names {
+        File::options()
+            .write(true)
+            .open(folder.join(name))
+            .expect("open")
+            .set_modified(time)
+            .expect("a time");
+    }
+}
+
+#[test]
+fn a_file_is_known_by_what_it_is_and_not_only_by_its_length_and_time() {
+    let folder = temp();
+    let picture = encode(Png, 4, 4);
+    put(folder.path(), "a.png", &picture);
+    put(folder.path(), "b.png", &picture);
+    same_time(folder.path(), &["a.png", "b.png"]);
+
+    let a = open(folder.path(), "a.png").expect("a picture");
+    let b = open(folder.path(), "b.png").expect("a picture");
+
+    // The same length and the same time: two files are told apart by their identities (where the system gives them).
+    assert_eq!((a.len, a.modified), (b.len, b.modified));
+    if cfg!(unix) {
+        assert!(a.identity.is_some());
+        assert_ne!(a.identity, b.identity);
+    }
+    assert_eq!(a.identity, open(folder.path(), "a.png").expect("again").identity);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_that_replaces_another_has_another_identity_even_with_its_length_and_time() {
+    let folder = temp();
+    let picture = encode(Png, 4, 4);
+    put(folder.path(), "a.png", &picture);
+    put(folder.path(), "new.png", &picture);
+    same_time(folder.path(), &["a.png", "new.png"]);
+    let before = open(folder.path(), "a.png").expect("a picture");
+
+    std::fs::rename(folder.path().join("new.png"), folder.path().join("a.png")).expect("replaced");
+    let after = open(folder.path(), "a.png").expect("a picture");
+
+    assert_eq!((before.len, before.modified), (after.len, after.modified));
+    assert_ne!(before.identity, after.identity);
 }

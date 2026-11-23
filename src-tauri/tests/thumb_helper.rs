@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use pairpane_core::view::is_refusal;
-use pairpane_core::view::thumb::{CHILD_ARG, Source, helper_command, make, open};
+use pairpane_core::view::thumb::{CHILD_ARG, Source, helper_command, make, open, read};
 
 mod common;
 
@@ -96,7 +96,9 @@ fn idle() -> AtomicBool {
 fn thumbnail(bytes: &[u8], size: u32) -> std::io::Result<Vec<u8>> {
     let (_folder, source) = source(bytes);
 
-    make(&source, size, &idle(), program())
+    let bytes = read(&source, &idle())?;
+
+    make(&source, bytes, size, &idle(), program())
 }
 
 fn size_of(answer: &[u8]) -> (u32, u32) {
@@ -114,19 +116,35 @@ fn is_color(rgba: &[u8], tolerance: u8) -> bool {
     })
 }
 
+/// The formats that get a thumbnail, with how far a decoded colour may be from the one that was encoded (a JPEG is not
+/// exact).
+const FORMATS: [(ImageFormat, u8); 5] = [
+    (ImageFormat::Png, 0),
+    (ImageFormat::Jpeg, 8),
+    (ImageFormat::Gif, 0),
+    (ImageFormat::WebP, 0),
+    (ImageFormat::Bmp, 0),
+];
+
 #[test]
 fn every_format_gets_a_thumbnail_from_the_helper() {
-    for (format, tolerance) in [
-        (ImageFormat::Png, 0),
-        (ImageFormat::Jpeg, 8),
-        (ImageFormat::Gif, 0),
-        (ImageFormat::WebP, 0),
-        (ImageFormat::Bmp, 0),
-    ] {
+    for (format, tolerance) in FORMATS {
         let thumbnail = thumbnail(&encode(format, 300, 150), 100).expect("a thumbnail");
 
         assert_eq!(size_of(&thumbnail), (100, 50), "{format:?}");
         assert_eq!(thumbnail.len(), 8 + 100 * 50 * 4, "{format:?}");
+        assert!(is_color(&thumbnail[8..], tolerance), "{format:?}");
+    }
+}
+
+#[test]
+fn big_pictures_of_every_format_are_decoded_under_the_helper_s_confinement() {
+    // Millions of pixels: the memory the decoders ask for grows, moves and is given back, which the allow-list
+    // seccomp filter of Linux must let through (and nothing else).
+    for (format, tolerance) in FORMATS {
+        let thumbnail = thumbnail(&encode(format, 1600, 1200), 256).expect("a thumbnail");
+
+        assert_eq!(size_of(&thumbnail), (256, 192), "{format:?}");
         assert!(is_color(&thumbnail[8..], tolerance), "{format:?}");
     }
 }
@@ -201,7 +219,7 @@ fn a_heic_picture_is_decoded_by_the_heic_helper_where_the_system_has_a_decoder()
     let (_folder, source) = source(TINY_HEIC);
     assert!(source.is_heic());
 
-    match make(&source, 64, &idle(), program()) {
+    match read(&source, &idle()).and_then(|bytes| make(&source, bytes, 64, &idle(), program())) {
         Ok(thumbnail) => {
             // 16 by 8 fits in 64: not made bigger.
             assert_eq!(size_of(&thumbnail), (16, 8));
