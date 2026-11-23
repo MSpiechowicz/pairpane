@@ -300,3 +300,49 @@ fn a_folder_that_was_not_extracted_is_never_removed_by_the_undo() {
     assert!(!root.path().join("dst/a.txt").exists());
     assert_eq!(read(&root.path().join("dst/docs/mine.txt")), b"mine");
 }
+
+/// A file that cannot be put back (its folder is read-only) keeps its old copy, and a second undo puts it back.
+#[cfg(unix)]
+#[test]
+fn an_undo_with_a_file_it_could_not_put_back_keeps_the_old_file_for_another_try() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let pair = Pair::new();
+    file(&pair.left().join("sub/over.txt"), b"newer", 300);
+    file(&pair.right().join("sub/over.txt"), b"older", 200);
+    let log = SyncLog::default();
+    is_done(&sync(&pair, &["sub/over.txt"], &log), 0);
+    let sub = pair.right().join("sub");
+    fs::set_permissions(&sub, fs::Permissions::from_mode(0o555)).expect("read-only");
+    // Root writes anyway: there is nothing to show then.
+    let writable = fs::write(sub.join("probe"), b"").is_ok();
+
+    let first = Rig::new().run(undo_of(&pair, &log));
+
+    fs::set_permissions(&sub, fs::Permissions::from_mode(0o755)).expect("writable again");
+    if writable {
+        return;
+    }
+    assert_eq!(first.errors.len(), 1, "{:?}", first.errors);
+    assert!(!log.undone());
+    assert_eq!(holdings(&pair.right()), 1, "the old file is still kept");
+
+    is_done(&Rig::new().run(undo_of(&pair, &log)), 0);
+    assert_eq!(read(&sub.join("over.txt")), b"older");
+    assert_eq!(holdings(&pair.right()), 0);
+}
+
+#[test]
+fn a_queued_undo_keeps_the_old_files_through_a_release_until_it_has_run() {
+    let pair = scene();
+    let log = SyncLog::default();
+    is_done(&sync(&pair, &ITEMS, &log), 0);
+
+    log.undo_queued();
+    log.release();
+    assert_eq!(holdings(&pair.right()), 1, "the queued undo still needs them");
+
+    is_done(&Rig::new().run(undo_of(&pair, &log)), 0);
+    assert_eq!(read(&pair.right().join("over.txt")), b"older");
+    assert_eq!(holdings(&pair.right()), 0);
+}

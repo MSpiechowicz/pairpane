@@ -7,10 +7,11 @@
 //! job's id) from the job it started and asks for the undo once the job has ended; the undo is a job of its own, which
 //! leaves what changed since the sync and counts it. An undo has no undo of its own.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use pairpane_core::model::JobId;
+use pairpane_core::model::{JobId, OpsEvent};
 use pairpane_core::ops::{Engine, Request, SyncLog, Task};
 
 use super::failed;
@@ -25,10 +26,11 @@ struct Pending {
     log: SyncLog,
 }
 
-/// The slot of the sync that can be undone.
+/// The slot of the sync that can be undone, and the undo jobs queued that have not ended yet (each with its log).
 #[derive(Default)]
 pub(super) struct SyncUndo {
     slot: Mutex<Option<Pending>>,
+    undos: Mutex<HashMap<JobId, SyncLog>>,
 }
 
 impl SyncUndo {
@@ -42,8 +44,12 @@ impl SyncUndo {
 
         let mut slot = self.lock();
         let job = engine.submit(request).map_err(failed)?;
-        if let Some(old) = slot.replace(Pending { job, folder, log }) {
-            old.log.release();
+        let old = slot.replace(Pending { job, folder, log });
+        drop(slot);
+
+        // Away from the slot and the command: removing the holding folders reaches a target folder, which may not answer.
+        if let Some(old) = old {
+            std::thread::spawn(move || old.log.release());
         }
 
         Ok(job)
@@ -65,23 +71,46 @@ impl SyncUndo {
         )?;
 
         if pending.log.undone() || pending.log.undoable() == 0 {
-            if let Some(old) = slot.take() {
+            let old = slot.take();
+            drop(slot);
+            if let Some(old) = old {
                 old.log.release();
             }
 
             return Err(nothing());
         }
 
+        let log = pending.log.clone();
         let back = Request::task(
             pending.folder.clone(),
-            pending.log.names(),
+            log.names(),
             pending.folder.clone(),
-            Task::SyncUndo {
-                log: pending.log.clone(),
-            },
+            Task::SyncUndo { log: log.clone() },
         );
 
-        engine.submit(back).map_err(failed)
+        // Until the undo job ended (even one cancelled before it ran), nothing it needs goes, and no second one is queued.
+        log.undo_queued();
+        match engine.submit(back) {
+            Ok(undo) => {
+                self.undos().insert(undo, log);
+
+                Ok(undo)
+            }
+            Err(refused) => {
+                log.end_undo(false);
+
+                Err(failed(refused))
+            }
+        }
+    }
+
+    /// Told of every event of the engine: an undo job that ended is over for its log, however it ended.
+    pub(super) fn observe(&self, event: &OpsEvent) {
+        if let OpsEvent::Ended { id, .. } = event
+            && let Some(log) = self.undos().remove(id)
+        {
+            log.end_undo(false);
+        }
     }
 
     /// Lets go of the sync in the slot, as the app quits: the undo is no longer offered, and the old files go (see
@@ -90,6 +119,10 @@ impl SyncUndo {
         if let Some(old) = self.lock().take() {
             old.log.release();
         }
+    }
+
+    fn undos(&self) -> MutexGuard<'_, HashMap<JobId, SyncLog>> {
+        self.undos.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn lock(&self) -> MutexGuard<'_, Option<Pending>> {

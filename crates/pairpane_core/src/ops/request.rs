@@ -16,6 +16,10 @@ use super::{ArchiveJob, RenameLog, SyncLog};
 /// What a job does. [`Task::Transfer`] is the copy or move that [`Request::kind`] names; every other task has
 /// its own [`OpKind`] (see [`Task::kind`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one task per queued job; boxing the synchronization (larger on Windows) would buy nothing"
+)]
 pub enum Task {
     /// A copy or a move.
     Transfer,

@@ -53,7 +53,7 @@ pub struct Ops {
     listener: Listener,
     extractions: Arc<Extractions>,
     rename_undo: RenameUndo,
-    sync_undo: SyncUndo,
+    sync_undo: Arc<SyncUndo>,
     renames: ThreadCap,
     guards: ThreadCap,
 }
@@ -65,11 +65,14 @@ impl Default for Ops {
 
         let extractions = Arc::<Extractions>::default();
 
+        let sync_undo = Arc::<SyncUndo>::default();
         let sink = Arc::clone(&listener);
         let watch = Arc::clone(&extractions);
+        let undos = Arc::clone(&sync_undo);
         engine.set_sink(Arc::new(move |event| {
             // First: a password the job found wrong is forgotten before the page is told the job failed.
             watch.observe(&event);
+            undos.observe(&event);
             deliver(&sink, event);
         }));
 
@@ -78,7 +81,7 @@ impl Default for Ops {
             listener,
             extractions,
             rename_undo: RenameUndo::default(),
-            sync_undo: SyncUndo::default(),
+            sync_undo,
             renames: ThreadCap::default(),
             guards: ThreadCap::default(),
         }

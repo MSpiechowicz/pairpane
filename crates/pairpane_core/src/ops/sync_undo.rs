@@ -33,6 +33,7 @@ impl Run<'_> {
         self.phase(JobPhase::Removing);
 
         let done = log.done();
+        let failed = self.failures();
         log.begin_undo();
         let result = (|| {
             for item in done.iter().rev() {
@@ -47,8 +48,9 @@ impl Run<'_> {
             Ok(())
         })();
 
-        // Through to its end, the old files that were not put back go; cancelled or failed, they stay for another undo.
-        log.end_undo(result.is_ok());
+        // Through to its end with nothing failed, the old files that were not put back go; cancelled, or with a file that
+        // could not be put back, they stay for another undo.
+        log.end_undo(result.is_ok() && self.failures() == failed);
 
         result
     }

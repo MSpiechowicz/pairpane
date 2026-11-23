@@ -89,6 +89,11 @@ fn a_newer_sync_takes_the_undo_and_the_older_one_s_kept_files_go() {
     )
     .expect("accepted");
 
+    // Let go of on a thread of its own, away from the command.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while holdings(right.path()) > 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(
         holdings(right.path()),
         0,
