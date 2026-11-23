@@ -11,8 +11,9 @@ import type { PaneTabs } from '$lib/panes/tabs.svelte';
 import type { PaneView } from '$lib/panes/view.svelte';
 import { SyncReports } from '$lib/compare/undo';
 import { RenameReports } from '$lib/rename/undo';
+import { type Preferences, preferences } from '$lib/shell/preferences.svelte';
 
-import { type FileAction, type Notice, trashName, what } from './dialogs';
+import { type FileAction, type Notice, perform, specOf, trashName, what } from './dialogs';
 import { chosen, type DialogKind, type OpRequest, READ_ONLY_NOTICE, refusal, RESULTS_NOTICE, requestFor, resultTargets, targets } from './targets';
 import { isTool, ItemTools } from './tools.svelte';
 
@@ -78,12 +79,16 @@ export class FileActions {
   readonly #ipc: Transport;
   readonly #panes: Record<PaneId, PaneTabs>;
   readonly #active: () => PaneId;
+  readonly #preferences: Preferences;
   #toasts = 0;
+  /** A copy, move or removal that skipped its question is being asked of the backend: a second key press waits for it. */
+  #direct = false;
 
-  constructor(ipc: Transport, panes: Record<PaneId, PaneTabs>, active: () => PaneId) {
+  constructor(ipc: Transport, panes: Record<PaneId, PaneTabs>, active: () => PaneId, prefs: Preferences = preferences) {
     this.#ipc = ipc;
     this.#panes = panes;
     this.#active = active;
+    this.#preferences = prefs;
     this.rename = new InlineRename(ipc, (text) => this.say(text, true));
     this.tools = new ItemTools(ipc, (text, error) => this.say(text, error));
   }
@@ -141,12 +146,44 @@ export class FileActions {
 
   #open(kind: DialogKind, source: PaneView, other: PaneView) {
     const request = requestFor(kind, source, other);
-    if (request !== undefined) {
+    if (request !== undefined && this.#skipsPrompt(kind, request)) {
+      void this.#goStraight({ request, source, other });
+    } else if (request !== undefined) {
       this.dialog = { request, source, other };
     } else if (kind === 'combine' && source.entryAt(source.cursor) !== undefined) {
       this.say('Choose the first part of a split file, named like “video.mkv.001”.', true);
     } else if (kind === 'extract' && chosen(source).length > 0) {
       this.say('Choose an archive to extract.', true);
+    }
+  }
+
+  /**
+   * Whether F5 and F6 go to the other pane's folder without asking (the setting): only when there is a folder to go to.
+   * A copy into an archive and an extraction by F5 go straight too; the other dialogs ask for something of their own.
+   */
+  #skipsPrompt(kind: DialogKind, request: OpRequest): boolean {
+    if (this.#preferences.value.confirmTransfer || (kind !== 'copy' && kind !== 'move')) {
+      return false;
+    }
+
+    return request.kind === 'add' || ('to' in request && request.to !== '');
+  }
+
+  /** Does what the dialog would do with the target it starts with; a refusal is told in a card, as the dialog would show it. */
+  async #goStraight(dialog: OpenDialog) {
+    if (this.#direct) {
+      return;
+    }
+
+    this.#direct = true;
+
+    try {
+      const done = await perform(this.#ipc, dialog.request, specOf(dialog.request).initial, false);
+      this.#finish(dialog, done.name);
+    } catch (error) {
+      this.say(IpcFailure.from(error).message, true);
+    } finally {
+      this.#direct = false;
     }
   }
 
@@ -174,39 +211,71 @@ export class FileActions {
     this.dialog = undefined;
 
     if (dialog !== undefined) {
-      const { request, source, other } = dialog;
-      if (request.kind === 'copy' && request.results) {
-        deselectResults(source, request.names);
-      } else if (request.kind === 'copy' || request.kind === 'move' || request.kind === 'add') {
-        source.deselect(request.names);
-      } else if (request.kind === 'extract') {
-        source.deselect(request.names.length > 0 ? request.names : request.archives.map(({ archive }) => archiveName(archive)));
-      } else if (request.kind === 'symlink' || request.kind === 'hardlink') {
-        other.pointAt(name);
-      } else if (request.kind !== 'combine') {
-        source.pointAt(name);
-      }
+      this.#finish(dialog, name);
+    } else {
+      this.#settle();
+    }
+  }
+
+  /** `dialog`'s work is done (it started a job, or made or changed an item named `name`): the selection and the cursor follow. */
+  #finish({ request, source, other }: OpenDialog, name: string) {
+    if (request.kind === 'copy' && request.results) {
+      deselectResults(source, request.names);
+    } else if (request.kind === 'copy' || request.kind === 'move' || request.kind === 'add') {
+      source.deselect(request.names);
+    } else if (request.kind === 'extract') {
+      source.deselect(request.names.length > 0 ? request.names : request.archives.map(({ archive }) => archiveName(archive)));
+    } else if (request.kind === 'symlink' || request.kind === 'hardlink') {
+      other.pointAt(name);
+    } else if (request.kind !== 'combine') {
+      source.pointAt(name);
     }
 
     this.#settle();
   }
 
+  /** The Delete key: asks first, but for a move to the Trash when the setting says not to (Undo is in the card that tells it). */
   #ask(permanent: boolean) {
+    const removal = this.#toRemove(permanent);
+    if (removal === undefined) {
+      return;
+    }
+
+    if (permanent || this.#preferences.value.confirmTrash) {
+      this.removal = removal;
+    } else {
+      void this.#trashStraight(removal);
+    }
+  }
+
+  /** What the active pane's selection (or cursor) would remove; `undefined` when there is nothing to remove. */
+  #toRemove(permanent: boolean): Removal | undefined {
     const source = this.#panes[this.#active()].view;
     const { path, folder, results } = source.listing;
 
     if (results !== undefined) {
       const names = resultTargets(source);
-      if (folder !== undefined && names.length > 0) {
-        this.removal = { permanent, path: folder, names, source, results: true };
-      }
-
-      return;
+      return folder !== undefined && names.length > 0 ? { permanent, path: folder, names, source, results: true } : undefined;
     }
 
     const names = targets(source);
-    if (path !== undefined && names.length > 0) {
-      this.removal = { permanent, path, names, source };
+    return path !== undefined && names.length > 0 ? { permanent, path, names, source } : undefined;
+  }
+
+  /** Moves to the Trash without the question; a refusal is told in a card (the dialog would have shown it). */
+  async #trashStraight(removal: Removal) {
+    if (this.#direct) {
+      return;
+    }
+
+    this.#direct = true;
+
+    try {
+      await this.#remove(removal);
+    } catch (error) {
+      this.say(IpcFailure.from(error).message, true);
+    } finally {
+      this.#direct = false;
     }
   }
 
@@ -225,6 +294,12 @@ export class FileActions {
       return;
     }
 
+    await this.#remove(removal);
+    this.closeRemoval();
+  }
+
+  /** Removes what `removal` names (see {@link confirmRemoval}). */
+  async #remove(removal: Removal) {
     const { path, names } = removal;
     const groups: ResultGroup[] = removal.results ? groupResults(path, names) : [{ folder: path, dir: '', names, rels: names }];
     const within = (dir: string): Within | undefined => (removal.results ? { root: path, dir } : undefined);
@@ -239,8 +314,6 @@ export class FileActions {
     } finally {
       this.#removed(removal, gone);
     }
-
-    this.closeRemoval();
   }
 
   /** Deletes the groups in turn; `gone` collects the items that are. A refusal rejects. */

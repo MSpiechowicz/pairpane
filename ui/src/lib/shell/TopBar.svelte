@@ -15,6 +15,7 @@
     nativeMenu,
     showHidden,
     onCheckForUpdates,
+    onSettings,
     onEditSettings,
     onKeyboardShortcuts,
     onToggleHidden,
@@ -31,6 +32,8 @@
     /** Whether the panes list hidden files. */
     showHidden: boolean;
     onCheckForUpdates: () => void;
+    /** "Settings…": the settings dialog (the palette opens it too). */
+    onSettings: () => void;
     /** "Edit Settings…": the settings file opens in the system's editor for it. */
     onEditSettings: () => void;
     /** "Keyboard Shortcuts…": the dialog that changes the keys (the palette opens it too). */
@@ -103,6 +106,7 @@
 
 {#snippet settings()}
   <div class="popup" role="menu">
+    <button class="popup-item" type="button" role="menuitem" onclick={() => ((open = undefined), onSettings())}>Settings…</button>
     <button class="popup-item" type="button" role="menuitem" onclick={editSettings}>Edit Settings…</button>
     <button class="popup-item" type="button" role="menuitem" onclick={() => ((open = undefined), onKeyboardShortcuts())}>Keyboard Shortcuts…</button>
     {#if !nativeMenu}

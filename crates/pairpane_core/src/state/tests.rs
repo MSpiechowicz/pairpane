@@ -49,6 +49,7 @@ pub(super) fn state() -> SavedState {
         searches: Vec::new(),
         renames: Vec::new(),
         keys: Vec::new(),
+        preferences: None,
     }
 }
 

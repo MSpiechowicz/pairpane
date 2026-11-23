@@ -37,6 +37,27 @@ describe('Updates', () => {
     expect(updates.state).toEqual({ kind: 'available', info });
   });
 
+  it('makes the check at startup unless the settings say not to', async () => {
+    const check = vi.fn(() => info);
+    const wanted = new Updates(transport({ update_check: check }), undefined, undefined, () => true);
+    const unwanted = new Updates(transport({ update_check: check }), undefined, undefined, () => false);
+
+    await unwanted.checkAtStart();
+    expect(check).not.toHaveBeenCalled();
+    expect(unwanted.state).toEqual({ kind: 'idle' });
+
+    await wanted.checkAtStart();
+    expect(wanted.state).toEqual({ kind: 'available', info });
+  });
+
+  it('a check the user asks for is made whatever the settings say', async () => {
+    const updates = new Updates(transport({ update_check: () => info }), undefined, undefined, () => false);
+
+    await updates.check(true);
+
+    expect(updates.state).toEqual({ kind: 'available', info });
+  });
+
   it('stays silent when a startup check finds nothing or fails', async () => {
     const none = new Updates(transport({ update_check: () => null }));
     const offline = new Updates(transport({ update_check: failing('io') }));

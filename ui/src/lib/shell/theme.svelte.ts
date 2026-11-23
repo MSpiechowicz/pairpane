@@ -1,5 +1,9 @@
+import type { ThemeChoice } from '$lib/ipc/bindings/ThemeChoice';
+
+import { type Preferences, preferences } from './preferences.svelte';
+
 /** What the user picked; `system` follows the OS. */
-export type ThemeMode = 'system' | 'light' | 'dark';
+export type ThemeMode = ThemeChoice;
 
 const MODES: readonly ThemeMode[] = ['system', 'light', 'dark'];
 const STORAGE_KEY = 'pairpane.theme';
@@ -18,15 +22,20 @@ function load(storage: Storage | undefined): ThemeMode {
 /**
  * Light or dark, by the user's choice or, by default, the OS. Applies itself as `data-theme` on <html>; the
  * colors live in lib/design/tokens.css.
+ *
+ * The choice is a preference, kept with the session. The page cannot wait for the session, so the last choice is also
+ * kept in the page's own storage: it is what shows before the session is restored (no flash of the other theme), and
+ * the restored preference then replaces it.
  */
 export class Theme {
-  mode = $state<ThemeMode>('system');
   #prefersLight = $state(false);
 
+  readonly #preferences: Preferences;
   readonly #root: HTMLElement;
   readonly #storage: Storage | undefined;
 
-  constructor(win: Window = window) {
+  constructor(win: Window = window, prefs: Preferences = preferences) {
+    this.#preferences = prefs;
     this.#root = win.document.documentElement;
     this.#storage = (() => {
       try {
@@ -35,7 +44,7 @@ export class Theme {
         return undefined;
       }
     })();
-    this.mode = load(this.#storage);
+    prefs.set({ theme: load(this.#storage) });
 
     const query = win.matchMedia(LIGHT_QUERY);
     this.#prefersLight = query.matches;
@@ -45,6 +54,11 @@ export class Theme {
     });
 
     this.#apply();
+  }
+
+  /** What the user picked. */
+  get mode(): ThemeMode {
+    return this.#preferences.value.theme;
   }
 
   /** The theme in effect. */
@@ -62,13 +76,28 @@ export class Theme {
   }
 
   set(mode: ThemeMode): void {
-    this.mode = mode;
+    this.#preferences.set({ theme: mode });
+    this.#remember(mode);
+    this.#apply();
+  }
+
+  /**
+   * Keeps what is shown in step with the preference when something else changes it (the session restoring it, the
+   * settings). Call while a component is being set up: it starts an effect.
+   */
+  watch(): void {
+    $effect(() => {
+      this.#remember(this.mode);
+      this.#apply();
+    });
+  }
+
+  #remember(mode: ThemeMode): void {
     try {
       this.#storage?.setItem(STORAGE_KEY, mode);
     } catch {
       // Not remembered; it still applies for this session.
     }
-    this.#apply();
   }
 
   #apply(): void {

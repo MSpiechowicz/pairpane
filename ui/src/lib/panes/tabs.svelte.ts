@@ -62,7 +62,7 @@ export class PaneTabs {
   /** A tab's folder is being opened; if it cannot be, the home folder takes its place (once). */
   #homing = false;
 
-  constructor(ipc: Transport, pane: PaneId, hooks: Pick<ViewHooks, 'onFail'> = {}) {
+  constructor(ipc: Transport, pane: PaneId, hooks: Pick<ViewHooks, 'onFail' | 'showHidden'> = {}) {
     this.view = new PaneView(ipc, pane, {
       onOpen: () => {
         this.#pending = undefined;
@@ -78,6 +78,7 @@ export class PaneTabs {
         hooks.onFail?.();
       },
       onNotice: () => this.#refused(),
+      showHidden: hooks.showHidden,
     });
     this.#tabs = [this.#create(null, { column: 'name', desc: false })];
   }

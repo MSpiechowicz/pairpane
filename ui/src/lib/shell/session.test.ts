@@ -16,6 +16,7 @@ import { SavedRenames } from '$lib/rename/saved.svelte';
 import { arrive, fakeBackend } from '../../../tests/panes';
 import SessionHost from '../../../tests/SessionHost.svelte';
 import { Keymap } from './keymap.svelte';
+import { DEFAULT_PREFERENCES, Preferences } from './preferences.svelte';
 import { BUSY_SAVE_MS, LOAD_TIMEOUT_MS, SAVE_DELAY_MS, Session } from './session.svelte';
 
 const saved: SavedState = {
@@ -39,6 +40,7 @@ function setup(answers: Parameters<typeof fakeBackend>[0] = {}) {
   const searches = new SavedSearches();
   const renames = new SavedRenames();
   const keymap = new Keymap();
+  const preferences = new Preferences();
   const focus = { side: 'left' as PaneId };
   const session = new Session(backend.ipc, {
     panes,
@@ -46,6 +48,7 @@ function setup(answers: Parameters<typeof fakeBackend>[0] = {}) {
     searches,
     renames,
     keymap,
+    preferences,
     active: { get: () => focus.side, set: (side) => (focus.side = side) },
   });
 
@@ -62,7 +65,7 @@ function setup(answers: Parameters<typeof fakeBackend>[0] = {}) {
     flushSync();
   };
 
-  return { backend, panes, hotlist, searches, renames, keymap, focus, session, calls, saves, opened, list };
+  return { backend, panes, hotlist, searches, renames, keymap, preferences, focus, session, calls, saves, opened, list };
 }
 
 type Setup = ReturnType<typeof setup>;
@@ -209,8 +212,30 @@ describe('Session saving', () => {
         searches: [],
         renames: [],
         keys: [],
+        preferences: { ...DEFAULT_PREFERENCES },
       },
     ]);
+  });
+
+  it('brings back the preferences, and every save carries them', async () => {
+    const preferences = { ...DEFAULT_PREFERENCES, theme: 'dark' as const, showHidden: true, confirmTrash: false };
+    const s = setup({ state_load: () => ({ ...saved, preferences }) });
+    await started(s);
+
+    expect(s.preferences.value).toEqual(preferences);
+    expect(s.saves()).toEqual([]); // what was loaded is not a change
+
+    s.preferences.set({ showExt: false });
+    await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS * 2);
+
+    expect(s.saves().at(-1)?.preferences).toEqual({ ...preferences, showExt: false });
+  });
+
+  it('a state file from before the settings loads with the defaults', async () => {
+    const s = setup({ state_load: () => saved });
+    await started(s);
+
+    expect(s.preferences.value).toEqual(DEFAULT_PREFERENCES);
   });
 
   it('brings back the keys the user set, and every save carries them', async () => {

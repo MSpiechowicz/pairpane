@@ -35,6 +35,18 @@ describe('the changes the backend is told of', () => {
     expect(sent()).toEqual([{ dirty: true }, { dirty: false }]);
   });
 
+  it('hears of running transfers as one more reason to ask: clean only when nothing is left', () => {
+    const { unsaved, sent } = world();
+
+    unsaved.report('transfers', true);
+    unsaved.report('editor', true);
+    unsaved.report('transfers', false);
+    expect(unsaved.dirty).toBe(true);
+    unsaved.report('editor', false);
+
+    expect(sent()).toEqual([{ dirty: true }, { dirty: false }]);
+  });
+
   it('says again that there are changes only while there are', () => {
     const { unsaved, sent } = world();
 

@@ -145,6 +145,7 @@ pub fn run() -> ExitCode {
             commands::edit::edit_save,
             commands::edit::edit_external,
             commands::edit::settings_open,
+            commands::edit::setting::settings_editor,
             close::editor_set_dirty,
             close::editor_close_ack,
             close::app_close_confirmed,

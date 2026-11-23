@@ -63,6 +63,7 @@
     "allow-edit-save",
     "allow-edit-external",
     "allow-settings-open",
+    "allow-settings-editor",
     "allow-editor-set-dirty",
     "allow-editor-close-ack",
     "allow-app-close-confirmed"

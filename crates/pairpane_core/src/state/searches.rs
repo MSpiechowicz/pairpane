@@ -6,7 +6,7 @@
 use serde::Deserialize;
 
 use crate::find;
-use crate::model::{FindQuery, KeyOverride, PaneId, SavedPane, SavedRename, SavedSearch, SavedState};
+use crate::model::{FindQuery, KeyOverride, PaneId, Preferences, SavedPane, SavedRename, SavedSearch, SavedState};
 
 use super::named::{MAX_NAME_CHARS, clean_named};
 
@@ -54,21 +54,27 @@ pub struct SavedUpdate {
     /// `None` when the page sent none (or `null`): the stored keys are kept.
     #[serde(default)]
     pub keys: Option<Vec<KeyOverride>>,
+    /// `None` when the page sent none (or `null`): the stored preferences are kept.
+    #[serde(default)]
+    pub preferences: Option<Preferences>,
 }
 
 impl SavedUpdate {
     /// The state to save: the searches, rename rules and keys sent, else those `stored` (called only when the page left
     /// out one of them, and then once).
     pub(super) fn resolve(self, stored: impl FnOnce() -> SavedState) -> SavedState {
-        let (searches, renames, keys) = match (self.searches, self.renames, self.keys) {
-            (Some(searches), Some(renames), Some(keys)) => (searches, renames, keys),
-            (searches, renames, keys) => {
+        let (searches, renames, keys, preferences) = match (self.searches, self.renames, self.keys, self.preferences) {
+            (Some(searches), Some(renames), Some(keys), Some(preferences)) => {
+                (searches, renames, keys, Some(preferences))
+            }
+            (searches, renames, keys, preferences) => {
                 let stored = stored();
 
                 (
                     searches.unwrap_or(stored.searches),
                     renames.unwrap_or(stored.renames),
                     keys.unwrap_or(stored.keys),
+                    preferences.or(stored.preferences),
                 )
             }
         };
@@ -81,6 +87,7 @@ impl SavedUpdate {
             searches,
             renames,
             keys,
+            preferences,
         }
     }
 }
@@ -96,6 +103,7 @@ impl From<SavedState> for SavedUpdate {
             searches: Some(state.searches),
             renames: Some(state.renames),
             keys: Some(state.keys),
+            preferences: state.preferences,
         }
     }
 }

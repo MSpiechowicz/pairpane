@@ -161,6 +161,7 @@ mod tests {
             searches: Some(Vec::new()),
             renames: None,
             keys: None,
+            preferences: None,
         }
     }
 

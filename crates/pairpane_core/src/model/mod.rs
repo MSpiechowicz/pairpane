@@ -29,7 +29,7 @@ pub use compare::{
     CompareEvent, CompareFacts, CompareId, CompareOptions, CompareRoot, CompareRow, CompareStatus, SyncDirection,
     SyncFacts, SyncItem, SyncRemoval,
 };
-pub use edit::{EditDocument, EditOpened, EditSaveOptions, EditSaved, ExternalEdit, LineEnding};
+pub use edit::{EditDocument, EditOpened, EditSaveOptions, EditSaved, EditorSetting, ExternalEdit, LineEnding};
 pub use find::{FindCriteria, FindEvent, FindHit, FindId, FindQuery, FindText, SavedSearch, Tri};
 pub use ipc_error::{IpcError, IpcErrorCode};
 pub use items::{LinkKind, TrashOutcome};
@@ -44,7 +44,7 @@ pub use rename::{
     SavedRename,
 };
 pub use shell::{ShellEvent, ShellId};
-pub use state::{KeyChord, KeyOverride, SavedPane, SavedState, SavedTab, SortColumn};
+pub use state::{KeyChord, KeyOverride, Preferences, SavedPane, SavedState, SavedTab, SortColumn, ThemeChoice};
 pub use tasks::{AttributeChange, HashAlgorithm, ItemProperties, JobTask, ModeChange, WindowsAttributes};
 pub use update::{MAX_UPDATE_NOTES_BYTES, MenuCommand, UpdateInfo, UpdatePhase, UpdateProgress};
 pub use view::{

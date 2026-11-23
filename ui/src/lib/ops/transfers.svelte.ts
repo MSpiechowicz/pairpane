@@ -83,6 +83,11 @@ export class Transfers {
     return { count: this.jobs.length, percent: total > 0 ? Math.min(100, Math.floor((done / total) * 100)) : undefined };
   });
 
+  /** Whether a job has not ended yet (a paused one included): quitting would stop it. */
+  get running(): boolean {
+    return this.jobs.some((job) => job.result === undefined);
+  }
+
   /** The conflict to ask about now: the oldest one that waits. */
   readonly question = $derived.by(() => {
     void this.#revision;

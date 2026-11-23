@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { preferences } from '$lib/shell/preferences.svelte';
+
+  import { shows } from './columns';
   import type { SortColumn } from './order';
   import type { PaneView } from './view.svelte';
 
@@ -12,11 +15,12 @@
     { column: 'modified', label: 'Modified', cell: 'dt' },
   ];
 
+  const shown = $derived(columns.filter(({ column }) => shows(column, preferences.value)));
 </script>
 
 <div class="head" role="group" aria-label="Sort by">
   <span></span>
-  {#each columns as { column, label, cell } (column)}
+  {#each shown as { column, label, cell } (column)}
     <div class={cell}>
       <button type="button" onclick={() => view.sortBy(column)}>
         {label}

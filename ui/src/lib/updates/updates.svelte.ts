@@ -43,6 +43,7 @@ export class Updates {
   readonly #ipc: Transport;
   readonly #currentVersion: () => string | undefined;
   readonly #mayRelaunch: () => Promise<boolean>;
+  readonly #atStart: () => boolean;
   /** Bumped by every check: only the latest check may change the state. */
   #checks = 0;
   /** Installed in this session but not running until a restart: never offered again. */
@@ -51,16 +52,25 @@ export class Updates {
   /**
    * `mayRelaunch` is asked before anything that ends the app (an install, where the installer takes over and exits
    * the app, and a restart: neither can be stopped once begun), so only this can keep them from losing unsaved
-   * changes. It resolves at once when there are none.
+   * changes. It resolves at once when there are none. `atStart` says whether the check at startup is wanted (a setting).
    */
   constructor(
     ipc: Transport,
     currentVersion: () => string | undefined = () => undefined,
     mayRelaunch: () => Promise<boolean> = () => Promise.resolve(true),
+    atStart: () => boolean = () => true,
   ) {
     this.#ipc = ipc;
     this.#currentVersion = currentVersion;
     this.#mayRelaunch = mayRelaunch;
+    this.#atStart = atStart;
+  }
+
+  /** The check at startup: silent unless a newer release exists, and not made at all when the settings say not to. */
+  async checkAtStart(): Promise<void> {
+    if (this.#atStart()) {
+      await this.check(false);
+    }
   }
 
   get busy(): boolean {
