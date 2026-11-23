@@ -84,6 +84,10 @@
   /** Escape closes the popup, and so does a shortcut: its action (a dialog, a pane change) takes over. */
   function closeOnKey(event: KeyboardEvent) {
     if (open && (event.key === 'Escape' || keymap.shortcutFor(event) !== undefined)) {
+      // The Escape that closes the popup is used up (it does not also stop a walk); a shortcut still acts.
+      if (event.key === 'Escape') {
+        event.preventDefault();
+      }
       open = undefined;
     }
   }

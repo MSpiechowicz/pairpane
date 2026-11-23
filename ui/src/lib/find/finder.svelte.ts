@@ -266,5 +266,4 @@ export class Finder {
     this.summary = undefined;
     this.failure = undefined;
   }
-
 }

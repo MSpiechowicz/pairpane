@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { FindEvent } from '$lib/ipc/bindings/FindEvent';
 import type { ListEvent } from '$lib/ipc/bindings/ListEvent';
+import { Preferences } from '$lib/shell/preferences.svelte';
 
 import { done } from '../../../tests/find';
 import { arrive, fakeBackend } from '../../../tests/panes';
@@ -41,7 +42,16 @@ async function setup(answers: Parameters<typeof fakeBackend>[0] = {}) {
   });
   const panes = { left: new PaneTabs(backend.ipc, 'left'), right: new PaneTabs(backend.ipc, 'right') };
   const say = vi.fn();
-  const hidden = { show: false };
+  // The preference as the app has it: a change is seen by the effects.
+  const preferences = new Preferences();
+  const hidden = {
+    get show() {
+      return preferences.value.showHidden;
+    },
+    set show(show: boolean) {
+      preferences.set({ showHidden: show });
+    },
+  };
   const flat = new FlatView(backend.ipc, panes, say, () => hidden.show);
   render(WatchHost, { start: () => flat.watch() });
   await go(backend, panes.left, '/home/me');
@@ -123,6 +133,42 @@ describe('FlatView', () => {
     await later();
 
     expect(say).toHaveBeenCalledWith('Only the first 100 000 files are listed.', false);
+  });
+
+  it('says how many items could not be read, and so are not listed', async () => {
+    const { say, searches, walk } = await setup();
+    await walk();
+
+    searches[0].args.onEvent(done(2, { skipped: 3 }));
+    await later();
+
+    expect(say).toHaveBeenCalledWith('3 items could not be read and are left out.', false);
+  });
+
+  it('is made again when hidden files are shown or hidden while it is shown, of the same folder', async () => {
+    const { flat, hidden, searches, walk } = await setup();
+    await walk();
+    searches[0].args.onEvent(done(2));
+    await later();
+    expect(flat.left.shown).toBe(true);
+
+    hidden.show = true;
+    flushSync();
+    await later();
+
+    expect(searches).toHaveLength(2);
+    expect(searches[1].args.query).toMatchObject({ root: '/home/me', criteria: { skipHidden: false } });
+  });
+
+  it('leaves alone an Esc that something else used (a popup it closed)', async () => {
+    const { flat, walk } = await setup();
+    await walk();
+    const used = escape();
+    used.preventDefault();
+
+    flat.onKey(used, 'left');
+
+    expect(flat.left.running).toBe(true);
   });
 
   it('is stopped by the same key, and lists what was found so far, saying so', async () => {

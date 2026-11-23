@@ -77,3 +77,11 @@ These two are not settings, but they use what your system says:
   `wezterm`, `foot` and `xterm` found in the system's folders (`/usr/bin`, `/bin`, `/usr/local/bin`); Terminal on
   macOS; a new console window of your shell on Windows. The first time a terminal program is to be started after
   Pairpane starts, you are asked to allow it, with its path shown.
+
+## Flat view (Ctrl+B)
+
+Ctrl+B lists every file below the active pane's folder, flat, by its path below it; Ctrl+B again goes back. Hidden
+files are in it when the panes show them (it is made again when that changes). Links are not followed and not listed,
+and what cannot be read (no permission, a name that is not valid text) is left out; the notice says how many. Past
+100 000 files the list is cut. Ctrl+B or Esc stops a walk that takes long, and what was found so far is listed.
+

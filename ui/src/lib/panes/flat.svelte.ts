@@ -37,7 +37,7 @@ export class FlatSide {
   #origin = '';
   /** Asked to stop; the search ends with its `done` shortly. */
   #stopping = false;
-  #summary: { found: number; truncated: boolean; cancelled: boolean } | undefined;
+  #summary: { found: number; skipped: number; truncated: boolean; cancelled: boolean } | undefined;
   /** Tells the events of the latest search from those of one that was dropped. */
   #run = 0;
 
@@ -118,9 +118,17 @@ export class FlatSide {
     return { ...(toCriteria(blankForm(), false) as FindCriteria), minSize: 0, skipHidden: !this.#showHidden() };
   }
 
-  async #begin() {
-    const refusal = this.#refusal();
-    const root = this.#listing.folder;
+  /** Lists the folder again, as the walk would now (the preference for hidden files changed while it is shown). */
+  again() {
+    if (this.shown && this.#phase === 'shown' && this.#root !== undefined) {
+      void this.#begin(this.#root);
+    }
+  }
+
+  /** Starts a walk of the pane's folder, or of `again`, the folder of this flat view as it is shown. */
+  async #begin(again?: string) {
+    const refusal = again === undefined ? this.#refusal() : undefined;
+    const root = again ?? this.#listing.folder;
     if (refusal !== undefined || root === undefined) {
       this.#say(refusal ?? 'Wait until the folder has been listed.', true);
       return;
@@ -163,7 +171,7 @@ export class FlatSide {
     }
 
     if (event.kind === 'done') {
-      this.#summary = { found: event.found, truncated: event.truncated, cancelled: event.cancelled };
+      this.#summary = { found: event.found, skipped: event.skipped, truncated: event.truncated, cancelled: event.cancelled };
       void this.#finish(run);
     } else if (event.kind === 'error') {
       this.#drop();
@@ -182,7 +190,10 @@ export class FlatSide {
     // Nothing to list: a pane that shows no rows would only hide the folder. A walk that was stopped lists what it has.
     if (summary.found === 0) {
       this.#drop();
-      this.#say(summary.cancelled ? 'Stopped before any file was found.' : 'There are no files below this folder.', false);
+      this.#say(
+        (summary.cancelled ? 'Stopped before any file was found.' : 'There are no files below this folder.') + unread(summary.skipped),
+        false,
+      );
       return;
     }
 
@@ -201,9 +212,11 @@ export class FlatSide {
 
     this.#phase = 'shown';
     if (summary.truncated) {
-      this.#say(`Only the first ${grouped(summary.found)} files are listed.`, false);
+      this.#say(`Only the first ${grouped(summary.found)} files are listed.${unread(summary.skipped)}`, false);
     } else if (summary.cancelled) {
-      this.#say(`Stopped: the ${grouped(summary.found)} files found so far are listed.`, false);
+      this.#say(`Stopped: the ${grouped(summary.found)} files found so far are listed.${unread(summary.skipped)}`, false);
+    } else if (summary.skipped > 0) {
+      this.#say(unread(summary.skipped).trim(), false);
     }
   }
 
@@ -226,6 +239,7 @@ export class FlatView {
   readonly left: FlatSide;
   readonly right: FlatSide;
   readonly #listings: Record<Side, Listing>;
+  readonly #showHidden: () => boolean;
 
   constructor(
     ipc: Transport,
@@ -234,6 +248,7 @@ export class FlatView {
     showHidden: () => boolean,
   ) {
     this.#listings = { left: panes.left.view.listing, right: panes.right.view.listing };
+    this.#showHidden = showHidden;
     this.left = new FlatSide(ipc, this.#listings.left, say, showHidden);
     this.right = new FlatSide(ipc, this.#listings.right, say, showHidden);
   }
@@ -248,13 +263,29 @@ export class FlatView {
         untrack(() => this[side].moved(location));
       });
     }
+
+    // Hidden files shown or not: a flat view that is shown is made again, as the walk leaves them out or not.
+    let first = true;
+    $effect(() => {
+      void this.#showHidden();
+      if (first) {
+        first = false;
+        return;
+      }
+      untrack(() => (this.left.again(), this.right.again()));
+    });
   }
 
   /** Esc stops the walk of the active pane (unless a text field has the key). */
   onKey(event: KeyboardEvent, active: Side) {
-    if (event.key === 'Escape' && this[active].running && !isTyping(event.target)) {
+    if (event.key === 'Escape' && !event.defaultPrevented && this[active].running && !isTyping(event.target)) {
       this[active].stop();
       event.preventDefault();
     }
   }
+}
+
+/** What a notice adds about what the walk could not read (and so does not list), when there is any. */
+function unread(skipped: number): string {
+  return skipped === 0 ? '' : ` ${grouped(skipped)} ${skipped === 1 ? 'item' : 'items'} could not be read and are left out.`;
 }
