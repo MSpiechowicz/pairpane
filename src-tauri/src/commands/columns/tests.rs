@@ -124,20 +124,16 @@ fn what_the_page_sent_is_checked_before_a_thread_is_taken() {
 
     for name in ["../a.png", "sub/a.png", "..", "", "a/../a.png"] {
         assert_eq!(
-            shown(sizes(&columns, &path, &["a.png", name])).0,
-            IpcErrorCode::InvalidInput,
-            "{name:?}"
-        );
-        assert_eq!(
             shown(hash(&columns, &path, name)).0,
             IpcErrorCode::InvalidInput,
             "{name:?}"
         );
     }
 
-    let long = "x".repeat(5000);
-    assert_eq!(shown(sizes(&columns, &path, &[&long])).0, IpcErrorCode::InvalidInput);
-    assert_eq!(shown(hash(&columns, &path, &long)).0, IpcErrorCode::InvalidInput);
+    assert_eq!(
+        shown(hash(&columns, &path, &"x".repeat(5000))).0,
+        IpcErrorCode::InvalidInput
+    );
     assert_eq!(
         shown(sizes(&columns, "relative/folder", &["a.png"])).0,
         IpcErrorCode::InvalidInput
@@ -150,6 +146,21 @@ fn what_the_page_sent_is_checked_before_a_thread_is_taken() {
     // A request that passes the checks is stopped by the full caps, which is a different answer.
     assert_eq!(shown(sizes(&columns, &path, &["a.png"])).0, IpcErrorCode::Busy);
     assert_eq!(shown(hash(&columns, &path, "a.png")).0, IpcErrorCode::Busy);
+}
+
+#[test]
+fn a_name_of_a_batch_that_is_not_a_plain_name_has_none_in_its_place_and_the_others_are_read() {
+    let (_folder, path) = folder_with(&[("a.png", &png(640, 480)), ("b.png", &png(3, 4))]);
+    let long = "x".repeat(5000);
+
+    let answer = sizes(
+        &Columns::default(),
+        &path,
+        &["a.png", "../a.png", "sub/a.png", "..", "", &long, "b.png"],
+    )
+    .expect("sizes");
+
+    assert_eq!(answer, vec![size(640, 480), None, None, None, None, None, size(3, 4)]);
 }
 
 #[test]
@@ -206,9 +217,8 @@ fn no_text_sent_to_the_page_holds_a_path() {
 
     let (_, relative_text) = shown(hash(&columns, "relative/folder", "a"));
     let (_, many_text) = shown(sizes(&columns, &path, &vec!["a"; 600]));
-    let (_, plain_text) = shown(sizes(&columns, &path, &["a/b"]));
 
-    for text in [missing_text, folder_text, relative_text, many_text, plain_text] {
+    for text in [missing_text, folder_text, relative_text, many_text] {
         assert!(!text.contains(&path) && !text.contains("relative"), "{text}");
     }
 }

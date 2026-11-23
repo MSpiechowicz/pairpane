@@ -4,21 +4,18 @@ import type { Dimensions } from '$lib/ipc/bindings/Dimensions';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
 
 import { type Cell, type Checksum, checksumCell, dimensionsCell, type ExtraTarget, type ExtraWants, pixelsOf } from './extras';
+import { Lane } from './extrasLane';
 import type { ExtraColumn } from './order';
 
 /** How many names one request for dimensions holds at the most (the backend refuses more). */
 export const MAX_NAMES = 512;
 /** How many values of each column are kept (a failed one counts too): the least recently wanted go first. */
 const MAX_KEPT = 2000;
-/** How many requests of a kind are out at once. The checksum of a big file takes a while, and the backend is busy with few. */
-const DIMENSION_BATCHES = 1;
+/** How many requests of a kind are out at once. The backend has four threads for them all, and the checksum of a big file takes a while. */
+const DIMENSION_BATCHES = 2;
 const CHECKSUMS = 2;
-/**
- * How long a kind of request waits after the backend said it is busy: the first time, then twice as long each time it
- * says so again, up to {@link BUSY_WAIT_MAX_MS}; an answer that is not busy starts over. What is out is let be.
- */
-const BUSY_WAIT_MS = 300;
-const BUSY_WAIT_MAX_MS = 5_000;
+/** How long a file that could not be read for a passing reason waits before it is asked about again (if it is still wanted). */
+const FAILED_WAIT_MS = 10_000;
 
 export interface ExtraOptions {
   max?: number;
@@ -70,52 +67,16 @@ class Kept<T> {
   }
 }
 
-/** One kind of request: how many may be out at once, and the wait after the backend said it is busy. */
-class Lane {
-  /** The keys of the files being asked about. */
-  readonly flying = new Set<string>();
-  readonly #parallel: number;
-  #holdUntil = 0;
-  #wait = BUSY_WAIT_MS;
-
-  constructor(parallel: number) {
-    this.#parallel = parallel;
-  }
-
-  get free(): boolean {
-    return this.flying.size < this.#parallel;
-  }
-
-  /** How long the lane still waits, `0` when requests may go. */
-  waits(now: number): number {
-    return Math.max(0, this.#holdUntil - now);
-  }
-
-  /** The backend is full: nothing new for a while, a longer one each time. */
-  busy(now: number) {
-    this.#holdUntil = Math.max(this.#holdUntil, now + this.#wait);
-    this.#wait = Math.min(this.#wait * 2, BUSY_WAIT_MAX_MS);
-  }
-
-  /**
-   * An answer that is not busy: the next wait starts over, unless the lane is still waiting (that answer is of a request
-   * sent before the backend said it is busy, and says nothing of how full it is now).
-   */
-  answered(now: number) {
-    if (now >= this.#holdUntil) {
-      this.#wait = BUSY_WAIT_MS;
-    }
-  }
-}
-
 /**
  * The values of the extra columns of one pane: the size of the pictures in pixels, and the SHA-256 of the files. The pane
  * says what it wants ({@link want}, the rows in view first, only for the columns that are shown); the sizes of the
  * pictures of a folder are asked for in one request (up to {@link MAX_NAMES} names), the checksums one file at a time and
- * two at once at the most, which waits when the backend is busy, longer each time. What was queued and is no longer
- * wanted is dropped, and an answer is kept in a bounded cache until it is the least recently wanted. A file that has
- * no checksum (too big) or no dimensions is kept as such, so it is not asked for again until it changes. Nothing is
- * asked for inside an archive.
+ * two at once at the most, which waits when the backend is busy, longer each time, and stops asking after too many busy
+ * answers in a row, until the pane wants something else. What was queued and is no longer wanted is dropped, and an
+ * answer is kept in a bounded cache until it is the least recently wanted. A file that has no checksum (too big, not on
+ * this computer) or no dimensions is kept as such, so it is not asked for again until it changes. A request that fails
+ * for a passing reason is not kept: its files wait a while and are asked for again if still wanted. Nothing is asked for
+ * inside an archive.
  */
 export class Extras {
   readonly #dimensions: Kept<Dimensions | null>;
@@ -125,8 +86,9 @@ export class Extras {
   /** What is asked for, in the order to ask: what the pane wants that is not kept yet. */
   #dimensionQueue: readonly ExtraTarget[] = [];
   #checksumQueue: readonly ExtraTarget[] = [];
-  /** Set while a lane waits for its time. */
+  /** Set while a lane waits for its time, with the time it is set for. */
   #wait: ReturnType<typeof setTimeout> | undefined;
+  #waitUntil = 0;
 
   readonly #ipc: Transport;
 
@@ -164,8 +126,12 @@ export class Extras {
    * dropped; a request already out is let be, and its answer kept. What is kept already is not asked for again.
    */
   want({ dimensions, checksums }: ExtraWants) {
+    const now = Date.now();
+
     this.#dimensionQueue = dimensions.filter((target) => !this.#dimensions.wanted(target.key));
     this.#checksumQueue = checksums.filter((target) => !this.#checksums.wanted(target.key));
+    this.#dimensionLane.retarget(this.#dimensionQueue, now);
+    this.#checksumLane.retarget(this.#checksumQueue, now);
     this.#pump();
   }
 
@@ -179,81 +145,119 @@ export class Extras {
     }
   }
 
-  /** Sends the next batch (one folder's pictures); returns when to look again if the lane is waiting with work to do. */
+  /**
+   * The files of `queue` that may be asked about now (not out, not waiting for their time), and when the first of the
+   * others may be.
+   */
+  #due(queue: readonly ExtraTarget[], lane: Lane, now: number): { due: ExtraTarget[]; next: number | undefined } {
+    const due: ExtraTarget[] = [];
+    let next: number | undefined;
+
+    for (const target of queue) {
+      const after = lane.notBefore(target.key, now);
+      if (lane.flying.has(target.key)) {
+        continue;
+      }
+
+      if (after === undefined) {
+        due.push(target);
+      } else {
+        next = Math.min(next ?? after, after);
+      }
+    }
+
+    return { due, next };
+  }
+
+  /** Sends the next batches (one folder's pictures each); returns when to look again if the lane is waiting with work to do. */
   #askDimensions(now: number): number | undefined {
     const lane = this.#dimensionLane;
+    let next: number | undefined;
 
     while (lane.free) {
-      const pending = this.#dimensionQueue.filter((target) => !lane.flying.has(target.key));
-      if (pending.length === 0) {
-        return undefined;
+      const queued = this.#due(this.#dimensionQueue, lane, now);
+      next = queued.next;
+      if (queued.due.length === 0) {
+        return next;
       }
 
       if (lane.waits(now) > 0) {
-        return now + lane.waits(now);
+        return Math.min(next ?? Infinity, now + lane.waits(now));
       }
 
-      const folder = pending[0].folder;
-      void this.#loadDimensions(pending.filter((target) => target.folder === folder).slice(0, MAX_NAMES));
+      const folder = queued.due[0].folder;
+      void this.#loadDimensions(queued.due.filter((target) => target.folder === folder).slice(0, MAX_NAMES));
     }
 
-    return undefined;
+    return next;
   }
 
   /** Sends the checksums that can go; returns when to look again if the lane is waiting with work to do. */
   #askChecksums(now: number): number | undefined {
     const lane = this.#checksumLane;
+    let next: number | undefined;
 
     while (lane.free) {
-      const next = this.#checksumQueue.find((target) => !lane.flying.has(target.key));
-      if (next === undefined) {
-        return undefined;
+      const queued = this.#due(this.#checksumQueue, lane, now);
+      next = queued.next;
+      if (queued.due.length === 0) {
+        return next;
       }
 
       if (lane.waits(now) > 0) {
-        return now + lane.waits(now);
+        return Math.min(next ?? Infinity, now + lane.waits(now));
       }
 
-      void this.#loadChecksum(next);
+      void this.#loadChecksum(queued.due[0]);
     }
 
-    return undefined;
+    return next;
   }
 
-  /** Looks at the queues again at `time` (unless they are to be looked at already). */
+  /** Looks at the queues again at `time`; a look that is set for later is moved up. */
   #wakeAt(time: number, now: number) {
-    if (this.#wait === undefined) {
-      this.#wait = setTimeout(() => {
-        this.#wait = undefined;
-        this.#pump();
-      }, time - now);
+    if (this.#wait !== undefined) {
+      if (this.#waitUntil <= time) {
+        return;
+      }
+
+      clearTimeout(this.#wait);
     }
+
+    this.#waitUntil = time;
+    this.#wait = setTimeout(() => {
+      this.#wait = undefined;
+      this.#pump();
+    }, time - now);
   }
 
-  /** The dimensions of the pictures `batch` (all in one folder); an answer that cannot be used leaves them without. */
+  /**
+   * The dimensions of the pictures `batch` (all in one folder). An answer for the whole call is kept for each name (the
+   * backend says `null` for a name it has none of); a call that failed keeps nothing, and the names wait a while.
+   */
   async #loadDimensions(batch: readonly ExtraTarget[]) {
     const lane = this.#dimensionLane;
-    for (const target of batch) {
-      lane.flying.add(target.key);
-    }
+    lane.start(batch);
 
-    let answer: unknown;
+    let answer: (Dimensions | null)[] | 'busy' | 'failed';
     try {
-      answer = await this.#ipc.invoke('columns_dimensions', { path: batch[0].folder, names: batch.map((target) => target.name) });
+      const found: unknown = await this.#ipc.invoke('columns_dimensions', { path: batch[0].folder, names: batch.map((target) => target.name) });
+      answer = Array.isArray(found) ? (found as (Dimensions | null)[]) : 'failed';
     } catch (error) {
-      answer = IpcFailure.from(error).code === 'busy' ? 'busy' : [];
+      answer = IpcFailure.from(error).code === 'busy' ? 'busy' : 'failed';
     }
 
-    for (const target of batch) {
-      lane.flying.delete(target.key);
-    }
+    lane.finish(batch);
 
+    const now = Date.now();
     if (answer === 'busy') {
-      lane.busy(Date.now());
+      lane.busy(now, this.#dimensionQueue);
+    } else if (answer === 'failed') {
+      lane.answered(now);
+      batch.forEach((target) => lane.delay(target.key, now + FAILED_WAIT_MS));
     } else {
-      lane.answered(Date.now());
-      const found = Array.isArray(answer) ? (answer as (Dimensions | null)[]) : [];
-      batch.forEach((target, index) => this.#dimensions.set(target.key, found[index] ?? null));
+      lane.answered(now);
+      batch.forEach((target, index) => this.#dimensions.set(target.key, answer[index] ?? null));
       // Answered: they leave the queue, so that a value the cache has to drop again is not asked for in a loop.
       const done = new Set(batch.map((target) => target.key));
       this.#dimensionQueue = this.#dimensionQueue.filter((target) => !done.has(target.key));
@@ -262,26 +266,37 @@ export class Extras {
     this.#pump();
   }
 
-  /** The checksum of one file; one that cannot be had (too big, not readable) is kept as a reason. */
+  /**
+   * The checksum of one file. One that cannot be had for good (too big, not on this computer) is kept as a reason; any
+   * other failure is not kept, and the file waits a while.
+   */
   async #loadChecksum(target: ExtraTarget) {
     const lane = this.#checksumLane;
-    lane.flying.add(target.key);
+    lane.start([target]);
 
-    let answer: Checksum | 'busy';
+    let answer: Checksum | 'busy' | 'failed';
     try {
       const hex: unknown = await this.#ipc.invoke('columns_checksum', { path: target.folder, name: target.name });
-      answer = typeof hex === 'string' ? { hex } : { problem: 'The backend gave no checksum.' };
+      answer = typeof hex === 'string' ? { hex } : 'failed';
     } catch (error) {
       const failure = IpcFailure.from(error);
-      answer = failure.code === 'busy' ? 'busy' : { problem: failure.message };
+      if (failure.code === 'busy') {
+        answer = 'busy';
+      } else {
+        answer = failure.code === 'invalidInput' ? { problem: failure.message } : 'failed';
+      }
     }
 
-    lane.flying.delete(target.key);
+    lane.finish([target]);
 
+    const now = Date.now();
     if (answer === 'busy') {
-      lane.busy(Date.now());
+      lane.busy(now, this.#checksumQueue);
+    } else if (answer === 'failed') {
+      lane.answered(now);
+      lane.delay(target.key, now + FAILED_WAIT_MS);
     } else {
-      lane.answered(Date.now());
+      lane.answered(now);
       this.#checksums.set(target.key, answer);
       this.#checksumQueue = this.#checksumQueue.filter((queued) => queued.key !== target.key);
     }

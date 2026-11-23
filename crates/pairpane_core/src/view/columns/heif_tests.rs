@@ -7,7 +7,7 @@ use crate::model::Dimensions;
 
 use crate::view::heic::items_tests::boxed;
 
-use super::fixtures::{clap, heif, irot};
+use super::fixtures::{avif, clap, heif, heif_crowded, heif_listed, irot};
 use super::header::from_head;
 
 /// A 16 by 8 picture of one colour made by `heif-enc` (one `hvc1` item): a real file, not a built one.
@@ -61,11 +61,43 @@ fn a_crop_is_applied_before_a_turn_and_a_crop_that_cannot_be_computed_is_ignored
 }
 
 #[test]
-fn an_avif_container_is_read_the_same_way() {
-    let mut avif = heif(640, 480, &[], false);
-    avif[8..12].copy_from_slice(b"avif");
+fn the_properties_apply_in_the_order_the_item_lists_them_and_not_the_order_of_the_boxes() {
+    // `ipco` is: the tile's size (1), the size (2), a crop to 300 by 200 (3), a quarter turn (4).
+    let boxes = [clap(300, 200), irot(1)];
 
-    assert_eq!(from_head(&avif), size(640, 480));
+    // Cropped first, then turned.
+    assert_eq!(
+        from_head(&heif_listed(640, 480, &boxes, &[2, 3, 4], false)),
+        size(200, 300)
+    );
+    // Turned first (640 by 480 becomes 480 by 640), then cropped to what the crop says.
+    assert_eq!(
+        from_head(&heif_listed(640, 480, &boxes, &[2, 4, 3], false)),
+        size(300, 200)
+    );
+    assert_eq!(
+        from_head(&heif_listed(640, 480, &boxes, &[2, 4, 3], true)),
+        size(300, 200),
+        "16-bit numbers"
+    );
+    // A property the item does not list is not applied, and a number that names nothing is passed over.
+    assert_eq!(
+        from_head(&heif_listed(640, 480, &boxes, &[2, 4, 0, 9], false)),
+        size(480, 640)
+    );
+    assert_eq!(from_head(&heif_listed(640, 480, &boxes, &[2], false)), size(640, 480));
+}
+
+#[test]
+fn an_avif_container_is_read_the_same_way() {
+    assert_eq!(from_head(&avif(640, 480)), size(640, 480));
+}
+
+#[test]
+fn a_property_list_that_is_crowded_is_walked_to_the_number_and_no_further_than_the_cap() {
+    // The quarter turn is property 4093, within what a list is walked for, and with 4094 other boxes it is past it.
+    assert_eq!(from_head(&heif_crowded(4090)), size(480, 640));
+    assert_eq!(from_head(&heif_crowded(4094)), size(640, 480));
 }
 
 #[test]

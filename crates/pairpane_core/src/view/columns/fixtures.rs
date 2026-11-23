@@ -181,10 +181,19 @@ pub(super) fn clap(width: u32, height: u32) -> Vec<u8> {
     boxed(b"clap", &content)
 }
 
-/// A HEIC file of the primary picture `width` by `height` with the properties `transforms` after its size (in this
-/// order): the `ftyp`, then a `meta` with a decoy item first (a 64 by 64 tile that the primary item does not have),
-/// then the picture data. `wide` is the form with 32-bit item IDs and 16-bit property numbers.
+/// A HEIC file of the primary picture `width` by `height` with the properties `transforms` after its size: [`heif_listed`]
+/// with the item listing them in the order they are in.
 pub(super) fn heif(width: u32, height: u32, transforms: &[Vec<u8>], wide: bool) -> Vec<u8> {
+    let listed: Vec<u16> = (2..).take(1 + transforms.len()).collect();
+
+    heif_listed(width, height, transforms, &listed, wide)
+}
+
+/// A HEIC file of the primary picture `width` by `height`: the `ftyp`, then a `meta` with a decoy item first (a 64 by 64
+/// tile that the primary item does not have), then the picture data. `ipco` holds the tile's size (property 1), the
+/// primary's size (2) and then `transforms` (3 and on); the primary item lists the properties `listed`, in that order.
+/// `wide` is the form with version 1 of `pitm` and `ipma`, 32-bit item IDs and 16-bit property numbers.
+pub(super) fn heif_listed(width: u32, height: u32, transforms: &[Vec<u8>], listed: &[u16], wide: bool) -> Vec<u8> {
     let version = u8::from(wide);
 
     let ispe = |width: u32, height: u32| {
@@ -199,7 +208,6 @@ pub(super) fn heif(width: u32, height: u32, transforms: &[Vec<u8>], wide: bool) 
         ipco.extend_from_slice(transform);
     }
 
-    // The property numbers: 1 is the tile's, 2 the primary's size (essential bit set), 3 and on its transforms.
     let essential = if wide { 0x8000 } else { 0x80 };
     let number = |number: u16| -> Vec<u8> {
         if wide {
@@ -221,10 +229,10 @@ pub(super) fn heif(width: u32, height: u32, transforms: &[Vec<u8>], wide: bool) 
     ipma.extend_from_slice(&[1]);
     ipma.extend_from_slice(&number(1));
     ipma.extend_from_slice(&id(1));
-    ipma.extend_from_slice(&[u8::try_from(1 + transforms.len()).expect("few")]);
-    ipma.extend_from_slice(&number(2 | essential));
-    for index in 0..transforms.len() {
-        ipma.extend_from_slice(&number(u16::try_from(3 + index).expect("few")));
+    ipma.extend_from_slice(&[u8::try_from(listed.len()).expect("few")]);
+    for &property in listed {
+        // The size is the one that is marked essential.
+        ipma.extend_from_slice(&number(if property == 2 { property | essential } else { property }));
     }
 
     let mut iprp = boxed(b"ipco", &ipco);
@@ -236,6 +244,24 @@ pub(super) fn heif(width: u32, height: u32, transforms: &[Vec<u8>], wide: bool) 
     let mut bytes = boxed(b"ftyp", b"heic\0\0\0\0mif1heic");
     bytes.extend_from_slice(&full(b"meta", 0, 0, &meta_content));
     bytes.extend_from_slice(&boxed(b"mdat", &[0; 16]));
+
+    bytes
+}
+
+/// A HEIC file whose `ipco` holds `others` boxes the item does not list before the one `irot` it does (so `irot` is
+/// property number `3 + others`).
+pub(super) fn heif_crowded(others: usize) -> Vec<u8> {
+    let mut transforms = vec![boxed(b"free", &[]); others];
+    transforms.push(irot(1));
+    let last = u16::try_from(3 + others).expect("few");
+
+    heif_listed(640, 480, &transforms, &[2, last], true)
+}
+
+/// The same as a file of the brand `avif`.
+pub(super) fn avif(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = heif(width, height, &[], false);
+    bytes[8..12].copy_from_slice(b"avif");
 
     bytes
 }
@@ -253,6 +279,9 @@ pub(super) fn all() -> Vec<(&'static str, Vec<u8>)> {
         ("webp lossless", webp_lossless(640, 480)),
         ("webp extended", webp_extended(640, 480)),
         ("heic", heif(640, 480, &[clap(600, 400), irot(1)], false)),
-        ("heic wide", heif(640, 480, &[], true)),
+        ("heic version 1", heif(640, 480, &[irot(1)], true)),
+        ("avif", avif(640, 480)),
+        ("jpeg with big-endian exif", jpeg_of(&[exif(8, true)], 640, 480)),
+        ("heic with a crowded ipco", heif_crowded(4090)),
     ]
 }

@@ -2,8 +2,12 @@
 //! (the SHA-256 of one file). The reading is `pairpane_core::view::columns` (see its module docs for why a size is read
 //! in the app's own process and what bounds it); this module is what stands around that.
 //!
-//! - What the page sent is checked before a thread is taken: the folder passes `resolve`, every name is one plain name
-//!   (`check_name`) that fits, and a call has at most [`MAX_NAMES`] names.
+//! - What the page sent is checked before a thread is taken: the folder passes `resolve`, a call has at most
+//!   [`MAX_NAMES`] names, and a checksum's name is one plain name (`check_name`) that fits. A name of a batch that is not
+//!   such a name has `None` in its place, as it would for any file that cannot be read, so that one odd name never makes
+//!   the page give up on the other 511.
+//! - The folder is followed as the page sent it (a link inside its path is followed, as for thumbnails; the page joins a
+//!   result's folder and its sub-folder); only the last component, the file itself, is never followed.
 //! - The disk is touched on blocking threads that hold a place of a [`ThreadCap`] until they end (a file on a mount that
 //!   does not answer holds its place for good and must not use up the pool): up to [`SIZE_THREADS`] batches of sizes, and
 //!   [`HASH_THREADS`] checksums, which read up to 64 MiB each. A call that finds its cap full is refused as `busy`, and
@@ -69,9 +73,11 @@ impl Columns {
         }
 
         let folder = resolve(Some(path), None)?;
-        for name in &names {
-            checked(&folder, name)?;
-        }
+        // A name that fails the check is read as no file: `None` in its place, and nothing is opened for it.
+        let names: Vec<Option<String>> = names
+            .into_iter()
+            .map(|name| checked(&folder, &name).is_ok().then_some(name))
+            .collect();
         let permit = begin(&self.sizes, SIZE_THREADS)?;
         let cancel = Arc::clone(&self.cancel);
 
@@ -85,7 +91,7 @@ impl Columns {
                         return Err(io::Error::from(io::ErrorKind::Interrupted));
                     }
 
-                    Ok(read::dimensions(&folder, name))
+                    Ok(name.as_deref().and_then(|name| read::dimensions(&folder, name)))
                 })
                 .collect::<io::Result<Vec<_>>>()
         })
@@ -126,9 +132,9 @@ fn busy() -> CommandError {
 }
 
 /// The sizes in pixels of the picture files `names` of the folder `path`, read from their headers: one entry for each name,
-/// in order, `null` for a name that is not a regular file (a link is not followed), cannot be read or is not a PNG, JPEG,
-/// GIF, BMP, WebP, HEIC or AVIF picture whose header says its size. At most 512 names (`invalidInput` beyond that, or for a
-/// name that is not a plain name), and `busy` when too many batches are being read.
+/// in order, `null` for a name that is not a plain name, is not a regular file (a link is not followed), is a cloud
+/// placeholder, cannot be read or is not a PNG, JPEG, GIF, BMP, WebP, HEIC or AVIF picture whose header says its size. At
+/// most 512 names (`invalidInput` beyond that), and `busy` when too many batches are being read.
 #[tauri::command]
 pub async fn columns_dimensions(
     columns: State<'_, Columns>,
@@ -139,7 +145,8 @@ pub async fn columns_dimensions(
 }
 
 /// The SHA-256 of the file `name` of the folder `path` as lowercase hex. `invalidInput` ("the file is too big to checksum
-/// here") for a file over 64 MiB or one that is not a regular file, `busy` when two checksums are already being computed.
+/// here") for a file over 64 MiB, `invalidInput` ("the file is not on this computer") for a cloud placeholder, and
+/// `invalidInput` for anything that is not a regular file, `busy` when two checksums are already being computed.
 #[tauri::command]
 pub async fn columns_checksum(columns: State<'_, Columns>, path: String, name: String) -> CommandResult<String> {
     columns.checksum(path, name).await

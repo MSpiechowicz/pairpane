@@ -4,6 +4,7 @@ import { arrive, entry, fakeBackend } from '../../../tests/panes';
 import { extraTargetOf, NOTHING, wantedExtras } from './extras';
 import { Listing } from './listing.svelte';
 import { PaneTabs } from './tabs.svelte';
+import { THUMB_SIZE, targetOf } from './thumbs';
 
 const BOTH = { dimensions: true, checksum: true };
 
@@ -24,6 +25,15 @@ describe('extraTargetOf', () => {
     expect(extraTargetOf(listing, entry('a.jpg'))).toMatchObject({ folder: '/pics', name: 'a.jpg', picture: true });
     expect(extraTargetOf(listing, entry('b.txt'))).toMatchObject({ folder: '/pics', name: 'b.txt', picture: false });
     expect(extraTargetOf(listing, entry('c.HEIC'))).toMatchObject({ picture: true });
+  });
+
+  it('asks for the dimensions of an AVIF too, which has no thumbnail', async () => {
+    const { listing } = await shown();
+
+    expect(extraTargetOf(listing, entry('a.avif'))).toMatchObject({ picture: true });
+    expect(extraTargetOf(listing, entry('b.AVIF'))).toMatchObject({ picture: true });
+    expect(extraTargetOf(listing, entry('.avif'))).toMatchObject({ picture: false });
+    expect(targetOf(listing, entry('a.avif'), THUMB_SIZE)).toBeUndefined();
   });
 
   it('has nothing for a folder, a special file or a row that is not there (`..`)', async () => {

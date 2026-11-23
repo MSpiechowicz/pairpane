@@ -5,7 +5,7 @@ import { displayName } from './format';
 import type { Listing } from './listing.svelte';
 import type { ExtraColumn } from './order';
 import { inFetchOrder, type Range } from './scroll';
-import { isPicture, placeOf } from './thumbs';
+import { placeOf } from './thumbs';
 import type { PaneView } from './view.svelte';
 
 /** How many hex digits of a checksum the column shows; the tooltip has all of them. */
@@ -14,6 +14,17 @@ export const CHECKSUM_DIGITS = 12;
 /** The text shown where a value is known not to exist. */
 const NONE = '–';
 
+/**
+ * The names of pictures the backend can read the size of: the ones it makes thumbnails of, and AVIF, which it reads the
+ * header of but does not decode. A dot file (`.avif`) has no extension.
+ */
+const SIZED = /.\.(?:jpe?g|png|gif|webp|bmp|heic|heif|avif)$/i;
+
+/** Whether `name` looks like a picture the backend can read the size of. */
+export function hasDimensions(name: string): boolean {
+  return SIZED.test(name);
+}
+
 /** One file to ask the backend about: where it is, and the key under which what it says is kept. */
 export interface ExtraTarget {
   /** Names the file and its state (folder, name, size and time), so that a changed file is asked about again. */
@@ -21,7 +32,7 @@ export interface ExtraTarget {
   /** The real folder that holds the file, and its name in it. */
   folder: string;
   name: string;
-  /** Looks like a picture: only those have dimensions to ask for. */
+  /** Looks like a picture whose size can be read: only those have dimensions to ask for. */
   picture: boolean;
 }
 
@@ -50,7 +61,7 @@ export interface Cell {
  */
 export function extraTargetOf(listing: Listing, entry: Entry | undefined): ExtraTarget | undefined {
   const place = placeOf(listing, entry);
-  return place && { ...place, picture: isPicture(place.name) };
+  return place && { ...place, picture: hasDimensions(place.name) };
 }
 
 /**

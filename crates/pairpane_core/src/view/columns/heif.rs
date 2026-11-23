@@ -5,12 +5,12 @@
 //! itself is never decoded. The path is `meta`, then `pitm` (which item is the primary one), `iprp` with `ipma` (which
 //! properties that item has, by their number in `ipco`) and `ipco` (the properties). The size is the `ispe` among
 //! them, then what the item's `clap` (a crop: encoders pad a picture to a multiple of the block size and crop it back) and
-//! `irot` (a quarter turn swaps the sides) do to it, in the order the properties are in `ipco`; a crop that cannot be
-//! computed is ignored. A file whose `meta` box does not lie within the bytes
+//! `irot` (a quarter turn swaps the sides) do to it, in the order the item lists its properties in `ipma` (as the
+//! standard says), each found by its number among the boxes of `ipco`; a crop that cannot be computed is ignored. A file whose `meta` box does not lie within the bytes
 //! (one that comes after the picture data, which is the case for some encoders) has no dimensions here.
 
 use crate::model::Dimensions;
-use crate::view::heic::items::{MAX_BOXES, full_box, single_child, split_box, top_level_meta};
+use crate::view::heic::items::{MAX_BOXES, Split, full_box, single_child, split_box, top_level_meta};
 
 use super::header::{be16, be32, sized};
 
@@ -24,20 +24,12 @@ pub(super) fn dimensions(head: &[u8]) -> Option<Dimensions> {
     let ipco = single_child(properties, *b"ipco")?;
 
     let mut size = None;
-    let mut rest = ipco;
 
-    // The properties are numbered from 1, in the order of the box.
-    for number in 1..=MAX_BOXES {
-        if rest.is_empty() {
-            break;
-        }
-
-        let split = split_box(rest)?;
-        rest = split.rest;
-
-        if !wanted.has(number) {
+    // The item's own list of properties, in its order: that is the order the transformations apply in.
+    for index in 0..wanted.len() {
+        let Some(split) = wanted.get(index).and_then(|number| property(ipco, number)) else {
             continue;
-        }
+        };
 
         match &split.kind {
             b"ispe" => size = Some(ispe(split.content)?),
@@ -50,6 +42,22 @@ pub(super) fn dimensions(head: &[u8]) -> Option<Dimensions> {
     let (width, height) = size?;
 
     sized(width, height)
+}
+
+/// The property with this number (from 1) among the boxes of `ipco`. `None` for 0 (no property), a number past the
+/// boxes or past [`MAX_BOXES`], and when a box does not fit. The walk takes at most `number` steps.
+fn property(ipco: &[u8], number: usize) -> Option<Split<'_>> {
+    if number == 0 || number > MAX_BOXES {
+        return None;
+    }
+
+    let mut rest = ipco;
+
+    for _ in 1..number {
+        rest = split_box(rest)?.rest;
+    }
+
+    split_box(rest)
 }
 
 /// The ID of the primary item: 16 bits in version 0, 32 after.
@@ -119,16 +127,17 @@ impl<'a> Wanted<'a> {
         None
     }
 
-    /// Whether the item has the property with this number (counted from 1 in `ipco`).
-    fn has(&self, number: usize) -> bool {
-        if self.wide {
-            let (pairs, _) = self.list.as_chunks::<2>();
+    /// How many properties the item lists.
+    fn len(&self) -> usize {
+        self.list.len() / if self.wide { 2 } else { 1 }
+    }
 
-            return pairs
-                .iter()
-                .any(|&pair| usize::from(u16::from_be_bytes(pair) & 0x7FFF) == number);
+    /// The number of the property listed `index`th (from 0), without the flag for "essential".
+    fn get(&self, index: usize) -> Option<usize> {
+        if self.wide {
+            return be16(self.list, index.checked_mul(2)?).map(|number| usize::from(number & 0x7FFF));
         }
 
-        self.list.iter().any(|byte| usize::from(byte & 0x7F) == number)
+        self.list.get(index).map(|byte| usize::from(byte & 0x7F))
     }
 }

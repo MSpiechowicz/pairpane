@@ -27,10 +27,15 @@
 //!
 //! Both open the file without following a link as the last component (as the viewer and the thumbnails do) and refuse
 //! anything that is not a regular file; the texts of the errors are fixed and hold no path.
+//!
+//! A cloud placeholder (OneDrive, iCloud "dataless") is neither read nor hashed, since reading it downloads the whole file
+//! (`placeholder.rs`): it has no dimensions, and its checksum is refused. The check is on the attributes, before the open
+//! and again on the open handle.
 
 mod header;
 mod heif;
 mod jpeg;
+mod placeholder;
 mod webp;
 
 #[cfg(test)]
@@ -44,12 +49,16 @@ mod heif_tests;
 #[cfg(test)]
 mod jpeg_tests;
 #[cfg(test)]
+mod placeholder_tests;
+#[cfg(test)]
 mod read_tests;
 
+use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::listing::platform;
 use crate::model::{Dimensions, HashAlgorithm};
 use crate::ops::Digester;
 
@@ -77,7 +86,7 @@ const REFUSALS: Refusals = Refusals {
 /// regular file (a link, a folder, a missing one), cannot be read, is not a picture of a format that is read here, or its
 /// header does not parse. A name that is not a plain name is `None` as well.
 pub fn dimensions(folder: &Path, name: &str) -> Option<Dimensions> {
-    let (file, meta) = open_regular(folder, name, &REFUSALS).ok()?;
+    let (file, meta) = open_local(folder, name).ok()?;
     let file = ViewFile::new(file);
 
     let wanted = usize::try_from(meta.len()).map_or(HEAD_BYTES, |len| len.min(HEAD_BYTES));
@@ -90,7 +99,7 @@ pub fn dimensions(folder: &Path, name: &str) -> Option<Dimensions> {
 /// (`InvalidInput`) without being read, a name that is not a regular file is refused (`InvalidInput`), and `cancel`
 /// is looked at between the chunks (`Interrupted`). All with fixed texts.
 pub fn checksum(folder: &Path, name: &str, cancel: &AtomicBool) -> io::Result<String> {
-    let (mut file, meta) = open_regular(folder, name, &REFUSALS)?;
+    let (mut file, meta) = open_local(folder, name)?;
 
     if meta.len() > MAX_CHECKSUM_BYTES {
         return Err(too_big());
@@ -122,6 +131,27 @@ pub fn checksum(folder: &Path, name: &str, cancel: &AtomicBool) -> io::Result<St
     }
 
     Ok(digester.finish())
+}
+
+/// [`open_regular`] for a file that is on this computer: a placeholder is refused (`InvalidInput`) before it is opened
+/// (opening one can already bring its data) and once more by what the open handle says, in case it changed in between.
+fn open_local(folder: &Path, name: &str) -> io::Result<(fs::File, fs::Metadata)> {
+    // A name that is not a plain name is left to `open_regular` to refuse, and nothing is looked at for it.
+    if platform::is_plain_name(name) && placeholder::is_placeholder(&fs::symlink_metadata(folder.join(name))?) {
+        return Err(not_here());
+    }
+
+    let (file, meta) = open_regular(folder, name, &REFUSALS)?;
+
+    if placeholder::is_placeholder(&meta) {
+        return Err(not_here());
+    }
+
+    Ok((file, meta))
+}
+
+fn not_here() -> io::Error {
+    refusal(io::ErrorKind::InvalidInput, "the file is not on this computer")
 }
 
 fn too_big() -> io::Error {

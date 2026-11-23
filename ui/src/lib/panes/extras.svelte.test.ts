@@ -80,22 +80,23 @@ describe('Extras: dimensions', () => {
     expect(batches()[1].names?.[0]).toBe(`p${MAX_NAMES}.jpg`);
   });
 
-  it('makes one request for each folder (the items of a search result are in several), one at a time', async () => {
+  it('makes one request for each folder (the items of a search result are in several), two at a time', async () => {
     const { out, answer } = held();
     const { extras, batches } = world((_, { path }) => answer(path));
-    const pair = { dimensions: [target('a.jpg', '/a'), target('b.jpg', '/b'), target('c.jpg', '/a')], checksums: [] };
+    const mixed = { dimensions: [target('a.jpg', '/a'), target('b.jpg', '/b'), target('c.jpg', '/a'), target('d.jpg', '/d')], checksums: [] };
 
-    extras.want(pair);
+    extras.want(mixed);
     await settled();
-    expect(batches()).toEqual([{ path: '/a', names: ['a.jpg', 'c.jpg'] }]);
-
-    out.get('/a')?.resolve([dims(1, 2), dims(3, 4)]);
-    await settled();
-
     expect(batches()).toEqual([
       { path: '/a', names: ['a.jpg', 'c.jpg'] },
       { path: '/b', names: ['b.jpg'] },
     ]);
+
+    out.get('/a')?.resolve([dims(1, 2), dims(3, 4)]);
+    await settled();
+
+    expect(batches().at(-1)).toEqual({ path: '/d', names: ['d.jpg'] });
+    expect(batches()).toHaveLength(3);
     expect(extras.cells(target('c.jpg', '/a')).dimensions.text).toBe('3×4');
   });
 
@@ -144,16 +145,17 @@ describe('Extras: dimensions', () => {
     const { out, answer } = held();
     const { extras, batches } = world((_, { path }) => answer(path));
 
-    extras.want({ dimensions: [target('a.jpg', '/a')], checksums: [] });
+    extras.want({ dimensions: [target('a.jpg', '/a'), target('b.jpg', '/b')], checksums: [] });
     await settled();
-    extras.want({ dimensions: [target('x.jpg', '/a'), target('b.jpg', '/b')], checksums: [] });
-    extras.want({ dimensions: [target('b.jpg', '/b')], checksums: [] }); // x is gone before its turn
+    extras.want({ dimensions: [target('x.jpg', '/x'), target('y.jpg', '/y')], checksums: [] });
+    extras.want({ dimensions: [target('y.jpg', '/y')], checksums: [] }); // x is gone before its turn
     out.get('/a')?.resolve([dims(7, 7)]);
     await settled();
 
     expect(batches()).toEqual([
       { path: '/a', names: ['a.jpg'] },
       { path: '/b', names: ['b.jpg'] },
+      { path: '/y', names: ['y.jpg'] },
     ]);
     expect(extras.cells(target('a.jpg', '/a')).dimensions.text).toBe('7×7');
   });
@@ -186,18 +188,65 @@ describe('Extras: dimensions', () => {
     expect(extras.cells(target('a.jpg')).dimensions.text).toBe('5×5');
   });
 
-  it('has no dimensions, and does not ask again, after any other refusal', async () => {
+  it('keeps nothing when the whole call fails: the names wait about 10 seconds and are asked for again if still wanted', async () => {
+    let failures = 1;
+    const { extras, batches } = world((_, { names = [] }) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw refusal('io');
+      }
+
+      return names.map(() => dims(9, 9));
+    });
+
+    extras.want(pictures('a.jpg', 'b.jpg'));
+    await settled();
+    expect(extras.cells(target('a.jpg')).dimensions.text).toBe(''); // not "none"
+
+    extras.want(pictures('a.jpg', 'b.jpg'));
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(batches()).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(batches()).toEqual([
+      { path: '/pics', names: ['a.jpg', 'b.jpg'] },
+      { path: '/pics', names: ['a.jpg', 'b.jpg'] },
+    ]);
+    expect(extras.cells(target('b.jpg')).dimensions.text).toBe('9×9');
+  });
+
+  it('does not ask again, after the wait, for names that are not wanted any more', async () => {
     const { extras, batches } = world(() => {
       throw refusal('io');
     });
 
     extras.want(pictures('a.jpg'));
     await settled();
-    extras.want(pictures('a.jpg'));
-    await settled();
+    extras.want(pictures('x.jpg'));
+    await vi.advanceTimersByTimeAsync(20_000);
 
-    expect(batches()).toHaveLength(1);
-    expect(extras.cells(target('a.jpg')).dimensions.text).toBe('–');
+    const later = batches().slice(1).flatMap((batch) => batch.names);
+    expect(later).toContain('x.jpg');
+    expect(later).not.toContain('a.jpg');
+  });
+
+  it('stops asking after 8 busy answers in a row, until something else is wanted', async () => {
+    const { extras, batches } = world(() => {
+      throw refusal('busy');
+    });
+
+    extras.want(pictures('a.jpg'));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(batches()).toHaveLength(8);
+
+    extras.want(pictures('a.jpg')); // the same again (a scroll within the same rows)
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(batches()).toHaveLength(8);
+
+    extras.want(pictures('a.jpg', 'b.jpg'));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(batches().length).toBeGreaterThan(8);
+    expect(batches().at(-1)?.names).toEqual(['a.jpg', 'b.jpg']);
   });
 
   it('sorts by the number of pixels, and has nothing to sort by while it does not know', async () => {
@@ -261,9 +310,89 @@ describe('Extras: checksums', () => {
     expect(extras.sortKey('checksum', target('big.iso'))).toBeUndefined();
   });
 
+  it('keeps a file that is not on this computer as a reason too', async () => {
+    const { extras, sums } = world(() => {
+      throw { code: 'invalidInput', message: 'the file is not on this computer' };
+    });
+
+    extras.want(files('cloud.doc'));
+    await settled();
+    extras.want(files('cloud.doc'));
+    await settled();
+
+    expect(sums()).toEqual(['cloud.doc']);
+    expect(extras.cells(target('cloud.doc')).checksum).toEqual({ text: '–', tip: 'the file is not on this computer' });
+  });
+
+  it('keeps nothing when the read fails for another reason: the file waits about 10 seconds and is asked for again', async () => {
+    let failures = 1;
+    const { extras, sums } = world(() => {
+      if (failures > 0) {
+        failures -= 1;
+        throw refusal('io');
+      }
+
+      return HEX;
+    });
+
+    extras.want(files('a', 'b'));
+    await settled();
+    expect(sums()).toEqual(['a', 'b']);
+    expect(extras.cells(target('a')).checksum).toEqual({ text: '' }); // no dash: it may still come
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    extras.want(files('a', 'b'));
+    expect(sums()).toEqual(['a', 'b']);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sums()).toEqual(['a', 'b', 'a']);
+    expect(extras.cells(target('a')).checksum.text).toBe(HEX.slice(0, 12));
+  });
+
+  it('looks at the queue as soon as the earliest wait is over, not when a later one is', async () => {
+    let busy = 1;
+    const { extras, sums, batches } = world((command) => {
+      if (command === 'columns_dimensions') {
+        throw refusal('io'); // its names wait 10 seconds
+      }
+      if (busy > 0) {
+        busy -= 1;
+        throw refusal('busy'); // the checksum waits 300 ms
+      }
+
+      return HEX;
+    });
+
+    extras.want({ dimensions: [target('a.jpg')], checksums: [target('b.bin')] });
+    await settled();
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(sums()).toEqual(['b.bin', 'b.bin']);
+    expect(batches()).toHaveLength(1);
+  });
+
+  it('stops asking after 8 busy answers in a row, until something else is wanted', async () => {
+    const { extras, sums } = world(() => {
+      throw refusal('busy');
+    });
+
+    extras.want(files('a'));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(sums()).toHaveLength(8);
+
+    extras.want(files('a'));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(sums()).toHaveLength(8);
+
+    extras.want(files('b', 'a')); // scrolled to other rows
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(sums().length).toBeGreaterThan(8);
+    expect(sums()).toContain('b');
+  });
+
   it('writes out the characters of a reason that could pass for others', async () => {
     const { extras } = world(() => {
-      throw { code: 'io', message: 'cannot read \u202Egpj.exe' };
+      throw { code: 'invalidInput', message: 'cannot read \u202Egpj.exe' };
     });
 
     extras.want(files('a'));
