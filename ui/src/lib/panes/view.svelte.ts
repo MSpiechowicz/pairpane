@@ -1,6 +1,7 @@
 import { CompareMarks } from '$lib/compare/marks.svelte';
 import type { Entry } from '$lib/ipc/bindings/Entry';
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
+import type { PaneLayout } from '$lib/ipc/bindings/PaneLayout';
 import type { Transport } from '$lib/ipc/transport';
 
 import { archiveFile, above } from './archive';
@@ -28,7 +29,7 @@ export interface ViewHooks {
 }
 
 /**
- * What a pane shows and does on top of its {@link Listing}: sort, quick filter, cursor, selection, the mask
+ * What a pane shows and does on top of its {@link Listing}: sort, layout, quick filter, cursor, selection, the mask
  * prompt and folder sizes. Rows are numbered as displayed: the `..` row (when there is a parent), then the entries
  * in view order. Selection and sizes are kept by entry name, so they follow the entries through re-sorting and
  * reloads; the entries themselves are never copied or proxied (a folder can hold 100 000).
@@ -52,6 +53,9 @@ export class PaneView {
   #pointTo: string | undefined;
 
   readonly #selected = new Selection();
+
+  /** How the rows are drawn: one per line with its columns, or the names alone in several columns. A tab brings its own. */
+  layout = $state<PaneLayout>('detailed');
 
   maskMode = $state<MaskMode | undefined>();
   maskText = $state('*');

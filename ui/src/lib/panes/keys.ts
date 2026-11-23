@@ -41,6 +41,7 @@ function onPrintable(view: PaneView, key: string) {
   }
 }
 
+/** `pageSize` is the rows the list shows at once: in the brief layout, the items of a column. */
 function onNamed(view: PaneView, key: string, pageSize: number): boolean {
   switch (key) {
     case 'ArrowUp':
@@ -55,6 +56,18 @@ function onNamed(view: PaneView, key: string, pageSize: number): boolean {
     case 'PageDown':
       view.moveCursor(Math.max(1, pageSize));
       return true;
+    case 'ArrowLeft':
+    case 'ArrowRight': {
+      // The brief layout runs its items down columns: a column to the side is a column's worth of items away. In the
+      // detailed layout the keys are not the pane's.
+      if (view.layout !== 'brief') {
+        return false;
+      }
+
+      const column = Math.max(1, pageSize);
+      view.moveCursor(key === 'ArrowLeft' ? -column : column);
+      return true;
+    }
     case 'Home':
       view.setCursor(0);
       return true;

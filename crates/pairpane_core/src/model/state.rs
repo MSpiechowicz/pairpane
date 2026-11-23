@@ -24,6 +24,20 @@ pub struct SavedTab {
     pub sort: SortColumn,
     /// Sorted in descending order.
     pub desc: bool,
+    /// How the tab shows its folder. Absent in a file from before views: the detailed view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub layout: Option<PaneLayout>,
+}
+
+/// How a pane shows its folder: one row per item with its columns, or the names alone in several columns.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PaneLayout {
+    #[default]
+    Detailed,
+    Brief,
 }
 
 /// The tabs of one pane. After loading, `tabs` is empty when nothing usable was saved (the pane starts with its

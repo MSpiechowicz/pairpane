@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isTyping, reloadsPage, shortcutFor } from './shortcuts';
+import { isTyping, keysOf, refusalOf, reloadsPage, shortcutFor } from './shortcuts';
 
 const press = (key: string, init: KeyboardEventInit = {}) =>
   shortcutFor(new KeyboardEvent('keydown', { key, ...init }));
@@ -121,17 +121,33 @@ describe('shortcutFor', () => {
   it('Shift+F7 and the Ctrl, Alt and Cmd variants of the new keys are not shortcuts', () => {
     expect(press('F7', { shiftKey: true })).toBeUndefined();
 
-    for (const name of ['F2', 'F4', 'F7', 'F8', 'Delete']) {
+    for (const name of ['F4', 'F7', 'F8', 'Delete']) {
       for (const modifier of ['ctrlKey', 'metaKey'] as const) {
         expect(press(name, { [modifier]: true })).toBeUndefined();
         expect(press(name, { [modifier]: true, shiftKey: true })).toBeUndefined();
       }
     }
 
+    expect(press('F2', { metaKey: true })).toBeUndefined();
+    expect(press('F2', { metaKey: true, shiftKey: true })).toBeUndefined();
+    expect(press('F2', { ctrlKey: true, shiftKey: true })).toBeUndefined();
+
     for (const name of ['F4', 'F8', 'Delete']) {
       expect(press(name, { altKey: true })).toBeUndefined();
       expect(press(name, { altKey: true, shiftKey: true })).toBeUndefined();
     }
+  });
+
+  it('Ctrl+F1 shows the pane in brief and Ctrl+F2 in detail; the plain, Shift and Alt keys are the others', () => {
+    expect(press('F1', { ctrlKey: true })).toBe('layoutBrief');
+    expect(press('F2', { ctrlKey: true })).toBe('layoutDetailed');
+    expect(press('F1', { ctrlKey: true, shiftKey: true })).toBeUndefined();
+    expect(press('F1', { altKey: true })).toBe('driveMenuLeft');
+    expect(press('F2')).toBe('renameInline');
+    expect(refusalOf({ key: 'F1', ctrl: true })).toBeUndefined();
+    expect(refusalOf({ key: 'F2', ctrl: true })).toBeUndefined();
+    expect(keysOf('layoutBrief')).toBe('Ctrl+F1');
+    expect(keysOf('layoutDetailed')).toBe('Ctrl+F2');
   });
 
   it('Alt+F2 is still the right drive menu, not a rename', () => {

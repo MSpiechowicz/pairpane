@@ -1,6 +1,8 @@
 <script lang="ts">
   import { type Snippet, untrack } from 'svelte';
 
+  import { revealed, span } from './scroll';
+
   /**
    * A scrolling list of `count` fixed-height rows that renders only the rows in view (plus `overscan` above and
    * below), so a folder of 100 000 entries costs as much as one screen.
@@ -48,17 +50,12 @@
         return;
       }
 
-      if (top < view.scrollTop) {
-        view.scrollTop = top;
-      } else if (bottom > view.scrollTop + view.clientHeight) {
-        view.scrollTop = bottom - view.clientHeight;
-      }
-
+      view.scrollTop = revealed(view.scrollTop, view.clientHeight, top, bottom);
       scrollTop = view.scrollTop;
     });
   });
 
-  const indices = $derived(Array.from({ length: Math.max(0, last - first) }, (_, offset) => first + offset));
+  const indices = $derived(span(first, last));
 </script>
 
 <div

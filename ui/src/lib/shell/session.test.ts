@@ -217,6 +217,44 @@ describe('Session saving', () => {
     ]);
   });
 
+  it('brings back the layout of every tab, and a tab saved without one is detailed', async () => {
+    const withLayouts: SavedState = {
+      ...saved,
+      left: {
+        tabs: [
+          { path: '/a', sort: 'size', desc: true, layout: 'brief' },
+          { path: '/b', sort: 'name', desc: false },
+        ],
+        active: 1,
+      },
+    };
+    const s = setup({ state_load: () => withLayouts });
+    await started(s);
+
+    expect(s.panes.left.state.map((tab) => tab.layout)).toEqual(['brief', 'detailed']);
+    expect(s.panes.right.state.map((tab) => tab.layout)).toEqual(['detailed']);
+    expect(s.panes.left.view.layout).toBe('detailed'); // the active tab's
+    expect(s.saves()).toEqual([]); // what was loaded is not a change
+  });
+
+  it('saves the layout of every tab; the detailed one is saved as none', async () => {
+    const s = setup();
+    await started(s);
+
+    s.panes.left.view.layout = 'brief';
+    s.panes.left.add();
+    s.panes.left.view.layout = 'detailed';
+    await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS * 2);
+
+    expect(s.saves().at(-1)?.left).toEqual({
+      tabs: [
+        { path: '/home/me', sort: 'name', desc: false, layout: 'brief' },
+        { path: '/home/me', sort: 'name', desc: false },
+      ],
+      active: 1,
+    });
+  });
+
   it('brings back the preferences, and every save carries them', async () => {
     const preferences = { ...DEFAULT_PREFERENCES, theme: 'dark' as const, showHidden: true, confirmTrash: false };
     const s = setup({ state_load: () => ({ ...saved, preferences }) });

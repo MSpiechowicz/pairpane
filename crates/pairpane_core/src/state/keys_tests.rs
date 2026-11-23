@@ -168,3 +168,19 @@ fn preferences_that_cannot_be_read_take_their_defaults_and_never_lose_the_rest_o
     let not_an_object = with(serde_json::json!("dark"));
     assert_eq!(not_an_object.preferences, Some(crate::model::Preferences::default()));
 }
+
+#[test]
+fn a_tab_keeps_its_layout_and_one_from_before_layouts_has_none() {
+    use crate::model::PaneLayout;
+
+    let folder = tempfile::tempdir().expect("a folder");
+    let file = folder.path().join("state.json");
+    let mut saved = state();
+    saved.left.tabs[0].layout = Some(PaneLayout::Brief);
+    save(&file, saved).expect("saved");
+
+    let loaded = load(&file).expect("loaded");
+    assert_eq!(loaded.left.tabs[0].layout, Some(PaneLayout::Brief));
+    assert_eq!(loaded.left.tabs[1].layout, None);
+    assert!(!std::fs::read_to_string(&file).expect("read").contains("null"));
+}

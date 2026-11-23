@@ -48,6 +48,65 @@ describe('handleKey', () => {
     expect(view.cursor).toBe(0);
   });
 
+  it('Left and Right are not the pane`s in the detailed layout', async () => {
+    const { view, press } = await shown();
+    view.setCursor(3);
+
+    expect(press('ArrowLeft')).toBe(false);
+    expect(press('ArrowRight')).toBe(false);
+    expect(view.cursor).toBe(3);
+  });
+
+  it('in the brief layout Left and Right move by a column, the Page keys by a column, the arrows by one', async () => {
+    const { view, press } = await shown();
+    view.layout = 'brief';
+
+    // Columns of 3: [.., docs, src] [a.txt, b.md, c.TXT]
+    view.setCursor(1);
+    expect(press('ArrowRight')).toBe(true);
+    expect(view.cursor).toBe(4);
+    expect(press('ArrowLeft')).toBe(true);
+    expect(view.cursor).toBe(1);
+
+    expect(press('ArrowDown')).toBe(true);
+    expect(view.cursor).toBe(2);
+    expect(press('ArrowUp')).toBe(true);
+    expect(view.cursor).toBe(1);
+
+    press('PageDown');
+    expect(view.cursor).toBe(4);
+    press('PageUp');
+    expect(view.cursor).toBe(1);
+
+    press('End');
+    expect(view.cursor).toBe(5);
+    press('Home');
+    expect(view.cursor).toBe(0);
+  });
+
+  it('in the brief layout the cursor stops at the ends of the list when a column to the side is not there', async () => {
+    const { view, press } = await shown();
+    view.layout = 'brief';
+
+    view.setCursor(4);
+    press('ArrowRight');
+    expect(view.cursor).toBe(5); // the last item: the column after it has none at that height
+
+    press('ArrowLeft');
+    press('ArrowLeft');
+    expect(view.cursor).toBe(0);
+  });
+
+  it('Alt+Left and Alt+Right (the history) are not taken by the brief layout', async () => {
+    const { view, press } = await shown();
+    view.layout = 'brief';
+    view.setCursor(1);
+
+    expect(press('ArrowLeft', { altKey: true })).toBe(false);
+    expect(press('ArrowRight', { ctrlKey: true })).toBe(false);
+    expect(view.cursor).toBe(1);
+  });
+
   it('Enter opens a folder or `..`, and leaves a file alone', async () => {
     const { backend, view, press } = await shown();
 
