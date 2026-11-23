@@ -4,6 +4,7 @@
   import ColumnHeader from '$lib/panes/ColumnHeader.svelte';
   import { columnTracks, shows } from '$lib/panes/columns';
   import { displayName } from '$lib/panes/format';
+  import type { FlatSide } from '$lib/panes/flat.svelte';
   import type { Hotlist } from '$lib/panes/hotlist.svelte';
   import { handleKey } from '$lib/panes/keys';
   import type { InlineRename } from '$lib/panes/inlineRename.svelte';
@@ -29,6 +30,7 @@
     onActivate,
     onMenu,
     rename,
+    flat,
   }: {
     /** Accessible name of the pane ("Left pane"). */
     label: string;
@@ -42,6 +44,8 @@
     onMenu: (menu: Menu | undefined) => void;
     /** The field for renaming a row in place; one for both panes. */
     rename?: InlineRename;
+    /** This pane's flat view (every file below the folder), if the app has one. */
+    flat?: FlatSide;
   } = $props();
 
   const tracks = $derived(columnTracks(preferences.value));
@@ -151,6 +155,7 @@
   <PaneHeader
     {tabs}
     volumes={volumes.list}
+    flat={flat?.shown}
     driveMenuOpen={menu === 'drives'}
     onDriveMenu={() => onMenu(menu === 'drives' ? undefined : 'drives')}
   />
@@ -201,6 +206,8 @@
       </div>
       {#if listing.notice}
         <p class="notice" role="alert">{displayName(listing.notice)}</p>
+      {:else if flat?.running}
+        <p class="notice progress" role="status">Listing all files below this folder… (Ctrl+B or Esc stops)</p>
       {/if}
       {#if listing.slow}
         <div class="spinner" role="status" aria-label="Loading"></div>
@@ -268,6 +275,12 @@
     background: var(--panel-2);
     color: var(--danger);
     font-size: 12px;
+  }
+
+  /* What goes on, not what went wrong. */
+  .notice.progress {
+    border-color: var(--line);
+    color: var(--dim);
   }
 
   .spinner {

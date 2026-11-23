@@ -10,11 +10,14 @@
     tabs,
     volumes,
     driveMenuOpen,
+    flat = false,
     onDriveMenu,
   }: {
     tabs: PaneTabs;
     volumes: readonly Volume[];
     driveMenuOpen: boolean;
+    /** The results listed are a flat view of the folder, not the results of a search. */
+    flat?: boolean;
     /** The drive icon was clicked. */
     onDriveMenu: () => void;
   } = $props();
@@ -78,7 +81,7 @@
             {/each}
             <!-- The crumbs are the folder searched; the results are what is listed in it. -->
             {#if listing.results !== undefined}
-              <i>/</i><span class="found">Search results</span>
+              <i>/</i><span class="found">{flat ? 'Flat view' : 'Search results'}</span>
             {/if}
           </nav>
         </div>

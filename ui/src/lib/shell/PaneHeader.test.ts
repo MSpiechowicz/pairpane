@@ -11,7 +11,7 @@ import PaneHeader from './PaneHeader.svelte';
 const home: Volume = { name: 'Home', label: null, path: '/home/me', kind: 'home', free: null };
 
 /** A header for a pane that listed `path` (the crumbs are the whole path from the root). */
-function header(path: string, volumes: Volume[] = [home]) {
+function header(path: string, volumes: Volume[] = [home], flat = false) {
   const backend = fakeBackend();
   const tabs = new PaneTabs(backend.ipc, 'left');
   void tabs.view.listing.open(path);
@@ -29,7 +29,7 @@ function header(path: string, volumes: Volume[] = [home]) {
   });
 
   const onDriveMenu = vi.fn();
-  render(PaneHeader, { tabs, volumes, driveMenuOpen: false, onDriveMenu });
+  render(PaneHeader, { tabs, volumes, driveMenuOpen: false, flat, onDriveMenu });
   return { backend, tabs, onDriveMenu };
 }
 
@@ -78,6 +78,27 @@ describe('PaneHeader', () => {
 
     await fireEvent.click(within(path()).getByRole('button', { name: 'Projects' }));
     expect(backend.last().args).toMatchObject({ path: '/home/me/Projects', child: null });
+  });
+
+  it('the results of a flat view end the path with its own mark', async () => {
+    const { backend, tabs } = header('/home/me/Projects', [home], true);
+
+    void tabs.view.listing.openResults(4);
+    backend.last().emit({
+      kind: 'start',
+      path: '/home/me/Projects',
+      parent: '/home/me',
+      crumbs: [
+        { name: '/', path: '/' },
+        { name: 'Projects', path: '/home/me/Projects' },
+      ],
+      total: 0,
+      results: 4,
+    });
+    await tick();
+
+    expect(path()).toHaveTextContent('Flat view');
+    expect(path()).not.toHaveTextContent('Search results');
   });
 
   it('a path outside every volume starts at the root, named System', () => {

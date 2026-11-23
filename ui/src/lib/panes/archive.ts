@@ -1,6 +1,7 @@
 import type { ArchiveSpot } from '$lib/ipc/bindings/ArchiveSpot';
 import type { Entry } from '$lib/ipc/bindings/Entry';
 import { isWindowsPlatform } from './keys';
+import type { PaneTabs } from './tabs.svelte';
 
 export type { ArchiveSpot };
 
@@ -64,6 +65,16 @@ export function sameArchivePath(a: string, b: string): boolean {
   }
 
   return withoutTrailing(a, '/') === withoutTrailing(b, '/');
+}
+
+/** An add to `archive` ended (or stopped): the panes that show that archive list it again, from the file. */
+export function reloadShowing(panes: readonly Pick<PaneTabs, 'view'>[], archive: string) {
+  for (const { view } of panes) {
+    const { listing } = view;
+    if (listing.archive !== undefined && sameArchivePath(listing.archive.archive, archive)) {
+      void listing.reload();
+    }
+  }
 }
 
 /** `path` without trailing `separator`s, unless it is only separators (a root). */

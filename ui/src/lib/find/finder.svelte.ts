@@ -23,6 +23,18 @@ export interface ResultsTarget {
   openResults(id: FindId): Promise<void>;
 }
 
+// A search that is already gone (evicted, or the app is closing) needs nothing more done.
+
+/** Stops the search `id`; what it found stays. */
+export function cancelSearch(ipc: Transport, id: FindId) {
+  ipc.invoke('find_cancel', { id }).catch(() => {});
+}
+
+/** Drops the search `id` from the backend (and stops it if it runs). */
+export function forgetSearch(ipc: Transport, id: FindId) {
+  ipc.invoke('find_forget', { id }).catch(() => {});
+}
+
 /**
  * The Find dialog's state: its fields (kept when it is closed and opened again), the search that runs and its
  * results as they stream in. At most one search is the dialog's: starting another, or closing the dialog, drops it from
@@ -127,11 +139,11 @@ export class Finder {
       });
 
       if (run !== this.#run) {
-        this.#forget(id); // closed or started over before the answer
+        forgetSearch(this.#ipc, id); // closed or started over before the answer
       } else {
         this.#id = id;
         if (this.stopping) {
-          this.#cancel(id);
+          cancelSearch(this.#ipc, id);
         }
       }
     } catch (error) {
@@ -151,7 +163,7 @@ export class Finder {
 
     this.stopping = true;
     if (this.#id !== undefined) {
-      this.#cancel(this.#id);
+      cancelSearch(this.#ipc, this.#id);
     }
   }
 
@@ -228,7 +240,7 @@ export class Finder {
       if (this.#fed) {
         this.#listed.add(this.#id);
       } else {
-        this.#forget(this.#id);
+        forgetSearch(this.#ipc, this.#id);
       }
     }
 
@@ -238,7 +250,7 @@ export class Finder {
     for (const id of this.#listed) {
       if (!this.#shown(id)) {
         this.#listed.delete(id);
-        this.#forget(id);
+        forgetSearch(this.#ipc, id);
       }
     }
   }
@@ -253,14 +265,5 @@ export class Finder {
     this.progress = undefined;
     this.summary = undefined;
     this.failure = undefined;
-  }
-
-  // A search that is already gone (evicted, or the app is closing) needs nothing more done.
-  #cancel(id: FindId) {
-    this.#ipc.invoke('find_cancel', { id }).catch(() => {});
-  }
-
-  #forget(id: FindId) {
-    this.#ipc.invoke('find_forget', { id }).catch(() => {});
   }
 }

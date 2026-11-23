@@ -87,6 +87,15 @@ describe('shortcutFor', () => {
     expect(press('q')).toBeUndefined();
   });
 
+  it('Ctrl+B lists every file below the folder; B alone and the other modifiers do not', () => {
+    expect(press('b', { ctrlKey: true })).toBe('flatView');
+    expect(press('B', { ctrlKey: true })).toBe('flatView'); // caps lock
+    expect(press('b')).toBeUndefined();
+    expect(press('b', { ctrlKey: true, shiftKey: true })).toBeUndefined();
+    expect(press('b', { altKey: true })).toBeUndefined();
+    expect(press('b', { metaKey: true })).toBeUndefined();
+  });
+
   it('F2 renames in place, F7 makes a folder and Shift+F4 a file', () => {
     expect(press('F2')).toBe('renameInline');
     expect(press('F7')).toBe('newFolder');
