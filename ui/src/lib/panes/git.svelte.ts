@@ -10,8 +10,10 @@ export const GIT_TTL_MS = 10_000;
 /** How many folders' answers are kept, and how many folders a pane may want at once (fewer, so what is wanted always fits). */
 const MAX_KEPT = 256;
 const MAX_WANTED = 100;
-/** How many requests are out at once (git reads a whole repository for each, so few). */
-const PARALLEL = 2;
+/** How long what is kept about a repository too big to read (or that took too long) holds, though it is a reload that asks soonest. */
+const TOO_BIG_TTL_MS = 60_000;
+/** How many requests are out at once: one, since the backend does git for two requests at a time in all, for every pane. */
+const PARALLEL = 1;
 /** How long a folder that could not be read for a passing reason waits before it is asked about again. */
 const FAILED_WAIT_MS = 10_000;
 
@@ -34,12 +36,14 @@ function folderOf(status: GitStatus): GitFolder {
 
 /**
  * The git status of the folders a pane shows items of, for the Git column. A request covers one whole folder (its
- * direct children), so the pane says which folders hold the items in view ({@link want}), not which items. At most
- * two requests are out at once; the answers are kept per folder until the listing is reloaded (a change on disk) or
+ * direct children), so the pane says which folders hold the items in view ({@link want}), not which items. One request
+ * is out at a time (the backend serves two for all the panes); the answers are kept per folder until the listing is reloaded (a change on disk) or
  * {@link GIT_TTL_MS} has passed, whichever is first, and the folder is asked about again then if still wanted (what
  * is kept shows until the new answer comes). A folder that is not in a repository is kept as such. A repository too big
- * to read is kept as the reason, and is asked about again only when the listing is reloaded. A busy answer makes the
- * lane wait, longer each time, and stop after too many in a row; another failure makes the folder wait a while.
+ * to read (or that took too long) is kept as the reason, and is asked about again when the listing is reloaded, or after
+ * a minute. A busy answer makes the lane wait, longer each time up to a few seconds, and go on at that pace for as long
+ * as the folder is wanted (other panes take the backend's slots for a while, and no one is waited out for good);
+ * another failure makes the folder wait a while.
  */
 export class GitFolders {
   readonly #answers: Kept<Answer>;
@@ -61,7 +65,7 @@ export class GitFolders {
     this.#ipc = ipc;
     this.#ttl = ttl;
     this.#answers = new Kept(MAX_KEPT);
-    this.#lane = new Lane(parallel);
+    this.#lane = new Lane(parallel, { persistent: true });
   }
 
   /** What the Git cell of `place` shows: nothing for a clean item, outside a repository and until the answer arrives. */
@@ -95,8 +99,12 @@ export class GitFolders {
       return false;
     }
 
-    // A repository too big to read stays so until the folder changes; asking again would only repeat the refusal.
-    return tooBig(kept.folder) || now - kept.at < this.#ttl;
+    return now - kept.at < this.#holds(kept.folder);
+  }
+
+  /** How long an answer holds: a repository too big to read stays so for longer, since asking again soon would only repeat the refusal. */
+  #holds(folder: GitFolder): number {
+    return tooBig(folder) ? Math.max(TOO_BIG_TTL_MS, this.#ttl) : this.#ttl;
   }
 
   /** The wanted folders that are not fresh, in the order wanted. */
@@ -110,6 +118,9 @@ export class GitFolders {
 
     if (times.length > 0) {
       this.#wake.at(Math.min(...times), now);
+    } else {
+      // Nothing is waited for (no folder is wanted, or none is left to ask or to expire): no look is left set.
+      this.#wake.clear();
     }
   }
 
@@ -117,7 +128,7 @@ export class GitFolders {
   #nextExpiry(now: number): number | undefined {
     const times = this.#folders.flatMap((folder) => {
       const kept = this.#answers.peek(folder);
-      return kept !== undefined && this.#fresh(folder, now) && !tooBig(kept.folder) ? [kept.at + this.#ttl] : [];
+      return kept !== undefined && this.#fresh(folder, now) ? [kept.at + this.#holds(kept.folder)] : [];
     });
 
     return times.length > 0 ? Math.min(...times) : undefined;
@@ -129,8 +140,8 @@ export class GitFolders {
   }
 
   /**
-   * The status of `folder`. A repository too big to read (`invalidInput`) is kept as the reason; any other failure than
-   * a busy one is not kept, and the folder waits a while.
+   * The status of `folder`. A repository too big to read, or that took too long (the backend's `invalidInput`, and no
+   * other kind), is kept as the reason; any other failure than a busy one is not kept, and the folder waits a while.
    */
   async #load(folder: string) {
     const lane = this.#lane;

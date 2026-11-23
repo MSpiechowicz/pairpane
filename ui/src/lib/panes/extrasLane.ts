@@ -12,9 +12,15 @@ const BUSY_WAIT_MAX_MS = 5_000;
 /** How many busy answers in a row make a lane stop asking (a mount that hangs keeps the backend's threads for good). */
 export const MAX_BUSY_IN_A_ROW = 8;
 
+export interface LaneOptions {
+  /** The lane never gives up on busy answers: past the longest wait it keeps asking at that pace while something is wanted. */
+  persistent?: boolean;
+}
+
 /**
  * One kind of request: how many may be out at once, the wait after the backend said it is busy, the files that wait
- * for their time (a passing failure), and whether it has given up for the files it was asked for.
+ * for their time (a passing failure), and whether it has given up for the files it was asked for (a persistent lane
+ * does not).
  */
 export class Lane {
   /** The keys of the files being asked about. */
@@ -22,6 +28,7 @@ export class Lane {
   /** How many requests are out (one may be about several files). */
   #out = 0;
   readonly #parallel: number;
+  readonly #persistent: boolean;
   #holdUntil = 0;
   #wait = BUSY_WAIT_MS;
   #busyRun = 0;
@@ -30,8 +37,9 @@ export class Lane {
   /** Files not to be asked about before a time, by key. */
   readonly #notBefore = new Map<string, number>();
 
-  constructor(parallel: number) {
+  constructor(parallel: number, { persistent = false }: LaneOptions = {}) {
     this.#parallel = parallel;
+    this.#persistent = persistent;
   }
 
   get free(): boolean {
@@ -104,13 +112,16 @@ export class Lane {
     return Math.max(0, this.#holdUntil - now);
   }
 
-  /** The backend is full: nothing new for a while, a longer one each time, and none at all after too many in a row. */
+  /**
+   * The backend is full: nothing new for a while, a longer one each time, and none at all after too many in a row (but
+   * for a persistent lane, which goes on at the longest wait).
+   */
   busy(now: number, queue: readonly Keyed[]) {
     this.#holdUntil = Math.max(this.#holdUntil, now + this.#wait);
     this.#wait = Math.min(this.#wait * 2, BUSY_WAIT_MAX_MS);
     this.#busyRun += 1;
 
-    if (this.#busyRun >= MAX_BUSY_IN_A_ROW) {
+    if (!this.#persistent && this.#busyRun >= MAX_BUSY_IN_A_ROW) {
       this.#stoppedOn = new Set(queue.map((target) => target.key));
     }
   }
@@ -164,6 +175,14 @@ export class Wake {
 
   constructor(look: () => void) {
     this.#look = look;
+  }
+
+  /** Drops the look that is set, if any: nothing is waited for. */
+  clear() {
+    if (this.#timer !== undefined) {
+      clearTimeout(this.#timer);
+      this.#timer = undefined;
+    }
   }
 
   /** Looks at the queues again at `time`, unless a look is set for before that. */

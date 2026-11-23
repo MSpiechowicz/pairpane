@@ -1,12 +1,15 @@
-//! What `columns_git` checks before a thread is taken, the cap on threads, and what the page is told: the answer's shape,
-//! and the code and fixed text of each refusal. The status itself is tried in the core crate (`pairpane_core::gitstatus`),
-//! against repositories made with gix; here a repository is the few files and folders git needs to see one.
+//! What `columns_git` checks before a thread is taken, the cap on threads, the deadline it answers by, and what the page is
+//! told: the answer's shape, and the code and fixed text of each refusal. The status itself is tried in the core crate
+//! (`pairpane_core::gitstatus`), against repositories made with gix; here a repository is the few files and folders git
+//! needs to see one.
 
-use std::time::Duration;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 use tauri::async_runtime::block_on;
 
+use super::stuck::until;
 use super::tests::{fill, shown};
 use super::*;
 
@@ -45,7 +48,7 @@ fn a_folder_of_a_repository_is_told_with_the_marks_of_its_children_as_the_page_r
         json!({
             "repo": true,
             "marks": [
-                { "name": "fresh", "mark": "modified" },
+                { "name": "fresh", "mark": "untracked" },
                 { "name": "new.txt", "mark": "untracked" },
             ],
         })
@@ -116,8 +119,9 @@ fn a_status_that_takes_longer_than_its_time_is_the_same_answer() {
 
     let (code, message) = shown(block_on(Columns::default().git(path, quick)));
 
+    // The time limit is `invalidInput` too, with a text of its own.
     assert_eq!(code, IpcErrorCode::InvalidInput);
-    assert_eq!(message, "the repository is too big to read here");
+    assert_eq!(message, "the repository took too long to read");
 }
 
 #[test]
@@ -142,4 +146,109 @@ fn the_exit_flag_refuses_a_status_that_comes_after_it() {
 
     assert_eq!(code, IpcErrorCode::Io);
     assert_eq!(message, "the read was cancelled");
+}
+
+/// A status that does not return until `release` is dropped, as one held up by a read the system never ends.
+fn blocked(
+    hold: mpsc::Receiver<()>,
+) -> impl FnOnce(&Path, Limits, &AtomicBool) -> Result<GitStatus, GitError> + Send + 'static {
+    move |_, _, _| {
+        let _ = hold.recv();
+
+        Ok(GitStatus {
+            repo: false,
+            marks: Vec::new(),
+        })
+    }
+}
+
+fn hung(columns: &Columns, path: &str) -> (mpsc::Sender<()>, (IpcErrorCode, String), Duration) {
+    let (release, hold) = mpsc::channel();
+    let started = Instant::now();
+    let answer = shown(block_on(columns.git_with(
+        path.to_owned(),
+        Limits::default(),
+        Duration::from_millis(50),
+        blocked(hold),
+    )));
+
+    (release, answer, started.elapsed())
+}
+
+#[test]
+fn a_status_that_never_returns_is_answered_at_the_deadline_and_gives_its_place_back() {
+    let (_folder, path) = repository();
+    let columns = Columns::default();
+
+    let (release, (code, message), elapsed) = hung(&columns, &path);
+
+    assert_eq!(code, IpcErrorCode::InvalidInput);
+    assert_eq!(message, "the repository took too long to read");
+    assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
+    assert_eq!(columns.stuck.count(), 1, "its thread is counted as stuck");
+    // The places of the statuses are free: the status of the same repository is read.
+    assert!(git(&columns, &path).expect("a status").repo);
+    assert_eq!(fill(&columns.statuses, GIT_THREADS).len(), GIT_THREADS);
+
+    drop(release);
+    until(|| columns.stuck.count() == 0);
+}
+
+#[test]
+fn while_four_threads_are_stuck_a_status_is_busy_until_one_ends() {
+    let (_folder, path) = repository();
+    let columns = Columns::default();
+    let mut releases = Vec::new();
+
+    for _ in 0..stuck::MAX_STUCK {
+        let (release, (code, _), _) = hung(&columns, &path);
+        assert_eq!(code, IpcErrorCode::InvalidInput);
+        releases.push(release);
+    }
+
+    assert_eq!(shown(git(&columns, &path)).0, IpcErrorCode::Busy);
+
+    releases.pop();
+    until(|| !columns.stuck.is_full());
+    assert!(git(&columns, &path).expect("a status again").repo);
+}
+
+#[test]
+fn a_folder_that_cannot_be_resolved_is_not_found_or_io_and_never_invalid_input() {
+    let folder = tempfile::tempdir().expect("a folder");
+    let missing = folder.path().join("gone").join("deeper").to_string_lossy().into_owned();
+
+    assert_eq!(shown(git(&Columns::default(), &missing)).0, IpcErrorCode::NotFound);
+
+    #[cfg(unix)]
+    {
+        // A link that leads to itself has no real path.
+        let looped = folder.path().join("loop");
+        std::os::unix::fs::symlink(&looped, &looped).expect("a link");
+
+        let (code, message) = shown(git(&Columns::default(), &looped.to_string_lossy()));
+
+        assert_eq!(code, IpcErrorCode::Io);
+        assert_eq!(message, "the folder cannot be read");
+    }
+}
+
+/// Unix: a named pipe where `HEAD` should be, which a plain open of waits on for ever.
+#[cfg(unix)]
+#[test]
+fn a_repository_with_a_named_pipe_for_head_is_not_a_repo_and_the_answer_comes() {
+    let (folder, path) = repository();
+    let head = folder.path().join(".git").join("HEAD");
+    std::fs::remove_file(&head).expect("removed");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&head)
+        .status()
+        .expect("mkfifo runs");
+    assert!(status.success());
+
+    let started = Instant::now();
+    let answer = git(&Columns::default(), &path).expect("a status");
+
+    assert!(!answer.repo);
+    assert!(started.elapsed() < Duration::from_secs(5));
 }

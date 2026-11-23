@@ -46,48 +46,94 @@
 //!    (`gix-filter` for drivers, `gix-diff` for an external diff or `textconv`, `gix-command`, and `gix-path` for the `git`
 //!    program) are given nothing to start by points 1, 3 and 4, and no code of ours calls them otherwise.
 //! 6. **Submodules are never opened.** The submodule status of the gix status (which opens the submodule's own repository
-//!    and runs a status there, with that repository's own trust) is replaced by `scan::NoSubmodules`, which answers "no
+//!    and runs a status there, with that repository's own trust) is replaced by `compare::NoSubmodules`, which answers "no
 //!    change" without reading `.gitmodules` or touching the submodule. A submodule folder therefore has a mark only for
 //!    what the superproject sees of it (an untracked or staged gitlink), never for its own state: it is never "dirty".
 //!    Nested repositories that are not submodules are not entered either (`recurse_repositories` is off, so the
 //!    directory walk only checks that a `.git` is there, reading its structure but not its config).
 //! 7. **Read only.** Nothing is written: the index is not refreshed, no lock file is made, nothing is created in `.git`.
-//!    A `.git` file (a linked worktree or a submodule) that points elsewhere is read like a `.git` folder; the work tree it
-//!    belongs to must contain the folder asked for, or the folder is reported as not in a repository (a `core.worktree`
-//!    pointing at another checkout is ignored anyway by point 3).
+//!    A `.git` file (a linked worktree or a submodule) that points elsewhere is read like a `.git` folder; the work tree is
+//!    the folder that holds the `.git` file, and it must contain the folder asked for, or the folder is reported as not in
+//!    a repository (a `core.worktree` pointing at another checkout is ignored anyway by point 3).
+//! 8. **What the repository names is looked at before it is read** (`locate`, `inspect`, `locality`, `files`). The
+//!    repository is found by a walk of our own, with `lstat` and small reads that neither wait for a writer nor follow a
+//!    link, before gix is let to read anything of it. A `gitdir:` line, a `commondir` file, and every line of
+//!    `objects/info/alternates` (and the alternates' own lists, to a depth) must name a local place: a network path
+//!    (`\\host\share`, `//host/share`, `\\?\UNC\...`, a device path, or on Windows a link leading to one) would make
+//!    Windows connect to the host and hand it the user's credentials, and a path under `/net` makes macOS mount a share; such
+//!    a repository is "not a repository" (`repo: false`), and nothing at the other end is touched. The files gix reads next
+//!    (`HEAD`, `config`, `config.worktree`, `commondir`, `gitdir`, `index` and `sharedindex.*`, `packed-refs`,
+//!    `info/exclude`, `info/attributes`, the alternates lists, the files of each `objects/pack`, and the loose files of the
+//!    refs `HEAD` leads to, through up to five symbolic refs) must be regular files, not links, within a size (4 KiB for a
+//!    `HEAD`, a ref or a pointer, 1 MiB for a config, 64 MiB for an index or `packed-refs`), or the repository is
+//!    `repo: false`; an index over its cap is [`GitError::TooBig`]. So a named pipe, a device, or a link to `/dev/zero` where one
+//!    of them is expected does not hold the status up. The refs below `refs/replace` are not read (`core.useReplaceRefs`
+//!    is off).
+//! 9. **A file of the work tree is only read when it is one.** A tracked file that was changed (by its stat) is read to be
+//!    compared with its blob only when it is a regular file within [`Limits::compare_bytes`] (and a link where the index
+//!    has a link), and its folders' `.gitattributes` are fine to read; otherwise it counts as modified, unopened. A folder
+//!    whose `.gitignore` is a named pipe, a device or too big is not entered by the directory walk.
 //!
 //! Left out: the dirtiness of submodules (point 6), the global ignore file (point 1), rename tracking (a renamed file is a
 //! deleted and an added file here) and the ahead/behind or branch state (never read). Bare repositories have no work tree
-//! and so no marks (`repo: false`).
+//! and so no marks (`repo: false`); neither has a repository of a format gix does not read (SHA-256, an unknown
+//! extension), which is `repo: false` and not an error.
 //!
 //! # What is read and bounded
 //!
-//! - The repository is found by walking up from the folder with `gix::discover_opts` and never crosses a filesystem
+//! - The repository is found by walking up from the folder (`locate::find`), and the walk never crosses a filesystem
 //!   boundary (Unix), nor the user's home folder (the home folder itself is the last folder tried), nor the filesystem
 //!   root. Which folder to start from is the folder as the page sent it, after its links are resolved, so that the
-//!   work tree it is in can be told apart from the folder.
+//!   work tree it is in can be told apart from the folder. Names are compared as the system spells them: precomposed on
+//!   macOS, and without case on Windows (`path::prefix_of`).
 //! - The status is limited to the folder's own subtree: its index entries are the range of the index with that prefix, the
-//!   directory walk and the comparison with `HEAD` get the folder as a literal pathspec, and nothing outside it is
-//!   stat-ed (apart from the ignore rules of its parents).
-//! - Three results are merged into one mark per direct child (`marks::Marks`): the index against `HEAD` (`staged`),
-//!   the work tree against the index (`modified`, `conflicted`), and the directory walk (`untracked`, `ignored`). A folder
-//!   child gets `modified` when anything below it changed, `ignored` when it is ignored itself, and nothing otherwise.
+//!   directory walk and the comparison with the work tree get the folder as a literal pathspec, the comparison with `HEAD`
+//!   walks only the folder's subtree of `HEAD`, and nothing outside it is stat-ed (apart from the ignore rules of its
+//!   parents).
+//! - Three results are merged into one mark per direct child (`marks::Marks`): the index against `HEAD` (`staged`,
+//!   `staged::staged`: our own walk of the subtree of `HEAD` against the index entries under the folder, not gix's
+//!   `tree_index_status`, which builds an index of the whole tree first, with no cap), the work tree against the index
+//!   (`modified`, `conflicted`), and the directory walk (`untracked`, `ignored`). A folder child gets the most severe mark
+//!   of anything below it (`conflicted`, then `modified`, then `staged`, then `untracked`); an ignored entry below it never
+//!   marks it, and it is `ignored` only when it is itself ignored. A folder that is untracked as a whole, or a nested
+//!   repository, is `untracked`; a staged gitlink is `staged`.
 //! - The work is bounded by [`Limits`]: a time limit and a cap on the entries walked (the index entries of the folder, the
-//!   directories and entries the directory walk saw, and the changes found). A watchdog thread sets gix's interrupt flag
-//!   when the time is up, and the app's exit flag does the same, so a status stops at the next entry, not at the end.
-//!   Two things cannot be interrupted: reading one file's content, which is skipped for files over [`MAX_COMPARE_BYTES`]
-//!   (they show as `modified` when their stat changed), and building the tree of `HEAD` for the comparison with the index
-//!   (about half a second on a repository of hundreds of thousands of files). A repository that is over a limit is
-//!   [`GitError::TooBig`].
+//!   directories and entries the directory walk saw, the entries of the trees of `HEAD` walked or looked through, and the
+//!   changes found). A watchdog thread sets gix's interrupt flag when the time is up, and the app's exit flag does the same,
+//!   so a status stops at the next entry, not at the end. The walk of the trees of `HEAD` also bounds its depth (256), the
+//!   length of a path (64 KiB) and the bytes of the trees it holds open (64 MiB), and each object it reads is held to gix's
+//!   16 MiB limit for a repository of reduced trust. Some things cannot be interrupted once started, and are bounded by
+//!   size instead: reading one file's content (skipped for files over [`Limits::compare_bytes`], which show as `modified`
+//!   when their stat changed), decoding the index (at most 64 MiB), and reading one object (at most 16 MiB). A repository
+//!   that is over the cap is [`GitError::TooBig`], and one that took the time is [`GitError::TimedOut`].
+//! - The decoded index of a repository is kept for the next status of it (`cache`: four repositories at most, each for an
+//!   index file of a given length and time that is not younger than two seconds), so that a flat view of many folders of one
+//!   repository decodes it once.
+//! - Anything that still holds a read up (a file that was swapped for a pipe after it was looked at, a loose object or a
+//!   pack that is one) is not a bound of this module: the caller answers for the request at its deadline whether or not this
+//!   function returns (see `columns_git`).
 //! - Errors carry no path ([`GitError`]); the details go to the log at debug level only.
 
+mod cache;
+mod compare;
+mod files;
+mod inspect;
+mod locality;
+mod locate;
 mod marks;
 mod open;
+mod path;
 mod scan;
+mod staged;
+mod visit;
 mod watch;
 
 #[cfg(test)]
+mod compare_tests;
+#[cfg(test)]
 mod fixture;
+#[cfg(test)]
+mod hostile_tests;
 #[cfg(test)]
 mod limit_tests;
 #[cfg(test)]
@@ -120,6 +166,8 @@ pub struct Limits {
     pub time: Duration,
     /// How many entries it may walk (see the module docs).
     pub entries: usize,
+    /// The largest file whose content it reads to compare it (see [`MAX_COMPARE_BYTES`]).
+    pub compare_bytes: u64,
 }
 
 impl Default for Limits {
@@ -127,6 +175,7 @@ impl Default for Limits {
         Self {
             time: TIME_LIMIT,
             entries: ENTRY_LIMIT,
+            compare_bytes: MAX_COMPARE_BYTES,
         }
     }
 }
@@ -134,13 +183,17 @@ impl Default for Limits {
 /// Why a status could not be given. None of the texts holds a path.
 #[derive(Debug)]
 pub enum GitError {
-    /// The time limit or the cap on entries was reached: the repository is too big to read here.
+    /// The cap on entries (or on the size of the index, or of what is walked) was reached: the repository is too big to read
+    /// here.
     TooBig,
+    /// The time limit was reached: the repository took too long to read.
+    TimedOut,
     /// The app is exiting.
     Cancelled,
-    /// The folder itself could not be read (it is gone, or there is no permission).
+    /// The folder itself could not be read (it is gone, or there is no permission, or its path cannot be resolved).
     Folder(io::ErrorKind),
-    /// The repository is there but cannot be read (damaged files, an unsupported format).
+    /// The repository is there but cannot be read (damaged files). A repository of a format that is not read is not an error:
+    /// it is `repo: false`.
     Repository,
 }
 
@@ -148,6 +201,7 @@ impl fmt::Display for GitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::TooBig => "the repository is too big to read here",
+            Self::TimedOut => "the repository took too long to read",
             Self::Cancelled => "the read was cancelled",
             Self::Folder(io::ErrorKind::NotFound) => "the folder no longer exists",
             Self::Folder(io::ErrorKind::PermissionDenied) => "the folder cannot be read: no permission",

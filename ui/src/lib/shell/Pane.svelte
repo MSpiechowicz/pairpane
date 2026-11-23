@@ -3,7 +3,7 @@
 
   import ColumnHeader from '$lib/panes/ColumnHeader.svelte';
   import { columnTracks, shows } from '$lib/panes/columns';
-  import { extraTargetOf, wantedExtras } from '$lib/panes/extras';
+  import { extraTargetOf, gitPlaceOf, NOTHING, wantedExtras } from '$lib/panes/extras';
   import { displayName } from '$lib/panes/format';
   import type { FlatSide } from '$lib/panes/flat.svelte';
   import type { Hotlist } from '$lib/panes/hotlist.svelte';
@@ -13,7 +13,7 @@
   import PaneRow from '$lib/panes/PaneRow.svelte';
   import type { Range } from '$lib/panes/scroll';
   import type { PaneTabs } from '$lib/panes/tabs.svelte';
-  import { targetOf, wantedBy, whereIs } from '$lib/panes/thumbs';
+  import { targetOf, wantedBy } from '$lib/panes/thumbs';
   import type { Volumes } from '$lib/panes/volumes.svelte';
   import VirtualColumns from '$lib/panes/VirtualColumns.svelte';
   import VirtualGrid from '$lib/panes/VirtualGrid.svelte';
@@ -99,6 +99,12 @@
   // The values of the extra columns to fetch are those of the files in view, then those near it; none for a column that is off.
   $effect(() => {
     extras.want(wantedExtras(view, visible, near, extraColumns));
+  });
+
+  // A pane that is gone wants nothing: no request is sent for it and no timer is left running (git status asks again by itself).
+  $effect(() => {
+    const shown = extras;
+    return () => shown.want(NOTHING);
   });
 
   // The active pane's list holds the keyboard focus (Tab, a click or the start of the app make a pane active),
@@ -233,7 +239,7 @@
             tile={thumbnails}
             thumb={thumbnails ? thumbs.get(targetOf(listing, entry, thumbs.size)) : undefined}
             extra={extraColumns.dimensions || extraColumns.checksum || extraColumns.git
-              ? extras.cells(extraTargetOf(listing, entry), whereIs(listing, entry))
+              ? extras.cells(extraTargetOf(listing, entry), gitPlaceOf(listing, entry))
               : undefined}
             up={view.isUp(index)}
             cursor={index === view.cursor}

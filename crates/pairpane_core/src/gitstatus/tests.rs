@@ -14,15 +14,21 @@ fn read(folder: &Path) -> GitStatus {
     status(folder, Limits::default(), &AtomicBool::new(false)).expect("a status")
 }
 
-fn marks_of(folder: &Path) -> Vec<(String, crate::model::GitMark)> {
-    read(folder)
+/// The marks of `folder` as `(name, mark)` pairs, read under `limits`.
+pub(super) fn marks_with(folder: &Path, limits: Limits) -> Vec<(String, crate::model::GitMark)> {
+    status(folder, limits, &AtomicBool::new(false))
+        .expect("a status")
         .marks
         .into_iter()
         .map(|entry| (entry.name, entry.mark))
         .collect()
 }
 
-fn owned(list: &[(&str, crate::model::GitMark)]) -> Vec<(String, crate::model::GitMark)> {
+fn marks_of(folder: &Path) -> Vec<(String, crate::model::GitMark)> {
+    marks_with(folder, Limits::default())
+}
+
+pub(super) fn owned(list: &[(&str, crate::model::GitMark)]) -> Vec<(String, crate::model::GitMark)> {
     list.iter().map(|(name, mark)| ((*name).to_owned(), *mark)).collect()
 }
 
@@ -32,6 +38,13 @@ pub(super) fn clean(files: &[(&str, &[u8])]) -> Repo {
     repo.commit(files);
 
     repo
+}
+
+/// Like [`clean`], with a file of one byte at each of `paths`.
+pub(super) fn clean_paths(paths: &[String]) -> Repo {
+    let files: Vec<(&str, &[u8])> = paths.iter().map(|path| (path.as_str(), b"x".as_slice())).collect();
+
+    clean(&files)
 }
 
 #[test]
@@ -117,7 +130,7 @@ fn a_repository_with_no_commit_has_every_indexed_file_staged() {
 }
 
 #[test]
-fn a_folder_is_modified_when_anything_below_it_changed_and_ignored_when_it_is_ignored() {
+fn a_folder_takes_the_most_severe_mark_below_it_and_is_ignored_only_when_it_is_itself() {
     let repo = clean(&[
         (".gitignore", b"cache/\n*.tmp\n"),
         ("edited/deep/x.txt", b"x"),
@@ -125,6 +138,7 @@ fn a_folder_is_modified_when_anything_below_it_changed_and_ignored_when_it_is_ig
         ("clean/z.txt", b"z"),
         ("only-ignored-inside/keep.txt", b"k"),
         ("conflict/c.txt", b"c"),
+        ("mixed/m.txt", b"m"),
     ]);
     repo.write_index(&[
         Staged::conflict("conflict/c.txt", b"c", Stage::Base),
@@ -132,6 +146,7 @@ fn a_folder_is_modified_when_anything_below_it_changed_and_ignored_when_it_is_ig
         Staged::file(".gitignore", b"cache/\n*.tmp\n"),
         Staged::file("clean/z.txt", b"z"),
         Staged::file("edited/deep/x.txt", b"x"),
+        Staged::file("mixed/m.txt", b"m staged"),
         Staged::file("only-ignored-inside/keep.txt", b"k"),
         Staged::file("staged/y.txt", b"y two"),
     ]);
@@ -141,16 +156,21 @@ fn a_folder_is_modified_when_anything_below_it_changed_and_ignored_when_it_is_ig
     repo.put("cache/data.bin", b"ignored folder");
     repo.put("only-ignored-inside/scratch.tmp", b"ignored file in a tracked folder");
     repo.put("conflict/c.txt", b"mine");
+    // Staged, and an untracked file next to it: the staged one is the more severe.
+    repo.put("mixed/m.txt", b"m staged");
+    repo.put("mixed/extra.txt", b"untracked");
 
     assert_eq!(
         marks_of(repo.root()),
         owned(&[
+            // Only an ignored folder is ignored; one that holds only ignored files is not marked at all.
             ("cache", Ignored),
-            // Conflicted files make their folder modified, like any other change.
-            ("conflict", Modified),
+            // A conflict is the most severe of all.
+            ("conflict", Conflicted),
             ("edited", Modified),
-            ("fresh", Modified),
-            ("staged", Modified),
+            ("fresh", Untracked),
+            ("mixed", Added),
+            ("staged", Added),
         ])
     );
 }
@@ -172,7 +192,7 @@ fn only_the_subtree_of_the_folder_is_looked_at_and_the_marks_are_its_children() 
 
     assert_eq!(
         marks_of(&repo.path("sub")),
-        owned(&[("added.txt", Untracked), ("deeper", Modified), ("in.txt", Modified)])
+        owned(&[("added.txt", Untracked), ("deeper", Untracked), ("in.txt", Modified)])
     );
     assert_eq!(marks_of(&repo.path("sub/deeper")), owned(&[("new.txt", Untracked)]));
     // The root sees its own children, with the folders below them as folders.
@@ -192,7 +212,7 @@ fn a_folder_that_is_untracked_or_ignored_as_a_whole_marks_each_of_its_children()
 
     assert_eq!(
         marks_of(&repo.path("fresh")),
-        owned(&[("one.txt", Untracked), ("two", Modified)])
+        owned(&[("one.txt", Untracked), ("two", Untracked)])
     );
     assert_eq!(
         marks_of(&repo.path("build")),
@@ -203,14 +223,51 @@ fn a_folder_that_is_untracked_or_ignored_as_a_whole_marks_each_of_its_children()
 
 #[test]
 fn a_folder_name_with_pattern_characters_is_taken_literally() {
+    // Brackets and braces are valid in a name on every system (`*` and `?` are not valid on Windows).
     let repo = clean(
-        &[("a[1]/x.txt", b"x"), ("a1/y.txt", b"y"), ("*/z.txt", b"z")].map(|(path, content)| (path, content as &[u8])),
+        &[("a[1]/x.txt", b"x"), ("a1/y.txt", b"y"), ("b{1,2}/z.txt", b"z")]
+            .map(|(path, content)| (path, content as &[u8])),
     );
     repo.put("a[1]/x.txt", b"changed");
     repo.put("a1/new.txt", b"untracked in the other folder");
 
     assert_eq!(marks_of(&repo.path("a[1]")), owned(&[("x.txt", Modified)]));
-    assert_eq!(marks_of(&repo.path("*")), vec![]);
+    assert_eq!(marks_of(&repo.path("a1")), owned(&[("new.txt", Untracked)]));
+    assert_eq!(marks_of(&repo.path("b{1,2}")), vec![]);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn a_folder_name_with_a_star_or_a_question_mark_is_taken_literally() {
+    let repo = clean(&[("*/z.txt", b"z"), ("?/w.txt", b"w"), ("a/new-neighbour.txt", b"n")]);
+    repo.put("*/z.txt", b"changed");
+    repo.put("a/new-neighbour.txt", b"changed");
+
+    assert_eq!(marks_of(&repo.path("*")), owned(&[("z.txt", Modified)]));
+    assert_eq!(marks_of(&repo.path("?")), vec![]);
+}
+
+#[test]
+fn a_folder_with_a_name_that_is_not_ascii_gets_its_marks() {
+    // Written precomposed (NFC), as the index spells it, so that this holds on a system that lists a name as it is written.
+    let repo = clean(&[
+        ("caf\u{e9}/\u{fc}ber.txt", b"u"),
+        ("\u{65e5}\u{672c}/x.txt", b"x"),
+        ("caf\u{e9}/same.txt", b"s"),
+    ]);
+    repo.put("caf\u{e9}/\u{fc}ber.txt", b"u, changed");
+    repo.put("caf\u{e9}/new\u{e4}.txt", b"n");
+    repo.put("\u{65e5}\u{672c}/y.txt", b"y");
+
+    assert_eq!(
+        marks_of(&repo.path("caf\u{e9}")),
+        owned(&[("new\u{e4}.txt", Untracked), ("\u{fc}ber.txt", Modified)])
+    );
+    assert_eq!(marks_of(&repo.path("\u{65e5}\u{672c}")), owned(&[("y.txt", Untracked)]));
+    assert_eq!(
+        marks_of(repo.root()),
+        owned(&[("caf\u{e9}", Modified), ("\u{65e5}\u{672c}", Untracked)])
+    );
 }
 
 #[test]
@@ -304,16 +361,7 @@ fn a_bare_repository_has_no_work_tree() {
 #[test]
 fn a_git_file_that_points_to_a_worktree_of_another_repository_works() {
     let main = clean(&[("a.txt", b"a"), ("b.txt", b"b")]);
-    let linked = main.dir.path().join("linked");
-    let admin = main.git_dir().join("worktrees").join("linked");
-    fs::create_dir_all(&linked).expect("the worktree folder");
-    fs::create_dir_all(&admin).expect("the admin folder");
-    fs::write(linked.join(".git"), format!("gitdir: {}\n", admin.display())).expect("the git file");
-    fs::write(admin.join("gitdir"), format!("{}\n", linked.join(".git").display())).expect("gitdir");
-    fs::write(admin.join("commondir"), "../..\n").expect("commondir");
-    fs::copy(main.git_dir().join("HEAD"), admin.join("HEAD")).expect("HEAD");
-    fs::copy(main.git_dir().join("index"), admin.join("index")).expect("the index");
-    // The branch `HEAD` names is shared, in the common directory.
+    let (linked, _) = main.linked_worktree("linked");
     fs::write(linked.join("a.txt"), b"a").expect("a");
     fs::write(linked.join("b.txt"), b"b, changed").expect("b");
     fs::write(linked.join("c.txt"), b"c").expect("c");
@@ -354,7 +402,7 @@ fn an_untracked_nested_repository_is_an_untracked_folder_and_is_not_entered() {
     gix::init(&nested).expect("a nested repository");
     fs::write(nested.join("inside.txt"), b"i").expect("a file");
 
-    assert_eq!(marks_of(repo.root()), owned(&[("nested", Modified)]));
+    assert_eq!(marks_of(repo.root()), owned(&[("nested", Untracked)]));
 }
 
 #[test]
@@ -369,17 +417,66 @@ fn reading_a_status_changes_nothing_in_the_repository() {
     assert_eq!(snapshot(repo.git_dir()), before);
 }
 
-/// Every file below `folder` with its bytes, in path order.
-fn snapshot(folder: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+#[test]
+fn reading_a_status_changes_nothing_when_a_file_is_racy_clean_and_when_the_stat_is_stale() {
+    let repo = clean(&[("racy.txt", b"aaaa"), ("stale.txt", b"s"), ("fresh.txt", b"f")]);
+    // The index has the stat of the files as they are, so the status can take them as clean without reading them; `racy.txt`
+    // then changes in a way its stat does not show, and `stale.txt` is touched without changing.
+    repo.put("racy.txt", b"bbbb");
+    repo.write_index_with_disk_stat(&[
+        Staged::file("fresh.txt", b"f"),
+        Staged::file("racy.txt", b"aaaa"),
+        Staged::file("stale.txt", b"s"),
+    ]);
+    repo.put("stale.txt", b"s");
+    let before = snapshot(repo.git_dir());
+
+    let first = read(repo.root());
+    let again = read(repo.root());
+
+    assert_eq!(first, again);
+    assert_eq!(snapshot(repo.git_dir()), before, "a status wrote to the repository");
+}
+
+/// Every file and folder below `folder` (and itself) with its kind, mode and time of modification, and the bytes of a file, in
+/// path order: what a status that wrote anything (a file, a folder, a mode, a time) would change.
+type Entry = (std::path::PathBuf, bool, u32, std::time::SystemTime, Vec<u8>);
+
+fn snapshot(folder: &Path) -> Vec<Entry> {
+    fn mode(metadata: &fs::Metadata) -> u32 {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            metadata.permissions().mode()
+        }
+        #[cfg(not(unix))]
+        {
+            u32::from(metadata.permissions().readonly())
+        }
+    }
+
     let mut found = Vec::new();
     let mut pending = vec![folder.to_path_buf()];
     while let Some(next) = pending.pop() {
-        for entry in fs::read_dir(&next).expect("a folder") {
-            let path = entry.expect("an entry").path();
-            if path.is_dir() {
-                pending.push(path);
-            } else {
-                found.push((path.clone(), fs::read(&path).expect("bytes")));
+        let metadata = fs::symlink_metadata(&next).expect("metadata");
+        let is_dir = metadata.is_dir();
+        let bytes = if is_dir {
+            Vec::new()
+        } else {
+            fs::read(&next).expect("bytes")
+        };
+        found.push((
+            next.clone(),
+            is_dir,
+            mode(&metadata),
+            metadata.modified().expect("a time"),
+            bytes,
+        ));
+
+        if is_dir {
+            for entry in fs::read_dir(&next).expect("a folder") {
+                pending.push(entry.expect("an entry").path());
             }
         }
     }

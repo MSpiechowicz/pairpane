@@ -1,6 +1,6 @@
 //! The marks of the direct children of the folder, merged from the three results of a status.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
@@ -21,8 +21,8 @@ pub(super) struct Marks {
     whole: Option<GitMark>,
 }
 
-/// How strongly a mark says something, for the child that has several: `conflicted` over `modified` over `staged` over
-/// `untracked` over `ignored`.
+/// How severe a mark is, for the child that has several (and for a folder, which takes the most severe mark below it):
+/// `conflicted` (U) over `modified` (M) over `staged` (S) over `untracked` (?) over `ignored`.
 fn rank(mark: GitMark) -> u8 {
     match mark {
         GitMark::Conflicted => 5,
@@ -53,13 +53,13 @@ impl Marks {
         &self.prefix
     }
 
-    /// Notes that `mark` was found for `rela_path` (repository-relative, `/` separated). `folder_like` says the entry is a
-    /// folder or a submodule, so that its mark is the folder's one.
+    /// Notes that `mark` was found for `rela_path` (repository-relative, `/` separated).
     ///
-    /// The mark goes to the direct child of the folder that `rela_path` is, or is below. A child that is a folder (it has
-    /// something below it, or it is a folder itself) is `modified` for any change, and `ignored` only when it is itself
-    /// ignored, never because something below it is.
-    pub(super) fn note(&mut self, rela_path: &BStr, mark: GitMark, folder_like: bool) {
+    /// The mark goes to the direct child of the folder that `rela_path` is, or is below. A child with something below it
+    /// takes the most severe mark found below it (see [`rank`]), except that an ignored entry below it never marks it: a
+    /// child is ignored only when it is itself ignored. So a folder with only staged files is `staged`, one that is
+    /// untracked as a whole, or a nested repository, is `untracked`, and a staged submodule (a gitlink) is `staged`.
+    pub(super) fn note(&mut self, rela_path: &BStr, mark: GitMark) {
         let Some(rest) = rela_path.strip_prefix(self.prefix.as_slice()) else {
             self.note_enclosing(rela_path, mark);
 
@@ -69,19 +69,9 @@ impl Marks {
             Some(at) => (&rest[..at], true),
             None => (rest, false),
         };
-        if child.is_empty() || child == b".git" {
+        if child.is_empty() || child == b".git" || (deeper && mark == GitMark::Ignored) {
             return;
         }
-
-        let mark = if deeper || folder_like {
-            match mark {
-                GitMark::Ignored if deeper => return,
-                GitMark::Ignored => GitMark::Ignored,
-                _ => GitMark::Modified,
-            }
-        } else {
-            mark
-        };
 
         self.keep(String::from_utf8_lossy(child).into_owned(), mark);
     }
@@ -112,8 +102,8 @@ impl Marks {
         }
     }
 
-    /// The marks, by name. When the folder as a whole is untracked or ignored, each of its children has that mark too
-    /// (a folder child that is untracked is `modified`); `folder` is read for their names, and the read counts in `meter`.
+    /// The marks, by name. When the folder as a whole is untracked or ignored, each of its children has that mark too;
+    /// `folder` is read for their names, and the read counts in `meter`.
     pub(super) fn finish(mut self, folder: &Path, meter: &mut Meter<'_>) -> io::Result<Vec<GitEntry>> {
         if let Some(whole) = self.whole {
             for entry in fs::read_dir(folder)? {
@@ -121,26 +111,24 @@ impl Marks {
                     break;
                 }
 
-                let entry = entry?;
-                let name = entry.file_name();
+                let name = entry?.file_name();
                 if name == OsStr::new(".git") {
                     continue;
                 }
 
-                let mark = match (whole, entry.file_type()?.is_dir()) {
-                    (GitMark::Untracked, true) => GitMark::Modified,
-                    (mark, _) => mark,
-                };
-                self.keep(name.to_string_lossy().into_owned(), mark);
+                self.keep(name.to_string_lossy().into_owned(), whole);
             }
         }
 
-        if self.by_name.keys().any(|name| !name.is_ascii()) {
+        // The page matches the names it lists exactly, and gix spells a name as the index does: precomposed, and in the case
+        // of the commit that added it, where a file system (macOS, Windows) can list it in another way.
+        let respell = cfg!(windows) || self.by_name.keys().any(|name| !name.is_ascii());
+        if respell && !self.by_name.is_empty() {
             let listing = fs::read_dir(folder)?
                 .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
                 .collect::<io::Result<Vec<_>>>()?;
             meter.spend(listing.len());
-            self.by_name = spelled_as_listed(self.by_name, &listing);
+            self.by_name = spelled_as_listed(self.by_name, &listing, cfg!(windows));
         }
 
         Ok(self
@@ -152,25 +140,43 @@ impl Marks {
 }
 
 /// The names of `marks` as the folder spells them. On macOS gix gives the names precomposed (NFC) while a file can be
-/// named in the decomposed form (NFD) on disk, and the page matches the names it lists exactly; a name that is not listed
-/// as it is takes the spelling of the listed name that is the same text once precomposed.
-fn spelled_as_listed(marks: BTreeMap<String, GitMark>, listing: &[String]) -> BTreeMap<String, GitMark> {
-    let precomposed = |name: &str| gix::utils::str::precompose(name.into()).into_owned();
-    let listed: std::collections::HashMap<String, &String> =
-        listing.iter().map(|name| (precomposed(name), name)).collect();
+/// named in the decomposed form (NFD) on disk, and on Windows the index can spell a name in another case than the folder
+/// does (`fold_case`); the page matches the names it lists exactly. A name that is not listed as it is takes the spelling
+/// of the listed name that is the same text once precomposed (and, with `fold_case`, lowercased). When two listed names
+/// are the same text so, the first one listed is taken, which can only be the case on a file system that tells them apart.
+fn spelled_as_listed(
+    marks: BTreeMap<String, GitMark>,
+    listing: &[String],
+    fold_case: bool,
+) -> BTreeMap<String, GitMark> {
+    let same_text = |name: &str| {
+        let precomposed = gix::utils::str::precompose(name.into()).into_owned();
 
-    marks
-        .into_iter()
-        .map(|(name, mark)| {
-            let exact = listing.contains(&name);
-            let name = match listed.get(&precomposed(&name)) {
-                Some(spelled) if !exact => (*spelled).clone(),
-                _ => name,
-            };
+        if fold_case {
+            precomposed.to_lowercase()
+        } else {
+            precomposed
+        }
+    };
+    let exact: HashSet<&str> = listing.iter().map(String::as_str).collect();
+    let mut listed: HashMap<String, &String> = HashMap::new();
+    for name in listing {
+        listed.entry(same_text(name)).or_insert(name);
+    }
 
-            (name, mark)
-        })
-        .collect()
+    let mut respelled = BTreeMap::new();
+    for (name, mark) in marks {
+        let name = match listed.get(&same_text(&name)) {
+            Some(spelled) if !exact.contains(name.as_str()) => (*spelled).clone(),
+            _ => name,
+        };
+        let slot: &mut GitMark = respelled.entry(name).or_insert(mark);
+        if rank(mark) > rank(*slot) {
+            *slot = mark;
+        }
+    }
+
+    respelled
 }
 
 #[cfg(test)]
@@ -194,19 +200,29 @@ mod tests {
     }
 
     #[test]
-    fn a_change_below_a_child_marks_the_child_as_a_folder_with_modified() {
+    fn a_folder_takes_the_most_severe_mark_below_it() {
         let mut marks = Marks::new("src");
-        marks.note(b"src/a.rs".as_bstr(), GitMark::Staged, false);
-        marks.note(b"src/dir/deep/b.rs".as_bstr(), GitMark::Untracked, false);
-        marks.note(b"src/other/c.rs".as_bstr(), GitMark::Conflicted, false);
-        marks.note(b"elsewhere/d.rs".as_bstr(), GitMark::Modified, false);
+        marks.note(b"src/a.rs".as_bstr(), GitMark::Staged);
+        marks.note(b"src/staged/b.rs".as_bstr(), GitMark::Staged);
+        marks.note(b"src/fresh/deep/c.rs".as_bstr(), GitMark::Untracked);
+        marks.note(b"src/mixed/d.rs".as_bstr(), GitMark::Untracked);
+        marks.note(b"src/mixed/e.rs".as_bstr(), GitMark::Staged);
+        marks.note(b"src/edited/f.rs".as_bstr(), GitMark::Staged);
+        marks.note(b"src/edited/g.rs".as_bstr(), GitMark::Modified);
+        marks.note(b"src/edited/h.rs".as_bstr(), GitMark::Untracked);
+        marks.note(b"src/clash/i.rs".as_bstr(), GitMark::Modified);
+        marks.note(b"src/clash/j.rs".as_bstr(), GitMark::Conflicted);
+        marks.note(b"elsewhere/k.rs".as_bstr(), GitMark::Modified);
 
         assert_eq!(
             marked(marks),
             vec![
                 pair("a.rs", GitMark::Staged),
-                pair("dir", GitMark::Modified),
-                pair("other", GitMark::Modified),
+                pair("clash", GitMark::Conflicted),
+                pair("edited", GitMark::Modified),
+                pair("fresh", GitMark::Untracked),
+                pair("mixed", GitMark::Staged),
+                pair("staged", GitMark::Staged),
             ]
         );
     }
@@ -214,34 +230,58 @@ mod tests {
     #[test]
     fn an_ignored_entry_below_a_child_does_not_mark_it_but_an_ignored_child_is_ignored() {
         let mut marks = Marks::new("");
-        marks.note(b"target/debug/x".as_bstr(), GitMark::Ignored, false);
-        marks.note(b"build".as_bstr(), GitMark::Ignored, true);
-        marks.note(b"app.log".as_bstr(), GitMark::Ignored, false);
+        marks.note(b"target/debug/x".as_bstr(), GitMark::Ignored);
+        marks.note(b"build".as_bstr(), GitMark::Ignored);
+        marks.note(b"app.log".as_bstr(), GitMark::Ignored);
+        marks.note(b"mixed/skip.tmp".as_bstr(), GitMark::Ignored);
+        marks.note(b"mixed/new.txt".as_bstr(), GitMark::Untracked);
 
         assert_eq!(
             marked(marks),
-            vec![pair("app.log", GitMark::Ignored), pair("build", GitMark::Ignored)]
+            vec![
+                pair("app.log", GitMark::Ignored),
+                pair("build", GitMark::Ignored),
+                pair("mixed", GitMark::Untracked),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_nested_repository_or_a_staged_submodule_is_marked_as_one_child() {
+        let mut marks = Marks::new("");
+        marks.note(b"nested".as_bstr(), GitMark::Untracked);
+        marks.note(b"vendor/lib".as_bstr(), GitMark::Staged);
+        marks.note(b"lib".as_bstr(), GitMark::Staged);
+
+        assert_eq!(
+            marked(marks),
+            vec![
+                pair("lib", GitMark::Staged),
+                pair("nested", GitMark::Untracked),
+                pair("vendor", GitMark::Staged),
+            ]
         );
     }
 
     #[test]
     fn the_strongest_mark_of_a_child_wins() {
         let mut marks = Marks::new("");
-        marks.note(b"a".as_bstr(), GitMark::Staged, false);
-        marks.note(b"a".as_bstr(), GitMark::Modified, false);
-        marks.note(b"b".as_bstr(), GitMark::Modified, false);
-        marks.note(b"b".as_bstr(), GitMark::Conflicted, false);
-        marks.note(b"d".as_bstr(), GitMark::Ignored, true);
-        marks.note(b"d/x".as_bstr(), GitMark::Staged, false);
-        marks.note(b"u".as_bstr(), GitMark::Untracked, true);
+        marks.note(b"a".as_bstr(), GitMark::Staged);
+        marks.note(b"a".as_bstr(), GitMark::Modified);
+        marks.note(b"b".as_bstr(), GitMark::Modified);
+        marks.note(b"b".as_bstr(), GitMark::Conflicted);
+        marks.note(b"d".as_bstr(), GitMark::Ignored);
+        marks.note(b"d/x".as_bstr(), GitMark::Staged);
+        marks.note(b"u".as_bstr(), GitMark::Untracked);
+        marks.note(b"u".as_bstr(), GitMark::Ignored);
 
         assert_eq!(
             marked(marks),
             vec![
                 pair("a", GitMark::Modified),
                 pair("b", GitMark::Conflicted),
-                pair("d", GitMark::Modified),
-                pair("u", GitMark::Modified),
+                pair("d", GitMark::Staged),
+                pair("u", GitMark::Untracked),
             ]
         );
     }
@@ -249,10 +289,10 @@ mod tests {
     #[test]
     fn the_git_folder_and_the_folder_itself_are_never_marked() {
         let mut marks = Marks::new("sub");
-        marks.note(b"sub/.git".as_bstr(), GitMark::Untracked, true);
-        marks.note(b"sub/.git/config".as_bstr(), GitMark::Modified, false);
-        marks.note(b"sub".as_bstr(), GitMark::Modified, true);
-        marks.note(b"subway/x".as_bstr(), GitMark::Modified, false);
+        marks.note(b"sub/.git".as_bstr(), GitMark::Untracked);
+        marks.note(b"sub/.git/config".as_bstr(), GitMark::Modified);
+        marks.note(b"sub".as_bstr(), GitMark::Modified);
+        marks.note(b"subway/x".as_bstr(), GitMark::Modified);
 
         assert_eq!(marked(marks), vec![]);
     }
@@ -266,7 +306,7 @@ mod tests {
             ("plain.txt".to_owned(), GitMark::Staged),
         ]);
 
-        let spelled = spelled_as_listed(marks.clone(), &[decomposed.to_owned(), "plain.txt".to_owned()]);
+        let spelled = spelled_as_listed(marks.clone(), &[decomposed.to_owned(), "plain.txt".to_owned()], false);
         assert_eq!(
             spelled,
             BTreeMap::from([
@@ -276,15 +316,41 @@ mod tests {
         );
 
         // A name that is listed as it is stays, and a name that is not listed at all stays too.
-        assert_eq!(spelled_as_listed(marks.clone(), &[composed.to_owned()]), marks);
-        assert_eq!(spelled_as_listed(marks.clone(), &[]), marks);
+        assert_eq!(spelled_as_listed(marks.clone(), &[composed.to_owned()], false), marks);
+        assert_eq!(spelled_as_listed(marks.clone(), &[], false), marks);
+    }
+
+    #[test]
+    fn a_name_that_differs_only_in_case_takes_the_listed_spelling_where_case_is_folded() {
+        let marks = BTreeMap::from([
+            ("README.md".to_owned(), GitMark::Modified),
+            ("Src".to_owned(), GitMark::Staged),
+            ("exact.txt".to_owned(), GitMark::Untracked),
+        ]);
+        let listing = [
+            "readme.md".to_owned(),
+            "src".to_owned(),
+            "exact.txt".to_owned(),
+            "EXACT.TXT".to_owned(),
+        ];
+
+        assert_eq!(
+            spelled_as_listed(marks.clone(), &listing, true),
+            BTreeMap::from([
+                ("exact.txt".to_owned(), GitMark::Untracked),
+                ("readme.md".to_owned(), GitMark::Modified),
+                ("src".to_owned(), GitMark::Staged),
+            ])
+        );
+        // Where case is told apart (Linux) they are other names.
+        assert_eq!(spelled_as_listed(marks.clone(), &listing, false), marks);
     }
 
     #[test]
     fn a_child_of_the_work_tree_root_is_found_with_an_empty_prefix() {
         let mut marks = Marks::new("");
-        marks.note(b"top.txt".as_bstr(), GitMark::Untracked, false);
-        marks.note(b"dir/inner.txt".as_bstr(), GitMark::Modified, false);
+        marks.note(b"top.txt".as_bstr(), GitMark::Untracked);
+        marks.note(b"dir/inner.txt".as_bstr(), GitMark::Modified);
 
         assert_eq!(
             marked(marks),

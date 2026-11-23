@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import type { GitMark } from '$lib/ipc/bindings/GitMark';
+
 import { arrive, entry, fakeBackend } from '../../../tests/panes';
-import { extraTargetOf, gitCell, NOTHING, severityOf, wantedExtras } from './extras';
+import { extraTargetOf, gitCell, gitPlaceOf, NOTHING, severityOf, wantedExtras } from './extras';
 import { Listing } from './listing.svelte';
 import { PaneTabs } from './tabs.svelte';
 import { THUMB_SIZE, targetOf } from './thumbs';
@@ -133,11 +135,34 @@ describe('wantedExtras: git', () => {
   });
 });
 
+describe('the Git place of an item', () => {
+  it('has the real folder and name, says whether it is a folder, and is none for `..` or inside an archive', async () => {
+    const { listing } = await shown();
+
+    expect(gitPlaceOf(listing, entry('sub', 'dir'))).toEqual({ folder: '/pics', name: 'sub', dir: true });
+    expect(gitPlaceOf(listing, entry('a.jpg'))).toEqual({ folder: '/pics', name: 'a.jpg', dir: false });
+    expect(gitPlaceOf(listing, entry('..', 'dir'))).toBeUndefined();
+    expect(gitPlaceOf(listing, undefined)).toBeUndefined();
+  });
+});
+
 describe('the Git cell', () => {
   const place = { folder: '/repo', name: 'a.txt' };
 
   it('is a mark, with its words, for an item git has something to say about', () => {
     expect(gitCell(place, { marks: new Map([['a.txt', 'staged']]) })).toMatchObject({ text: 'S', tone: 'ok' });
+  });
+
+  it('says "something inside" for the mark of a folder, and speaks of the file itself for a file', () => {
+    const marks = new Map<string, GitMark>([['d', 'modified'], ['f', 'modified'], ['u', 'untracked'], ['s', 'staged'], ['c', 'conflicted']]);
+    const tip = (name: string, dir: boolean) => gitCell({ folder: '/repo', name, dir }, { marks }).tip;
+
+    expect(tip('d', true)).toBe('Modified: something inside has changes that are not staged');
+    expect(tip('s', true)).toMatch(/^Staged: something inside/);
+    expect(tip('c', true)).toMatch(/^Conflicted: something inside/);
+    expect(tip('u', true)).toMatch(/^Untracked: .*what is inside it/);
+    expect(tip('f', false)).toBe('Modified: has changes that are not staged');
+    expect(tip('f', false)).not.toMatch(/inside/);
   });
 
   it('is empty for a clean item, a folder outside a repository, and what is not known', () => {

@@ -5,19 +5,13 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use super::tests::clean;
+use super::tests::{clean, clean_paths};
 use super::*;
 
 #[test]
 fn more_entries_than_the_cap_is_too_big() {
-    let files: Vec<(String, Vec<u8>)> = (0..60)
-        .map(|index| (format!("dir/file{index:02}.txt"), vec![b'x']))
-        .collect();
-    let list: Vec<(&str, &[u8])> = files
-        .iter()
-        .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
-        .collect();
-    let repo = clean(&list);
+    let paths: Vec<String> = (0..60).map(|index| format!("dir/file{index:02}.txt")).collect();
+    let repo = clean_paths(&paths);
 
     let small = Limits {
         entries: 30,
@@ -64,7 +58,7 @@ fn the_time_limit_stops_a_status_that_takes_longer() {
 
     let answer = status(&repo.path("tracked"), quick, &AtomicBool::new(false));
 
-    assert!(matches!(answer, Err(GitError::TooBig)), "{answer:?}");
+    assert!(matches!(answer, Err(GitError::TimedOut)), "{answer:?}");
 }
 
 #[test]
@@ -117,6 +111,7 @@ fn no_error_text_holds_a_path() {
 fn every_error_has_a_fixed_text_without_a_path() {
     for error in [
         GitError::TooBig,
+        GitError::TimedOut,
         GitError::Cancelled,
         GitError::Folder(std::io::ErrorKind::NotFound),
         GitError::Folder(std::io::ErrorKind::PermissionDenied),

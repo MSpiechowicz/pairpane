@@ -19,15 +19,24 @@
 //!   file never fails the batch.
 //! - A checksum is refused as `invalidInput` with a fixed text when the file is over the cap, and as `notFound` or `io`
 //!   by the viewer's texts (`view_error`) for the other failures. No text sent to the page holds a path.
-//! - A git status is up to [`GIT_THREADS`] at once on a blocking thread each, and `busy` when they are taken. It is bounded
-//!   by `Limits` (5 seconds and 200,000 entries): a repository that is over either is `invalidInput` ("the repository is too
-//!   big to read here"), and a folder that is in no repository is `repo: false`, not an error. The texts hold no path.
+//! - A git status is up to [`GIT_THREADS`] at once, and `busy` when they are taken. It is bounded by `Limits` (5 seconds and
+//!   200,000 entries): a repository that is over the entries is `invalidInput` ("the repository is too big to read here"),
+//!   one that takes the time is `invalidInput` too ("the repository took too long to read"), and a folder that is in no
+//!   repository (or in one that must not be read: a pointer to a network place, a pipe where a file is expected, a format
+//!   that is not read) is `repo: false`, not an error. A folder that cannot be resolved is `notFound` or `io`, never
+//!   `invalidInput`. The texts hold no path.
+//! - A git status answers by its deadline whether or not its read has come back (`stuck`): it runs on a thread of its own,
+//!   which the request waits for until the time limit and [`GIT_GRACE`] have passed; then the request answers as for the time
+//!   limit, gives its place of the [`GIT_THREADS`] back, and the thread counts as stuck until it ends. While
+//!   [`stuck::MAX_STUCK`] threads are stuck, a status is refused as `busy`.
 //! - [`Columns::shut_down`] raises the flag all of them watch, as the app exits: a checksum stops between its chunks, a
 //!   batch between its files and a git status at its next entry, and none starts after.
 
 use std::io;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use pairpane_core::gitstatus::{self, GitError, Limits};
 use pairpane_core::listing::platform;
@@ -42,6 +51,9 @@ use super::ops::{check_name, names_too_large};
 use super::panes::resolve;
 use super::view::view_error;
 use crate::error::{CommandError, CommandResult};
+use stuck::{Stuck, Unanswered};
+
+mod stuck;
 
 #[cfg(test)]
 mod git_tests;
@@ -60,12 +72,17 @@ const HASH_THREADS: usize = 2;
 /// Git statuses read at once: each walks the folder's subtree of a repository, up to the cap on entries.
 const GIT_THREADS: usize = 2;
 
+/// How long a git status is waited for after its time limit, before the request answers without it.
+const GIT_GRACE: Duration = Duration::from_millis(500);
+
 /// The caps on the blocking threads and the flag that stops them when the app exits.
 #[derive(Default)]
 pub struct Columns {
     sizes: ThreadCap,
     hashes: ThreadCap,
     statuses: ThreadCap,
+    /// The threads of statuses that were given up on and are still running.
+    stuck: Stuck,
     cancel: Arc<AtomicBool>,
 }
 
@@ -114,21 +131,42 @@ impl Columns {
 
     /// The git status of the entries of the folder `path`, bounded by `limits`.
     async fn git(&self, path: String, limits: Limits) -> CommandResult<GitStatus> {
+        self.git_with(path, limits, limits.time + GIT_GRACE, gitstatus::status)
+            .await
+    }
+
+    /// Like [`Self::git`], with the status read by `read` and the request answered after `wait` whether or not `read` has
+    /// returned (see the module docs).
+    async fn git_with(
+        &self,
+        path: String,
+        limits: Limits,
+        wait: Duration,
+        read: impl FnOnce(&Path, Limits, &AtomicBool) -> Result<GitStatus, GitError> + Send + 'static,
+    ) -> CommandResult<GitStatus> {
         let folder = resolve(Some(path), None)?;
-        let permit = self
-            .statuses
-            .acquire(GIT_THREADS)
-            .ok_or_else(|| CommandError::new(IpcErrorCode::Busy, "git statuses are being read; try again shortly"))?;
+        if self.stuck.is_full() {
+            return Err(git_busy());
+        }
+        let permit = self.statuses.acquire(GIT_THREADS).ok_or_else(git_busy)?;
         let cancel = Arc::clone(&self.cancel);
+        let stuck = self.stuck.clone();
 
-        let status = blocking(permit, move || {
-            let folder = platform::local_path(&folder).map_err(|error| GitError::Folder(error.kind()))?;
+        // The wait is on a blocking thread that holds the place until it ends, which is at the deadline at the latest.
+        let answer = blocking(permit, move || {
+            stuck.run(wait, move || {
+                let folder = platform::local_path(&folder).map_err(|error| GitError::Folder(error.kind()))?;
 
-            gitstatus::status(&folder, limits, &cancel)
+                read(&folder, limits, &cancel)
+            })
         })
         .await?;
 
-        status.map_err(|error| git_error(&error))
+        match answer {
+            Ok(status) => status.map_err(|error| git_error(&error)),
+            Err(Unanswered::TimedOut) => Err(git_error(&GitError::TimedOut)),
+            Err(Unanswered::Failed) => Err(CommandError::new(IpcErrorCode::Internal, "the status was interrupted")),
+        }
     }
 
     /// The SHA-256 of the file `name` of the folder `path`, as lowercase hex.
@@ -160,13 +198,18 @@ fn checked(folder: &std::path::Path, name: &str) -> CommandResult<()> {
 
 /// What the page is told of a status that could not be given: the text of the error, which holds no path.
 fn git_error(error: &GitError) -> CommandError {
+    // `invalidInput` is for a repository that cannot be read here for its size or its time, and for nothing else.
     let code = match error {
-        GitError::TooBig => IpcErrorCode::InvalidInput,
+        GitError::TooBig | GitError::TimedOut => IpcErrorCode::InvalidInput,
         GitError::Folder(io::ErrorKind::NotFound) => IpcErrorCode::NotFound,
         GitError::Cancelled | GitError::Folder(_) | GitError::Repository => IpcErrorCode::Io,
     };
 
     CommandError::new(code, error.to_string())
+}
+
+fn git_busy() -> CommandError {
+    CommandError::new(IpcErrorCode::Busy, "git statuses are being read; try again shortly")
 }
 
 fn busy() -> CommandError {
@@ -196,10 +239,13 @@ pub async fn columns_checksum(columns: State<'_, Columns>, path: String, name: S
 
 /// The git status of the direct children of the folder `path`: `repo` says whether the folder is in the work tree of a git
 /// repository (`false`: no marks), and `marks` has an entry for each child that is `modified`, `staged`, `untracked`,
-/// `ignored` or `conflicted`; a folder is `modified` when anything below it changed. The repository is read in process
-/// and nothing it names (a filter, a hook, `core.fsmonitor`, a credential helper) is ever started. `invalidInput` ("the
-/// repository is too big to read here") when it takes over 5 seconds or walks over 200,000 entries, and `busy` when two
-/// statuses are already being read.
+/// `ignored` or `conflicted`; a folder has the most severe mark of anything below it (`conflicted`, `modified`, `staged`,
+/// `untracked`), and is `ignored` only when it is itself. The repository is read in process and nothing it names (a filter, a
+/// hook, `core.fsmonitor`, a credential helper) is ever started, and a repository that points to a network place, or has a
+/// pipe or a device where a file is expected, or is of a format that is not read, is `repo: false`. `invalidInput` ("the
+/// repository is too big to read here") when it walks over 200,000 entries or has an index over 64 MiB, `invalidInput` ("the
+/// repository took too long to read") when it takes over 5 seconds (the answer comes by then whether or not the read has
+/// returned), and `busy` when two statuses are already being read or four threads of statuses are stuck.
 #[tauri::command]
 pub async fn columns_git(columns: State<'_, Columns>, path: String) -> CommandResult<GitStatus> {
     columns.git(path, Limits::default()).await

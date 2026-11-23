@@ -16,6 +16,9 @@ export function isPicture(name: string): boolean {
   return PICTURE.test(name);
 }
 
+/** The name of the row that leads to the parent folder. */
+const UP = '..';
+
 /** One picture to ask the backend for: where it is, and the key under which its thumbnail is kept. */
 export interface ThumbTarget {
   key: string;
@@ -31,7 +34,7 @@ export interface ThumbTarget {
  */
 export function whereIs(listing: Listing, entry: Entry | undefined): { folder: string; name: string } | undefined {
   const root = listing.folder;
-  if (entry === undefined || root === undefined || listing.readonly) {
+  if (entry === undefined || entry.name === UP || root === undefined || listing.readonly) {
     return undefined;
   }
 

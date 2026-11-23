@@ -2,11 +2,10 @@ import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import type { SavedTab } from '$lib/ipc/bindings/SavedTab';
 import type { Transport } from '$lib/ipc/transport';
 
-import { extraTargetOf } from './extras';
+import { extraTargetOf, gitPlaceOf } from './extras';
 import { Extras } from './extras.svelte';
 import type { Layout } from './layout';
 import type { SortColumn } from './order';
-import { whereIs } from './thumbs';
 import { Thumbs } from './thumbs.svelte';
 import { PaneView } from './view.svelte';
 import type { ViewHooks } from './viewHooks';
@@ -78,7 +77,7 @@ export class PaneTabs {
     this.thumbs = new Thumbs(ipc);
     this.extras = new Extras(ipc);
     this.view = new PaneView(ipc, pane, {
-      extraOf: (entry, column) => this.extras.sortKey(column, extraTargetOf(this.view.listing, entry), whereIs(this.view.listing, entry)),
+      extraOf: (entry, column) => this.extras.sortKey(column, extraTargetOf(this.view.listing, entry), gitPlaceOf(this.view.listing, entry)),
       onOpen: () => {
         this.#pending = undefined;
         this.#route = undefined;

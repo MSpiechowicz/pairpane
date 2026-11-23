@@ -55,6 +55,14 @@ impl<'a> Staged<'a> {
             ..Self::file(path, b"")
         }
     }
+
+    /// A file that is executable in the index.
+    pub(super) fn executable(path: &'a str, content: &'a [u8]) -> Self {
+        Self {
+            mode: Mode::FILE_EXECUTABLE,
+            ..Self::file(path, content)
+        }
+    }
 }
 
 impl Repo {
@@ -72,6 +80,26 @@ impl Repo {
 
     pub(super) fn git_dir(&self) -> &Path {
         self.repo.git_dir()
+    }
+
+    /// A linked work tree `name` of this repository, next to it: its folder, with a `.git` file, and its own folder in the
+    /// repository (`HEAD` and the index are copies of the repository's). The folders of both are returned.
+    pub(super) fn linked_worktree(&self, name: &str) -> (PathBuf, PathBuf) {
+        let linked = self.dir.path().join(name);
+        let admin = self.git_dir().join("worktrees").join(name);
+        fs::create_dir_all(&linked).expect("the worktree folder");
+        fs::create_dir_all(&admin).expect("the admin folder");
+        fs::write(linked.join(".git"), format!("gitdir: {}\n", admin.display())).expect("the git file");
+        fs::write(admin.join("gitdir"), format!("{}\n", linked.join(".git").display())).expect("gitdir");
+        fs::write(admin.join("commondir"), "../..\n").expect("commondir");
+        fs::copy(self.git_dir().join("HEAD"), admin.join("HEAD")).expect("HEAD");
+        fs::copy(self.git_dir().join("index"), admin.join("index")).expect("the index");
+
+        (linked, admin)
+    }
+
+    pub(super) fn index_path(&self) -> PathBuf {
+        self.repo.index_path()
     }
 
     /// Adds `text` (config lines) to the repository's own `config` file.
@@ -123,15 +151,7 @@ impl Repo {
                 .expect("a gitlink");
         }
         let tree = editor.write().expect("a tree").detach();
-
-        let signature = gix::actor::SignatureRef {
-            name: "Test".into(),
-            email: "test@example.com".into(),
-            time: "1700000000 +0000",
-        };
-        self.repo
-            .commit_as(signature, signature, "HEAD", "a commit", tree, None::<gix::ObjectId>)
-            .expect("a commit");
+        self.commit_tree(tree);
 
         for (path, content) in files {
             self.put(path, content);
@@ -144,9 +164,62 @@ impl Repo {
         self.write_index(&entries);
     }
 
+    /// Makes the tree `tree` the content of `HEAD` (one commit with no parent), leaving the index and the work tree alone.
+    pub(super) fn commit_tree(&self, tree: gix::ObjectId) {
+        let signature = gix::actor::SignatureRef {
+            name: "Test".into(),
+            email: "test@example.com".into(),
+            time: "1700000000 +0000",
+        };
+        self.repo
+            .commit_as(signature, signature, "HEAD", "a commit", tree, None::<gix::ObjectId>)
+            .expect("a commit");
+    }
+
+    /// A tree with `width` entries, all of them the folder `child`.
+    pub(super) fn repeating(&self, child: gix::ObjectId, width: usize) -> gix::ObjectId {
+        let entries = (0..width)
+            .map(|index| gix::objs::tree::Entry {
+                mode: EntryKind::Tree.into(),
+                filename: format!("e{index:03}").into(),
+                oid: child,
+            })
+            .collect();
+
+        self.repo
+            .write_object(gix::objs::Tree { entries })
+            .expect("a tree")
+            .detach()
+    }
+
+    /// A tree that holds one file, `name`.
+    pub(super) fn leaf(&self, name: &str) -> gix::ObjectId {
+        let blob = self.repo.write_blob(b"x").expect("a blob").detach();
+        let entries = vec![gix::objs::tree::Entry {
+            mode: EntryKind::Blob.into(),
+            filename: name.into(),
+            oid: blob,
+        }];
+
+        self.repo
+            .write_object(gix::objs::Tree { entries })
+            .expect("a tree")
+            .detach()
+    }
+
     /// Replaces the index with `entries`, which must be in the order of their paths. The stat of each entry is empty, as
     /// if the index had been made from a tree, so each file is compared by its content.
     pub(super) fn write_index(&self, entries: &[Staged<'_>]) {
+        self.write_index_with(entries, false);
+    }
+
+    /// Like [`Self::write_index`], with the stat of each entry read from the file in the work tree, as `git add` does: a
+    /// file that was not changed since is clean without being read.
+    pub(super) fn write_index_with_disk_stat(&self, entries: &[Staged<'_>]) {
+        self.write_index_with(entries, true);
+    }
+
+    fn write_index_with(&self, entries: &[Staged<'_>], disk_stat: bool) {
         let mut state = gix::index::State::new(self.repo.object_hash());
         for entry in entries {
             let id = if entry.mode == Mode::COMMIT {
@@ -154,8 +227,15 @@ impl Repo {
             } else {
                 self.repo.write_blob(entry.content).expect("a blob").detach()
             };
+            let stat = if disk_stat {
+                let metadata = gix::index::fs::Metadata::from_path_no_follow(&self.path(entry.path)).expect("metadata");
+
+                Stat::from_fs(&metadata).expect("a stat")
+            } else {
+                Stat::default()
+            };
             state.dangerously_push_entry(
-                Stat::default(),
+                stat,
                 id,
                 Flags::from_stage(entry.stage),
                 entry.mode,
@@ -173,6 +253,19 @@ impl Repo {
         file.write_to(&mut out, gix::index::write::Options::default())
             .expect("written");
     }
+}
+
+/// Runs `work` on a thread of its own and gives what it returns, or fails the test when it has not returned after
+/// `seconds`: a status that waits on a named pipe would otherwise hold the test run for ever.
+pub(super) fn within<T: Send + 'static>(seconds: u64, work: impl FnOnce() -> T + Send + 'static) -> T {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(work());
+    });
+
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(seconds))
+        .expect("the status did not answer in time")
 }
 
 /// The marks of a status as `(name, mark)` pairs, for short comparisons.

@@ -1,4 +1,4 @@
-import { fireEvent, screen, within } from '@testing-library/svelte';
+import { cleanup, fireEvent, screen, within } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -98,6 +98,9 @@ describe('Pane: the Git column', () => {
     // The rows sub, a.txt, b.txt, c.txt and d.txt (`..` has no cell).
     expect(marks().map((cell) => cell.textContent)).toEqual(['?', 'M', 'U', 'S', '']);
     expect(marks().map((cell) => cell.getAttribute('title')?.split(':')[0] ?? null)).toEqual(['Untracked', 'Modified', 'Conflicted', 'Staged', null]);
+    // The mark of a folder tells about what is inside it; that of a file, about the file.
+    expect(marks()[0].getAttribute('title')).toMatch(/what is inside it/);
+    expect(marks()[1].getAttribute('title')).not.toMatch(/inside/);
     expect(marks()[2]).toHaveClass('danger');
     expect(marks()[1]).toHaveClass('accent');
   });
@@ -146,6 +149,20 @@ describe('Pane: the Git column', () => {
 
     expect(asked(backend)).toHaveLength(2);
     expect(marks().map((cell) => cell.textContent)).toEqual(['', 'S', '', '', '']);
+  });
+
+  it('stops asking, and leaves no timer, once the pane is gone', async () => {
+    vi.useFakeTimers();
+    const { backend } = await shown({ columns_git: () => MARKED });
+    preferences.set({ showGit: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(asked(backend)).toHaveLength(1);
+
+    cleanup();
+    await vi.advanceTimersByTimeAsync(GIT_TTL_MS * 3);
+
+    expect(asked(backend)).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('asks again later when the backend is busy, and the marks fill in', async () => {
@@ -222,7 +239,7 @@ describe('Pane: the Git column', () => {
     expect(asked(backend)).toEqual([]);
   });
 
-  it('asks about each folder that holds an item of a search result, two at a time, and shows the marks of each', async () => {
+  it('asks about each folder that holds an item of a search result, one at a time, and shows the marks of each', async () => {
     const answers = new Map<string, ReturnType<typeof later>>();
     const backend = fakeBackend({
       columns_git: (({ path }: { path: string }) => {
@@ -239,15 +256,17 @@ describe('Pane: the Git column', () => {
 
     preferences.set({ showGit: true });
     await settle();
-    expect(asked(backend)).toEqual(['/home/me/docs', '/home/me']);
+    expect(asked(backend)).toEqual(['/home/me/docs']);
 
     answers.get('/home/me/docs')?.resolve(repo(['a.txt', 'modified']));
     await settle();
-    expect(asked(backend)).toEqual(['/home/me/docs', '/home/me', '/home/me/docs/more']);
+    expect(asked(backend)).toEqual(['/home/me/docs', '/home/me']);
 
     answers.get('/home/me')?.resolve(repo(['top.txt', 'untracked']));
+    await settle();
     answers.get('/home/me/docs/more')?.resolve({ repo: false, marks: [] });
     await settle();
+    expect(asked(backend)).toEqual(['/home/me/docs', '/home/me', '/home/me/docs/more']);
 
     expect(marks().map((cell) => cell.textContent)).toEqual(['M', '?', '']);
   });

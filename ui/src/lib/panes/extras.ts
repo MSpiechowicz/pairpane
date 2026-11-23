@@ -57,6 +57,8 @@ export type Checksum = { hex: string } | { problem: string };
 export interface GitPlace {
   folder: string;
   name: string;
+  /** The item is a folder: the mark of a folder tells about what is inside it. */
+  dir?: boolean;
 }
 
 /** What is known of one folder's git status: the marks of its entries by name, why there are none, or `null` outside a repository. */
@@ -72,14 +74,24 @@ export interface Cell {
   tone?: Tone;
 }
 
-/** The marks, the most serious first (a sort by the column goes by this order), with the letter, the words and the colour of each. */
-const GIT_MARKS: readonly { mark: GitMark; text: string; tip: string; tone: Tone }[] = [
-  { mark: 'conflicted', text: 'U', tip: 'Conflicted: a merge left conflicts in it', tone: 'danger' },
-  { mark: 'modified', text: 'M', tip: 'Modified: changed since the last commit, not staged', tone: 'accent' },
-  { mark: 'staged', text: 'S', tip: 'Staged: added to the next commit', tone: 'ok' },
-  { mark: 'untracked', text: '?', tip: 'Untracked: git does not know it yet', tone: 'dim' },
-  { mark: 'ignored', text: '!', tip: 'Ignored: git leaves it out', tone: 'dim' },
+/**
+ * The marks, the most serious first (a sort by the column goes by this order), with the letter, the words for a file and
+ * for a folder, and the colour of each. A folder's mark is the most serious of what is inside it, so its words say
+ * "something inside"; a file with changes both staged and not is modified.
+ */
+const GIT_MARKS: readonly { mark: GitMark; text: string; tip: string; dirTip: string; tone: Tone }[] = [
+  { mark: 'conflicted', text: 'U', tip: 'Conflicted: a merge left conflicts in it', dirTip: 'Conflicted: something inside has merge conflicts', tone: 'danger' },
+  { mark: 'modified', text: 'M', tip: 'Modified: has changes that are not staged', dirTip: 'Modified: something inside has changes that are not staged', tone: 'accent' },
+  { mark: 'staged', text: 'S', tip: 'Staged: added to the next commit', dirTip: 'Staged: something inside is added to the next commit, and nothing else has changes', tone: 'ok' },
+  { mark: 'untracked', text: '?', tip: 'Untracked: git does not know it yet', dirTip: 'Untracked: git does not know it, or what is inside it, yet', tone: 'dim' },
+  { mark: 'ignored', text: '!', tip: 'Ignored: git leaves it out', dirTip: 'Ignored: git leaves it out', tone: 'dim' },
 ];
+
+/** Where `entry` of `listing` is for the Git column (a folder too has a status): `undefined` for `..` and inside an archive. */
+export function gitPlaceOf(listing: Listing, entry: Entry | undefined): GitPlace | undefined {
+  const at = whereIs(listing, entry);
+  return at && { ...at, dir: entry?.kind === 'dir' };
+}
 
 /**
  * What to ask for to fill the extra columns for `entry` of `listing`, or `undefined` when it has none: a folder, `..`,
@@ -109,7 +121,7 @@ export function wantedExtras(view: PaneView, visible: Range, near: Range, shown:
     const target = extraTargetOf(view.listing, entry);
 
     // Any item has a git status, a folder too; one request answers for all the items of a folder.
-    const at = shown.git ? whereIs(view.listing, entry) : undefined;
+    const at = shown.git ? gitPlaceOf(view.listing, entry) : undefined;
     if (at !== undefined) {
       folders.add(at.folder);
     }
@@ -171,7 +183,7 @@ export function gitCell(place: GitPlace | undefined, folder: GitFolder | undefin
   }
 
   const found = GIT_MARKS.find(({ mark }) => mark === folder.marks.get(place.name));
-  return found ? { text: found.text, tip: found.tip, tone: found.tone } : { text: '' };
+  return found ? { text: found.text, tip: place.dir ? found.dirTip : found.tip, tone: found.tone } : { text: '' };
 }
 
 /** What a pane sorts a file by in the Git column: how serious its mark is (0 is the most); `undefined` for an item with none, and while it is not known. */

@@ -152,22 +152,23 @@ describe('GitFolders', () => {
     expect(asked).toEqual(['/repo', '/repo']);
   });
 
-  it('asks about the folders of a search result one request each, two at a time, in the order wanted', async () => {
+  it('asks about the folders of a search result one request each, one at a time, in the order wanted', async () => {
     const answers = held();
     const { git, asked } = world(answers.answer);
 
-    git.want(['/a', '/b', '/c', '/d'], 0);
+    git.want(['/a', '/b', '/c'], 0);
     await settled();
-    expect(asked).toEqual(['/a', '/b']);
+    expect(asked).toEqual(['/a']);
 
     answers.out.get('/a')?.resolve(repo(['x', 'modified']));
     await settled();
-    expect(asked).toEqual(['/a', '/b', '/c']);
+    expect(asked).toEqual(['/a', '/b']);
 
     answers.out.get('/b')?.resolve(OUTSIDE);
+    await settled();
     answers.out.get('/c')?.resolve(repo(['y', 'untracked']));
     await settled();
-    expect(asked).toEqual(['/a', '/b', '/c', '/d']);
+    expect(asked).toEqual(['/a', '/b', '/c']);
     expect(git.cell(place('x', '/a')).text).toBe('M');
     expect(git.cell(place('y', '/c')).text).toBe('?');
     expect(git.cell(place('x', '/b')).text).toBe('');
@@ -183,6 +184,8 @@ describe('GitFolders', () => {
     await settled();
 
     answers.out.get('/a')?.resolve(repo(['x', 'modified']));
+    await settled();
+    answers.out.get('/b')?.resolve(OUTSIDE);
     await settled();
 
     expect(asked).toEqual(['/a', '/b', '/d']);
@@ -216,23 +219,45 @@ describe('GitFolders', () => {
     expect(git.cell(place('a.txt')).text).toBe('M');
   });
 
-  it(`stops asking after ${MAX_BUSY_IN_A_ROW} busy answers in a row, until something else is wanted`, async () => {
-    const { git, asked } = world(() => Promise.reject(refusal('busy')));
+  it(`never gives up on a busy backend: after ${MAX_BUSY_IN_A_ROW} busy answers in a row it asks every 5 seconds, and the marks appear`, async () => {
+    let refusals = MAX_BUSY_IN_A_ROW + 1;
+    const times: number[] = [];
+    const { git, asked } = world(() => {
+      times.push(Date.now());
+      if (refusals > 0) {
+        refusals -= 1;
+        return Promise.reject(refusal('busy'));
+      }
+
+      return repo(['a.txt', 'modified']);
+    });
 
     git.want(['/repo'], 0);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(asked).toHaveLength(MAX_BUSY_IN_A_ROW);
+    await vi.advanceTimersByTimeAsync(29_299); // 300 + 600 + 1200 + 2400 + 4800 ms, then 5 seconds each time, less one
 
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(asked).toHaveLength(MAX_BUSY_IN_A_ROW);
+    expect(asked).toHaveLength(MAX_BUSY_IN_A_ROW + 1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(asked).toHaveLength(MAX_BUSY_IN_A_ROW + 2);
+    expect(git.cell(place('a.txt')).text).toBe('M');
 
-    git.want(['/repo', '/other'], 0);
-    await settled();
-    expect(asked.length).toBeGreaterThan(MAX_BUSY_IN_A_ROW);
+    const gaps = times.slice(1).map((time, index) => time - times[index]);
+    expect(gaps.slice(0, 5)).toEqual([300, 600, 1200, 2400, 4800]);
+    expect(gaps.slice(5)).toEqual(Array(gaps.length - 5).fill(5000));
   });
 
-  it('shows a dash with the reason for a repository too big to read, and does not ask again until the listing is reloaded', async () => {
-    const { git, asked } = world(() => Promise.reject(TOO_BIG));
+  it('asks one request at a time by default, so two panes at most fill the backend', async () => {
+    const answers = held();
+    const { git, asked } = world(answers.answer);
+
+    git.want(['/a', '/b'], 0);
+    await settled();
+
+    expect(asked).toEqual(['/a']);
+  });
+
+  it('shows a dash with the reason for a repository too big to read, and asks again after a minute or when the listing is reloaded', async () => {
+    let fail = true;
+    const { git, asked } = world(() => (fail ? Promise.reject(TOO_BIG) : repo(['a.txt', 'modified'])));
 
     git.want(['/repo'], 0);
     await settled();
@@ -245,6 +270,15 @@ describe('GitFolders', () => {
     git.want(['/repo'], 1);
     await settled();
     expect(asked).toEqual(['/repo', '/repo']);
+
+    fail = false;
+    await vi.advanceTimersByTimeAsync(60_000 - 1);
+    expect(asked).toHaveLength(2);
+    expect(git.cell(place('a.txt')).text).toBe('–'); // what was kept shows until the new answer comes
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(asked).toHaveLength(3);
+    expect(git.cell(place('a.txt')).text).toBe('M');
   });
 
   it('writes out the characters of a reason that could pass for others', async () => {
@@ -271,6 +305,17 @@ describe('GitFolders', () => {
 
     expect(asked).toHaveLength(2);
     expect(git.cell(place('a.txt')).text).toBe('M');
+  });
+
+  it('takes a failure of another kind than invalidInput (not found, io) for a passing one, not for a repository too big', async () => {
+    const { git, asked } = world(() => Promise.reject(refusal('notFound')));
+
+    git.want(['/repo'], 0);
+    await settled();
+    expect(git.cell(place('a.txt'))).toEqual({ text: '' });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(asked).toHaveLength(2);
   });
 
   it('takes an answer of another shape for a failure, not for a folder outside a repository', async () => {
@@ -308,6 +353,26 @@ describe('GitFolders', () => {
     await settled();
 
     expect(asked).toHaveLength(100);
+  });
+
+  it('asks again, when the time is up, only for folders still wanted, and 100 at the most', async () => {
+    const { git, asked } = world(() => OUTSIDE, { parallel: 1000 });
+    const folders = Array.from({ length: 150 }, (_, i) => `/f${i}`);
+
+    git.want(folders, 0);
+    await settled();
+    expect(asked).toHaveLength(100);
+
+    asked.length = 0;
+    await vi.advanceTimersByTimeAsync(GIT_TTL_MS);
+    expect(asked.sort()).toEqual(folders.slice(0, 100).sort());
+
+    git.want(folders.slice(80, 150), 0); // /f80 to /f149: 70 wanted, of which /f80 to /f99 are kept still
+    await settled();
+    asked.length = 0;
+    await vi.advanceTimersByTimeAsync(GIT_TTL_MS);
+
+    expect(asked.sort()).toEqual(folders.slice(80, 150).sort());
   });
 
   it('sorts by how serious the mark is, an item with none (and one not known) having nothing to sort by', async () => {

@@ -23,8 +23,10 @@ impl Stop {
     pub(super) fn reason(&self) -> Option<GitError> {
         if self.cancelled.load(Ordering::Acquire) {
             Some(GitError::Cancelled)
-        } else if self.timed_out.load(Ordering::Acquire) || self.over_cap.load(Ordering::Acquire) {
+        } else if self.over_cap.load(Ordering::Acquire) {
             Some(GitError::TooBig)
+        } else if self.timed_out.load(Ordering::Acquire) {
+            Some(GitError::TimedOut)
         } else {
             None
         }
@@ -32,6 +34,22 @@ impl Stop {
 
     pub(super) fn is_stopped(&self) -> bool {
         self.interrupt.load(Ordering::Acquire)
+    }
+
+    /// What an interrupted or failed read is told as: a raised flag is its own answer, an object over gix's allocation limit
+    /// is a repository too big to read here, and anything else is an unreadable repository (the details are only logged).
+    pub(super) fn explain(&self, error: &gix::Error) -> GitError {
+        if let Some(reason) = self.reason() {
+            return reason;
+        }
+        if error.is_resource_exhausted() {
+            tracing::debug!(%error, "git status: an object is too big to read");
+
+            return GitError::TooBig;
+        }
+        tracing::debug!(%error, "git status: the repository cannot be read");
+
+        GitError::Repository
     }
 }
 
@@ -55,13 +73,19 @@ impl<'a> Meter<'a> {
                 !self.stop.is_stopped()
             }
             None => {
-                self.left = 0;
-                self.stop.over_cap.store(true, Ordering::Release);
-                self.stop.interrupt.store(true, Ordering::Release);
+                self.exhaust();
 
                 false
             }
         }
+    }
+
+    /// Something other than a count is over its bound (a path too long, a tree nested too deep): the same as running out
+    /// of entries.
+    pub(super) fn exhaust(&mut self) {
+        self.left = 0;
+        self.stop.over_cap.store(true, Ordering::Release);
+        self.stop.interrupt.store(true, Ordering::Release);
     }
 }
 
@@ -133,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn the_time_limit_raises_the_flag_and_the_reason_is_too_big() {
+    fn the_time_limit_raises_the_flag_and_the_reason_is_timed_out() {
         let stop = Stop::default();
 
         guarded(&stop, Duration::from_millis(20), &AtomicBool::new(false), || {
@@ -141,7 +165,7 @@ mod tests {
         })
         .expect("ended");
 
-        assert!(matches!(stop.reason(), Some(GitError::TooBig)));
+        assert!(matches!(stop.reason(), Some(GitError::TimedOut)));
     }
 
     #[test]

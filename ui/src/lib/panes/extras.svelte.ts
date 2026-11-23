@@ -120,6 +120,8 @@ export class Extras {
     // A lane that waits for its time: the queues are looked at again then.
     if (next.length > 0) {
       this.#wake.at(Math.min(...next), now);
+    } else {
+      this.#wake.clear();
     }
   }
 
