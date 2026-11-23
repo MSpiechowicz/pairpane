@@ -297,7 +297,7 @@ describe('GitFolders', () => {
     expect(asked).toEqual(['/repo', '/repo']);
   });
 
-  it('shows a dash with a fixed text for a repository that cannot be read here, and asks about it again once a minute at most, a reload or not', async () => {
+  it('shows a dash with a fixed text for a repository that cannot be read here, and asks about it again after a minute or when the listing is reloaded', async () => {
     let fail = true;
     const { git, asked } = world(() => (fail ? Promise.reject(refusal('io')) : repo(['a.txt', 'modified'])));
 
@@ -306,15 +306,30 @@ describe('GitFolders', () => {
     expect(git.cell(place('a.txt'))).toEqual({ text: '–', tip: UNREADABLE });
     expect(UNREADABLE).toBe('The repository cannot be read here');
 
-    // A listing that is reloaded again and again (files that change in it) does not make the helper start each time.
-    for (let reloads = 1; reloads <= 5; reloads += 1) {
-      git.want(['/repo'], reloads);
-      await vi.advanceTimersByTimeAsync(10_000);
-    }
+    // Without a reload nothing is asked before the minute is out.
+    await vi.advanceTimersByTimeAsync(50_000);
     expect(asked).toEqual(['/repo']);
 
+    // A reload asks again: the failure may have been a passing one.
     fail = false;
-    await vi.advanceTimersByTimeAsync(10_000);
+    git.want(['/repo'], 1);
+    await settled();
+    expect(asked).toEqual(['/repo', '/repo']);
+    expect(git.cell(place('a.txt')).text).toBe('M');
+  });
+
+  it('asks about a repository that cannot be read here once a minute when the listing does not change', async () => {
+    let fail = true;
+    const { git, asked } = world(() => (fail ? Promise.reject(refusal('io')) : repo(['a.txt', 'modified'])));
+
+    git.want(['/repo'], 0);
+    await settled();
+
+    fail = false;
+    await vi.advanceTimersByTimeAsync(60_000 - 1);
+    expect(asked).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+
     expect(asked).toHaveLength(2);
     expect(git.cell(place('a.txt')).text).toBe('M');
   });

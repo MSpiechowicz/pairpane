@@ -1,12 +1,13 @@
 //! What [`Filter::ReadOnly`](super::kernel::Filter::ReadOnly) refuses on top of the deny-list: the calls that change a file or
-//! the file system, an open that would write one, an `ioctl` that is not one of a short list of questions, and any call whose
-//! number is above the highest one that was reviewed. The filter itself is built in `kernel.rs`.
+//! the file system, an open that would write one, an `ioctl` that is not one of a short list of questions, an `fcntl` that takes
+//! a lock or a lease, and any call whose number is above the highest one that was reviewed. The filter itself is built in
+//! `kernel.rs`.
 
 use libc::{c_long, sock_filter};
 
 use super::kernel::{
-    ARG1_LOW, ARG2_LOW, BPF_JEQ_K, BPF_JSET_K, BPF_LD_W_ABS, BPF_RET_K, RET_EPERM, TAIL_ALLOW, TAIL_ENOSYS, TAIL_EPERM,
-    instruction,
+    ARG1_LOW, ARG2_LOW, BPF_JEQ_K, BPF_JSET_K, BPF_LD_W_ABS, BPF_RET_K, RET_ALLOW, RET_EPERM, TAIL_ALLOW, TAIL_ENOSYS,
+    TAIL_EPERM, instruction,
 };
 
 /// The calls added to Linux since the numbering became the same on every architecture (424 and up), by number, as the C
@@ -167,6 +168,43 @@ pub(super) fn ioctl_prelude(tests: usize) -> Option<Vec<sock_filter>> {
         prelude.push(instruction(BPF_JEQ_K, jump(2 + case, TAIL_ALLOW)?, 0, request));
     }
     prelude.push(instruction(BPF_RET_K, 0, 0, RET_EPERM));
+
+    Some(prelude)
+}
+
+/// The `fcntl` commands that take a lock or a lease, which [`fcntl_prelude`] refuses: `F_SETLK`, `F_SETLKW`, `F_OFD_SETLK`,
+/// `F_OFD_SETLKW` and `F_SETLEASE`. A lock held on a file of a repository (a record lock, an open-file-description lock, a lease
+/// that makes the process that opens the file for writing wait or be told) is a change that others see, as `flock` is (see
+/// [`WRITES`]). The numbers are the same on x86-64 and on aarch64. Every other command is let through: `F_GETFD`, `F_SETFD`,
+/// `F_GETFL`, `F_SETFL`, `F_DUPFD`, `F_DUPFD_CLOEXEC` (what the standard library and gix make their descriptors with) and the
+/// ones that only ask (`F_GETLK`).
+const LOCKS: [u32; 5] = [6, 7, 37, 38, libc::F_SETLEASE as u32];
+
+/// How many instructions [`fcntl_prelude`] is: the test for the call, the load of the command, a test for each command that is
+/// refused, and the return that allows the call.
+pub(super) const FCNTL_PRELUDE: usize = 3 + LOCKS.len();
+
+/// The test of [`Filter::ReadOnly`] on `fcntl`, which comes after [`ioctl_prelude`] and before the list of calls that are refused:
+/// the call is refused with `EPERM` when its command is one of [`LOCKS`] and allowed when it is not. Another call is skipped over
+/// it with the call number still in the accumulator. `tests` is how many tests follow.
+pub(super) fn fcntl_prelude(tests: usize) -> Option<Vec<sock_filter>> {
+    // The offset from the instruction `at` of the prelude to the place `to` of the tail.
+    let jump = |at: usize, to: usize| u8::try_from(FCNTL_PRELUDE - at - 1 + tests + to).ok();
+
+    let mut prelude = vec![
+        // Another call: past the rest of the prelude.
+        instruction(
+            BPF_JEQ_K,
+            0,
+            u8::try_from(FCNTL_PRELUDE - 1).ok()?,
+            libc::SYS_fcntl as u32,
+        ),
+        instruction(BPF_LD_W_ABS, 0, 0, ARG1_LOW),
+    ];
+    for (case, &command) in LOCKS.iter().enumerate() {
+        prelude.push(instruction(BPF_JEQ_K, jump(2 + case, TAIL_EPERM)?, 0, command));
+    }
+    prelude.push(instruction(BPF_RET_K, 0, 0, RET_ALLOW));
 
     Some(prelude)
 }

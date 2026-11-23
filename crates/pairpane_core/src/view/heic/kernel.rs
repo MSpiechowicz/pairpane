@@ -11,7 +11,9 @@ use std::io;
 
 use libc::{c_long, sock_filter, sock_fprog};
 
-use super::writes::{HIGHEST_REVIEWED, IOCTL_PRELUDE, ioctl_prelude, open_prelude, refused_writes};
+use super::writes::{
+    FCNTL_PRELUDE, HIGHEST_REVIEWED, IOCTL_PRELUDE, fcntl_prelude, ioctl_prelude, open_prelude, refused_writes,
+};
 
 /// `AUDIT_ARCH_*` of the architecture this is built for, which the filter requires of every call (a program of another
 /// ABI that the kernel runs, the 32-bit one on x86-64, has other call numbers). `None` where there is no filter.
@@ -33,8 +35,8 @@ pub(crate) enum Filter {
     AllowList,
     /// Refuse the calls of [`DENIED`] and of `WRITES`, and an open of a file to write, create or truncate it (`openat` and
     /// `open` with such flags; `openat2` is answered `ENOSYS`, as its flags are in memory the filter cannot read, and the C
-    /// library goes on with `openat`), an `ioctl` but for a few questions, and every call numbered above the highest that was
-    /// reviewed, and allow the rest: for the helper that reads a repository (`gitstatus`), which reads files in many ways and
+    /// library goes on with `openat`), an `ioctl` but for a few questions, an `fcntl` that takes a lock or a lease, and every call
+    /// numbered above the highest that was reviewed, and allow the rest: for the helper that reads a repository (`gitstatus`), which reads files in many ways and
     /// writes none, so that where Landlock is not there the filter is still a read-only file system.
     ReadOnly,
 }
@@ -210,8 +212,8 @@ pub(super) const TAIL_ENOSYS: usize = 15;
 /// `None` where [`AUDIT_ARCH`] is `None`.
 ///
 /// With `read_only` ([`Filter::ReadOnly`]) the calls of `WRITES` are refused too, and an open that writes, creates or
-/// truncates (see [`open_prelude`]), an `ioctl` that is not one of a few questions (see [`ioctl_prelude`]), and every call
-/// numbered above [`HIGHEST_REVIEWED`].
+/// truncates (see [`open_prelude`]), an `ioctl` that is not one of a few questions (see [`ioctl_prelude`]), an `fcntl` that takes
+/// a lock or a lease (see [`fcntl_prelude`]), and every call numbered above [`HIGHEST_REVIEWED`].
 pub(super) fn program(pid: u32, read_only: bool) -> Option<Vec<sock_filter>> {
     let arch = AUDIT_ARCH?;
 
@@ -228,8 +230,9 @@ pub(super) fn program(pid: u32, read_only: bool) -> Option<Vec<sock_filter>> {
 
     let mut program = header(arch);
     if read_only {
-        program.extend(open_prelude(tests.len() + IOCTL_PRELUDE)?);
-        program.extend(ioctl_prelude(tests.len())?);
+        program.extend(open_prelude(tests.len() + IOCTL_PRELUDE + FCNTL_PRELUDE)?);
+        program.extend(ioctl_prelude(tests.len() + FCNTL_PRELUDE)?);
+        program.extend(fcntl_prelude(tests.len())?);
     }
 
     // The tail below, numbered; a jump of n lands n instructions after the one that follows the jump. Each test of

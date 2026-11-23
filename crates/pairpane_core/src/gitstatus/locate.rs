@@ -22,7 +22,8 @@ use gix::bstr::ByteSlice;
 
 use super::GitError;
 use super::files::{self, Seen};
-use super::inspect::{self, Refusal};
+use super::gate::Gate;
+use super::inspect::{self, Looking, Refusal};
 use super::layout::Layout;
 use super::links::{self, is_local, normalise};
 use super::locality::pointer_target;
@@ -36,8 +37,13 @@ pub(super) const POINTER_BYTES: u64 = 4 * 1024;
 enum Skip {
     /// Not a repository; the search goes on.
     NotHere,
-    /// Something that must not be read (not local, not a regular file): the folder is in no repository, and the search ends.
+    /// Something that must not be read (not local, not a regular file): the folder is in no repository, and the search ends. The
+    /// page is told so (see [`Note::Elsewhere`]): a work tree's own `.git` leads somewhere it must not.
     Refused,
+    /// The folder is a git folder itself (inside a `.git`, or a bare repository), or one that looks like one but cannot be read,
+    /// or its `.git` cannot be looked at: it is no work tree and there is nothing a note could say of what a repository
+    /// names, so the search ends and the folder is in no repository (`repo: false`, no note).
+    Unread,
 }
 
 /// What the search for a repository found.
@@ -63,19 +69,22 @@ impl<T> Found<T> {
 
 /// The repository that `real` (a real path) is in, or none, or one that must not be read. `ceiling` is a real path too. Only a
 /// repository whose files all pass [`inspect`] is found.
-pub(super) fn find(real: &Path, ceiling: Option<&Path>) -> Result<Found<Layout>, GitError> {
+pub(super) fn find(real: &Path, ceiling: Option<&Path>, gate: Gate<'_>) -> Result<Found<Layout>, GitError> {
     let mut dir = real.to_path_buf();
     let device = device_of(&dir);
 
     loop {
+        gate.check()?;
+
         // A filesystem boundary ends the search: a mount point's parent is not the same place.
         if device_of(&dir) != device {
             return Ok(Found::Nowhere);
         }
 
         match candidate(&dir) {
-            Ok(layout) => return found(layout),
+            Ok(layout) => return found(layout, gate),
             Err(Skip::Refused) => return Ok(Found::Refused(Note::Elsewhere)),
+            Err(Skip::Unread) => return Ok(Found::Nowhere),
             Err(Skip::NotHere) => {}
         }
 
@@ -85,7 +94,7 @@ pub(super) fn find(real: &Path, ceiling: Option<&Path>) -> Result<Found<Layout>,
     }
 }
 
-fn found(mut layout: Layout) -> Result<Found<Layout>, GitError> {
+fn found(mut layout: Layout, gate: Gate<'_>) -> Result<Found<Layout>, GitError> {
     if !owned(&layout) {
         return Ok(Found::Refused(Note::Owner));
     }
@@ -93,7 +102,7 @@ fn found(mut layout: Layout) -> Result<Found<Layout>, GitError> {
         return Ok(Found::Refused(Note::Broad));
     }
 
-    match inspect::files(&layout) {
+    match inspect::files(&layout, &mut Looking::new(gate)) {
         Ok(sources) => {
             layout.alternates = sources.alternates;
             layout.info_rules = sources.info_rules;
@@ -102,7 +111,9 @@ fn found(mut layout: Layout) -> Result<Found<Layout>, GitError> {
         }
         Err(Refusal::Odd) => Ok(Found::Refused(Note::Elsewhere)),
         Err(Refusal::Broad) => Ok(Found::Refused(Note::Broad)),
+        Err(Refusal::Owner) => Ok(Found::Refused(Note::Owner)),
         Err(Refusal::TooBig) => Err(GitError::TooBig),
+        Err(Refusal::Stopped(halt)) => Err(halt.into()),
     }
 }
 
@@ -110,20 +121,10 @@ fn found(mut layout: Layout) -> Result<Found<Layout>, GitError> {
 /// that was found, the git folder and the common folder are all owned by the user, so that a repository somebody else planted in
 /// a folder above (or in a folder that is shared) is not read. Windows has no such check here (see the module docs of
 /// [`super`]).
-#[cfg(unix)]
 fn owned(layout: &Layout) -> bool {
-    use std::os::unix::fs::MetadataExt;
-
-    let me = rustix::process::geteuid().as_raw();
-
     [&layout.dot_git, &layout.git_dir, &layout.common_dir]
         .into_iter()
-        .all(|place| fs::symlink_metadata(place).is_ok_and(|metadata| metadata.uid() == me))
-}
-
-#[cfg(not(unix))]
-fn owned(_layout: &Layout) -> bool {
-    true
+        .all(|place| files::owned_by_user(place).unwrap_or(false))
 }
 
 fn device_of(dir: &Path) -> Option<u64> {
@@ -138,10 +139,12 @@ fn candidate(dir: &Path) -> Result<Layout, Skip> {
         other => return other,
     }
 
-    // A git folder itself is no work tree: nothing is read of it.
+    // A git folder itself is no work tree: nothing is read of it, and a note about links would be wrong for a folder inside a
+    // `.git` or a bare repository, which is what this is. Nor is one that looks like a git folder and cannot be read a
+    // repository that names something.
     match git_dir(dir) {
-        Ok(_) => Err(Skip::Refused),
-        Err(skip) => Err(skip),
+        Err(Skip::NotHere) => Err(Skip::NotHere),
+        Ok(_) | Err(Skip::Refused | Skip::Unread) => Err(Skip::Unread),
     }
 }
 
@@ -153,7 +156,8 @@ fn dot_git_folder(dir: &Path) -> Result<Layout, Skip> {
     let metadata = match fs::symlink_metadata(&dot_git) {
         Ok(metadata) => metadata,
         Err(error) if links::leads_nowhere(&error) => return Err(Skip::NotHere),
-        Err(_) => return Err(Skip::Refused),
+        // It cannot be looked at (no permission, an error of the file system): nothing is known of what it names.
+        Err(_) => return Err(Skip::Unread),
     };
 
     if metadata.file_type().is_symlink() {

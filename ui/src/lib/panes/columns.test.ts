@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/svelte';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_PREFERENCES, preferences } from '$lib/shell/preferences.svelte';
 
@@ -52,6 +52,45 @@ describe('the grid of the columns', () => {
     expect(shows('checksum', DEFAULT_PREFERENCES)).toBe(false);
     expect(shows('dimensions', { ...DEFAULT_PREFERENCES, showDimensions: true })).toBe(true);
     expect(shows('checksum', { ...DEFAULT_PREFERENCES, showChecksum: true })).toBe(true);
+  });
+});
+
+describe('the Git column on Windows', () => {
+  const windows = () =>
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+  const saved = { ...DEFAULT_PREFERENCES, showGit: true };
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('is not shown, whatever was saved in the settings, and has no track of the grid', () => {
+    expect(shows('git', saved)).toBe(true);
+    expect(columnTracks(saved).full).toContain('44px');
+
+    windows();
+
+    expect(shows('git', saved)).toBe(false);
+    expect(columnTracks(saved).full).not.toContain('44px');
+    expect(columnTracks(saved).full).toBe(columnTracks({ ...saved, showGit: false }).full);
+    // The other columns are not touched.
+    expect(shows('size', saved)).toBe(true);
+  });
+
+  it('leaves the header cell and the cell of a row out', () => {
+    windows();
+    preferences.set({ showGit: true });
+    render(ColumnHeader, { view: new PaneTabs(fakeBackend().ipc, 'left').view });
+    render(PaneRow, {
+      id: 'r-1',
+      index: 1,
+      entry: entry('a.txt'),
+      cursor: false,
+      selected: false,
+      size: '0 B',
+      extra: { dimensions: { text: '' }, checksum: { text: '' }, git: { text: '–' } },
+    });
+
+    expect(screen.queryByRole('button', { name: /^Git/ })).toBeNull();
+    expect(document.querySelector('.row .gt')).toBeNull();
   });
 });
 

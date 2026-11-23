@@ -31,8 +31,6 @@ interface Answer {
   folder: GitFolder;
   at: number;
   reloads: number;
-  /** A reload of the listing does not make it out of date: only the time does (a repository that cannot be read is no better for a file that changed). */
-  settled?: boolean;
 }
 
 /** The marks of an answer by name, or the note that says why a repository that is not read has none. */
@@ -52,7 +50,7 @@ function folderOf(status: GitStatus): GitFolder {
  * is kept shows until the new answer comes). A folder that is not in a repository is kept as such. A repository too big
  * to read (or that took too long) is kept as the reason, and is asked about again when the listing is reloaded, or after
  * a minute; so is a repository that is refused for what it names (the answer's `note`), and one that cannot be read here (the
- * backend's `io`), which is asked about again after a minute only. Where the backend has no git status at all (`unsupported`:
+ * backend's `io`, which may be a passing failure). Where the backend has no git status at all (`unsupported`:
  * Windows) the reason is kept for every folder and nothing is asked again. A busy answer makes the lane wait, longer each time up to a few seconds, and go on at that pace for as long
  * as the folder is wanted (other panes take the backend's slots for a while, and no one is waited out for good);
  * another failure makes the folder wait a while.
@@ -114,7 +112,7 @@ export class GitFolders {
   /** Whether what is kept about `folder` can be trusted still. */
   #fresh(folder: string, now: number): boolean {
     const kept = this.#answers.peek(folder);
-    if (kept === undefined || (kept.reloads !== this.#reloads && !kept.settled)) {
+    if (kept === undefined || kept.reloads !== this.#reloads) {
       return false;
     }
 
@@ -174,7 +172,6 @@ export class GitFolders {
     lane.start(asked);
 
     let answer: GitFolder | 'busy' | 'failed';
-    let settled = false;
     try {
       const status: unknown = await this.#ipc.invoke('columns_git', { path: folder });
       answer = isStatus(status) ? folderOf(status) : 'failed';
@@ -189,7 +186,6 @@ export class GitFolders {
         answer = { problem: failure.message };
       } else if (failure.code === 'io') {
         answer = { problem: UNREADABLE };
-        settled = true;
       } else {
         answer = 'failed';
       }
@@ -205,7 +201,7 @@ export class GitFolders {
       lane.delay(folder, now + FAILED_WAIT_MS);
     } else {
       lane.answered(now);
-      this.#answers.set(folder, { folder: answer, at: now, reloads, settled });
+      this.#answers.set(folder, { folder: answer, at: now, reloads });
       // Answered: it leaves the queue, so that an answer the cache has to drop again is not asked for in a loop. An answer
       // of before a reload stays: it is out of date already.
       if (reloads === this.#reloads) {

@@ -64,7 +64,7 @@
   const extraColumns = $derived({
     dimensions: detailed && preferences.value.showDimensions,
     checksum: detailed && preferences.value.showChecksum,
-    git: detailed && preferences.value.showGit,
+    git: detailed && shows('git', preferences.value),
   });
   const listing = $derived(view.listing);
   const uid = $props.id();

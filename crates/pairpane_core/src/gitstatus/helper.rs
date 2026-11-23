@@ -29,7 +29,8 @@ use std::thread;
 use std::time::Duration;
 
 use super::child::CHILD_ARG;
-use super::layout::home;
+use super::gate::Gate;
+use super::layout::{Grant, Layout, home};
 use super::locate::{self, Found};
 use super::request::{MAX_ANSWER, Request, decode_answer};
 use super::scan::not_a_repository;
@@ -96,8 +97,9 @@ pub(super) fn prepare(
         Err(error) => return Err(GitError::Folder(error.kind())),
     }
 
-    // The files of the repository are looked at, and what they point to, before anything reads one.
-    let layout = match locate::find(&real, ceiling.as_deref())? {
+    // The files of the repository are looked at, and what they point to, before anything reads one, for as long as the status may
+    // take and no longer (and not once the app is exiting).
+    let layout = match locate::find(&real, ceiling.as_deref(), Gate::new(cancel, limits.time))? {
         Found::Repository(layout) => layout,
         Found::Nowhere => return Ok(Found::Nowhere),
         Found::Refused(note) => return Ok(Found::Refused(note)),
@@ -105,9 +107,7 @@ pub(super) fn prepare(
 
     // Which folders the helper is allowed to read, and which they are: a folder that is swapped for another after this is not the
     // one that was looked at, and the helper does not go on (see `Grant`).
-    let Ok(grants) = layout.grants() else {
-        return Ok(Found::Nowhere);
-    };
+    let grants = granted(&layout)?;
 
     Ok(Found::Repository(Request {
         folder: real,
@@ -115,6 +115,17 @@ pub(super) fn prepare(
         layout,
         grants,
     }))
+}
+
+/// What the helper is allowed to read of `layout` (see `Grant`). A folder that cannot be looked at now (it is gone since the
+/// repository was found, or it is not to be opened) is a repository that cannot be read, which is what the page is told, and not
+/// that the folder is in none.
+fn granted(layout: &Layout) -> Result<Vec<Grant>, GitError> {
+    layout.grants().map_err(|error| {
+        tracing::debug!(%error, "git status: a folder of the repository cannot be looked at");
+
+        GitError::Repository
+    })
 }
 
 /// The command that starts the helper `program`: the cleared environment and the pipes of `process::command`, and the
@@ -287,6 +298,23 @@ mod tests {
         let answer = supervise(&mut child, stdin, stdout, Vec::new(), cancel, deadline, 100);
 
         (answer, child)
+    }
+
+    #[test]
+    fn a_folder_of_the_repository_that_cannot_be_looked_at_is_a_repository_that_cannot_be_read() {
+        let folder = crate::gitstatus::testing::tempdir();
+        let here = folder.path().to_path_buf();
+        let layout = |workdir: PathBuf| Layout {
+            dot_git: here.join(".git"),
+            git_dir: here.clone(),
+            common_dir: here.clone(),
+            workdir,
+            alternates: Vec::new(),
+            info_rules: 0,
+        };
+
+        assert!(granted(&layout(here.clone())).is_ok_and(|grants| grants.len() == 1));
+        assert!(matches!(granted(&layout(here.join("gone"))), Err(GitError::Repository)));
     }
 
     #[test]

@@ -91,7 +91,16 @@
 //!      the locality checks. A place that is no local one (a network or device path, an automounted folder, `\\host\share`,
 //!      `/net`) is refused, hop by hop (`links::resolve`: `lstat` and `readlink`, at most 40 links, on every system), and so
 //!      is a magic link (`/proc/self/fd/N`: `pipe:[..]`, `socket:[..]`, `anon_inode:..`, a deleted file) that the walk cannot
-//!      follow and the system can. `Layout::is_opened`, which says whether the repository gix opened is the one that was
+//!      follow and the system can. An automounted folder is told in two ways, each before anything below it is looked up
+//!      (`automount`): by its name (`/net`, `/Network` and, on macOS, `/home`, also through `/System/Volumes/Data`; on macOS the
+//!      names are compared as its case-insensitive file system does, folded and precomposed, so `/NET`, `/Networ\u{212A}` and
+//!      `/system/volumes/data/net` are caught: `names`), and by asking each real folder that is about to be entered which file
+//!      system it is on, through a descriptor that mounts nothing (`O_PATH` and `fstatfs` on Linux, `O_SYMLINK`/`O_EVTONLY` and the
+//!      file system's name or `MNT_AUTOMOUNTED` on macOS, never `statfs(path)`), which refuses autofs whatever its name is (a
+//!      site's own map, AFS's dynamic root). It costs an `open` and an `fstatfs` for a hop of a path, a few microseconds a path. The
+//!      helper, which runs confined and may not open the folders above its own, does not ask again when it checks what gix opened
+//!      (`links::resolve_confined`): the parent asked of every path it looked at.
+//!      `Layout::is_opened`, which says whether the repository gix opened is the one that was
 //!      looked at, compares the places as the system resolves them.
 //!    - **No links among git's own files.** `HEAD`, `info/exclude`, `info/attributes`, `config`, `config.worktree`,
 //!      `commondir`, `gitdir`, the `index` and `sharedindex.*`, `packed-refs`, the loose files of the refs `HEAD` leads to
@@ -99,17 +108,27 @@
 //!      `refs`, `info`, `objects`, `objects/info`, `objects/pack` and each present `objects/xx`, of every object folder, real
 //!      folders: a link or a reparse point is `repo: false`. So is a loose object that is a link, or anything in an `objects/xx`
 //!      that is not a regular file (a link to `\\host\share\x` makes the system connect to the host): each present `objects/xx` of
-//!      every object folder is listed, `DirEntry::file_type` of every entry (and the reparse attribute, on Windows) says a plain
-//!      file, and the loose objects listed add up to 65,536 at most, past which the repository is [`GitError::TooBig`]
-//!      (`objects`). An incremental multi-pack index (`objects/pack/multi-pack-index.d`) and `objects/info/commit-graphs` may be
-//!      real folders, and their entries are looked at as the files of `pack` are. This is a deliberate trade, which reverts the follow of a link to
+//!      every object folder is listed, and `DirEntry::file_type` of every entry (and the reparse attribute, on Windows) says a plain
+//!      file. An incremental multi-pack index (`objects/pack/multi-pack-index.d`) and `objects/info/commit-graphs` may be
+//!      real folders, and their entries are looked at as the files of `pack` are (by the listing alone: no call is made for a file,
+//!      and the folder is asked once whether the kernel makes its files up). The entries listed add up, over the git folder and
+//!      the loose objects, packs, multi-pack index and commit graphs of every object store of the repository (each store once,
+//!      however many lines or chains of alternates name it), to 65,536 at most, past which the repository is [`GitError::TooBig`]
+//!      (`inspect::ENTRIES`). Git's own auto-gc keeps an ordinary repository far below it (it packs the loose objects when they
+//!      pass a few thousand, and `gc.autoPackLimit` keeps the packs to a few dozen); one that is over it was not kept, or was made
+//!      to cost the parent a look for each entry. Every entry counted and every step between them asks the exit flag of the app and
+//!      the time limit of the status (`gate`): the look ends as [`GitError::Cancelled`] or [`GitError::TimedOut`] at the next
+//!      entry, and a list of stores cannot make the parent's own work last. This is a deliberate trade, which reverts the follow of a link to
 //!      a local regular file that an earlier version had (git itself follows one, and a repository whose `HEAD` is a link, or
 //!      whose `info/exclude` is shared by a link, has no status here).
-//!    - **Whose, and how broad.** The `.git` that was found, the git folder and the common folder must be owned by the user who
-//!      reads them, as git's own check of the owner has it (`locate::owned`, the effective user on Unix; a repository somebody
-//!      else planted in a folder above the one browsed is `repo: false`; not checked on Windows, which has no column). A folder
-//!      the helper is to be given to read that is the root or a drive root, the home folder or a folder above it, or on a file
-//!      system of the kernel's own (`/proc`, `/sys`: `files::on_pseudo_path`, by `statfs`) is refused too (`layout::is_too_broad`:
+//!    - **Whose, and how broad.** The `.git` that was found, the git folder, the common folder and every alternate object store
+//!      must be owned by the user who reads them, as git's own check of the owner has it (`files::owned_by_user`, the effective
+//!      user on Unix; a repository somebody else planted in a folder above the one browsed is `repo: false`, and so is one that
+//!      names a store of somebody else's; not checked on Windows, which has no column). A folder the helper is to be given to read
+//!      that is the root or a drive root, the home folder or a folder above it (the home folder is the one `HOME` names, or the
+//!      user database's when that is not a folder that is there, and on macOS it is compared as its file system does), one of the
+//!      folders everybody shares (`/tmp`, `/var/tmp`, `/dev/shm`, `/run/user/<uid>`, `/mnt`, `/media`, `/private/tmp`: the folder
+//!      itself, not what is below it), or on a file system of the kernel's own (`/proc`, `/sys`: `files::on_pseudo_path`, by `statfs`) is refused too (`layout::is_too_broad`:
 //!      a work tree that is the home folder itself has no status here), and of an alternate only its `info`, `pack` and loose
 //!      folders that were looked at are given, never the folder of the store itself, so that an alternate that names `/tmp` or
 //!      a folder of the user's gives the helper nothing but what a store holds.
@@ -153,7 +172,8 @@
 //!   the rest of the file system and the user's other files are out of its reach. On a kernel that has Landlock, a ruleset that
 //!   cannot be made or is not enforced is a failure: the helper exits without reading (only a kernel without it runs on the
 //!   filter alone, which the parent logs once). A seccomp filter on every thread, which is required, refuses sockets, io_uring,
-//!   programs and processes (threads stay), `ptrace` and the like, every call that writes or changes a file (and `flock`), an
+//!   programs and processes (threads stay), `ptrace` and the like, every call that writes or changes a file (and `flock`, and an
+//!   `fcntl` that takes a lock or a lease: `F_SETLK`, `F_SETLKW`, `F_OFD_SETLK`, `F_OFD_SETLKW`, `F_SETLEASE`), an
 //!   open that would write, every `ioctl` but two questions (`FIONREAD`, `TCGETS`) and every call numbered above the highest that
 //!   was reviewed (`Filter::ReadOnly`), so where the kernel has no Landlock it is still a read-only file system. See
 //!   `view/heic/sandbox.rs` for what is stopped by what, and on which kernel.
@@ -197,9 +217,15 @@
 //!   marks of a folder and not of a repository.
 //! - `objects`, `refs` or `info` that is a link, in the git folder or in the common folder, is `repo: false` (point 8), and so
 //!   is a work tree that is the user's home folder. The page is told why for a repository that is refused for what it names
-//!   (`GitStatus::note`, a fixed text with no path); a folder in no repository has none.
+//!   (`GitStatus::note`, a fixed text with no path); a folder in no repository has none, and neither has a folder inside a `.git`
+//!   or a bare repository, or one whose `.git` cannot be looked at: nothing there names anything.
 //! - The parent's own look at the files of a repository (`lstat`, small non-blocking reads) can still wait on a mount that does
-//!   not answer, as every other call of the app on such a mount can, holding its thread and one of the two places for a status.
+//!   not answer, as every other call of the app on such a mount can, holding its thread and one of the two places for a status:
+//!   its time limit and the exit flag are asked between the calls (`gate`), not inside one.
+//! - On macOS the names of the automounted folders are compared as its case-insensitive file system compares them, as APFS and
+//!   HFS+ do by default; a volume that was formatted case-sensitive has `/Net` and `/net` as two folders, and the one that is no
+//!   automount point is refused all the same. A folder that a real mount lies over (as systemd mounts `binfmt_misc` over an
+//!   autofs one) is what the system opens, and is not told as autofs.
 //!
 //! Left out: the dirtiness of submodules (point 6), the global ignore file (point 1), rename tracking (a renamed file is a
 //! deleted and an added file here) and the ahead/behind or branch state (never read). Bare repositories have no work tree
@@ -239,10 +265,12 @@
 //!   time is [`GitError::TimedOut`].
 //! - Errors carry no path ([`GitError`]); the details go to the log at debug level only.
 
+mod automount;
 mod budget;
 mod child;
 mod compare;
 mod files;
+mod gate;
 mod helper;
 mod ignored;
 mod inspect;
@@ -251,6 +279,7 @@ mod links;
 mod locality;
 mod locate;
 mod marks;
+mod names;
 mod note;
 mod objects;
 mod open;

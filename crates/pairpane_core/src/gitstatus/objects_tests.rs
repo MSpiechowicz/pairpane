@@ -13,21 +13,26 @@ use crate::gitstatus::{
     status_in_process, tests::clean,
 };
 
+/// A look with no limit but the entries a repository may have.
+pub(super) fn fresh() -> Looking<'static> {
+    Looking::new(Gate::never())
+}
+
 #[cfg(unix)]
-fn prepared(root: &Path) -> Found<Request> {
+pub(super) fn prepared(root: &Path) -> Found<Request> {
     prepare(root, None, Limits::default(), &AtomicBool::new(false)).expect("prepared")
 }
 
 /// Whether the folder of `repo` is read as a repository, and with the note it was refused with, if it was.
 #[cfg(unix)]
-fn read(root: &Path) -> (bool, Option<String>) {
+pub(super) fn read(root: &Path) -> (bool, Option<String>) {
     let answer = status_in_process(root, Limits::default(), &AtomicBool::new(false)).expect("a status");
 
     (answer.repo, answer.note)
 }
 
 /// An object folder of its own, as a repository that is read has: `info`, `pack` and a folder of loose objects with one object.
-fn store(folder: &Path) -> PathBuf {
+pub(super) fn store(folder: &Path) -> PathBuf {
     let objects = folder.join("objects");
     for name in ["info", "pack", "ab"] {
         fs::create_dir_all(objects.join(name)).expect("folders");
@@ -68,7 +73,7 @@ fn a_pointer_of_the_list_of_alternates_that_is_not_local_is_refused() {
     let alternates = common.join("objects/info/alternates");
 
     fs::write(&alternates, "# comment\n\n../../other/objects\n").expect("a list");
-    assert_eq!(object_folders(&common).expect("local").len(), 2);
+    assert_eq!(object_folders(&common, Gate::never()).expect("local").len(), 2);
 
     for line in [
         r"\\host\share\objects",
@@ -77,7 +82,7 @@ fn a_pointer_of_the_list_of_alternates_that_is_not_local_is_refused() {
     ] {
         fs::write(&alternates, format!("../../fine/objects\n{line}\n")).expect("a list");
 
-        assert_eq!(object_folders(&common), Err(Refusal::Odd), "{line}");
+        assert_eq!(object_folders(&common, Gate::never()), Err(Refusal::Odd), "{line}");
     }
 }
 
@@ -91,8 +96,12 @@ fn a_chain_of_alternates_is_followed_and_a_loop_ends() {
     fs::write(one.join("info/alternates"), format!("{}\n", two.display())).expect("a list");
     fs::write(two.join("info/alternates"), format!("{}\n", one.display())).expect("a list");
 
-    // Each step names the other: more steps than the depth allows.
-    assert_eq!(object_folders(&folder.path().join("one")), Err(Refusal::Odd));
+    // Each step names the other: each store is looked at once, and the loop ends there.
+    let stores = object_folders(&folder.path().join("one"), Gate::never()).expect("local");
+
+    assert_eq!(stores.len(), 2);
+    assert_eq!(stores[0], one);
+    assert_eq!(stores[1], two);
 }
 
 #[cfg(unix)]
@@ -139,22 +148,11 @@ fn a_pipe_or_a_folder_among_the_loose_objects_is_no_repository() {
 }
 
 #[test]
-fn more_loose_objects_than_the_cap_is_a_repository_too_big_to_read() {
-    let folder = testing::tempdir();
-    let objects = store(folder.path());
-    fs::write(objects.join("ab/second"), b"x").expect("an object");
-
-    assert!(object_folder(&objects, &mut 0).is_ok());
-    assert!(object_folder(&objects, &mut (LOOSE_OBJECTS - 2)).is_ok());
-    assert_eq!(object_folder(&objects, &mut (LOOSE_OBJECTS - 1)), Err(Refusal::TooBig));
-}
-
-#[test]
 fn the_folders_of_an_object_store_that_may_be_read_are_the_ones_that_are_there() {
     let folder = testing::tempdir();
     let objects = store(folder.path());
 
-    let mut granted = object_folder(&objects, &mut 0).expect("a store");
+    let mut granted = object_folder(&objects, &mut fresh()).expect("a store");
     granted.sort();
 
     assert_eq!(
@@ -178,14 +176,14 @@ fn an_incremental_multi_pack_index_and_a_chain_of_commit_graphs_are_plain_files_
     fs::write(graphs.join("graph-1.graph"), b"g").expect("a file");
     fs::write(objects.join("info/commit-graph"), b"g").expect("a file");
 
-    assert!(object_folder(&objects, &mut 0).is_ok());
+    assert!(object_folder(&objects, &mut fresh()).is_ok());
 
     // Nothing else is a folder of `pack`, and nothing in them is more than a file.
     fs::create_dir(midx.join("deeper")).expect("a folder");
-    assert_eq!(object_folder(&objects, &mut 0), Err(Refusal::Odd));
+    assert_eq!(object_folder(&objects, &mut fresh()), Err(Refusal::Odd));
     fs::remove_dir_all(&midx).expect("removed");
     fs::create_dir(objects.join("pack/other")).expect("a folder");
-    assert_eq!(object_folder(&objects, &mut 0), Err(Refusal::Odd));
+    assert_eq!(object_folder(&objects, &mut fresh()), Err(Refusal::Odd));
 }
 
 #[cfg(unix)]
@@ -206,16 +204,24 @@ fn a_link_in_the_folders_of_a_multi_pack_index_or_a_commit_graph_is_refused() {
         // The folder itself is a link.
         let folder_here = objects.join(place);
         symlink(&outside, &folder_here).expect("a link");
-        assert_eq!(object_folder(&objects, &mut 0), Err(Refusal::Odd), "{name} as a link");
+        assert_eq!(
+            object_folder(&objects, &mut fresh()),
+            Err(Refusal::Odd),
+            "{name} as a link"
+        );
         fs::remove_file(&folder_here).expect("removed");
 
         // A link inside it.
         fs::create_dir(&folder_here).expect("a folder");
         symlink(outside.join("file"), folder_here.join("entry")).expect("a link");
-        assert_eq!(object_folder(&objects, &mut 0), Err(Refusal::Odd), "a link in {name}");
+        assert_eq!(
+            object_folder(&objects, &mut fresh()),
+            Err(Refusal::Odd),
+            "a link in {name}"
+        );
         fs::remove_dir_all(&folder_here).expect("removed");
     }
-    assert!(object_folder(&objects, &mut 0).is_ok());
+    assert!(object_folder(&objects, &mut fresh()).is_ok());
 }
 
 #[cfg(unix)]

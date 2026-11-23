@@ -132,6 +132,56 @@ fn an_ioctl_is_refused_but_for_two_questions() {
 }
 
 #[test]
+fn an_fcntl_that_takes_a_lock_or_a_lease_is_refused_and_the_other_commands_are_allowed() {
+    let fcntl = i64::from(libc::SYS_fcntl as i32);
+
+    // Refused: `F_SETLK`, `F_SETLKW`, `F_OFD_SETLK`, `F_OFD_SETLKW` and `F_SETLEASE`, by their numbers (the C library does not
+    // name them all), whatever the other arguments are.
+    for command in [6_u64, 7, 37, 38, 1024] {
+        assert_eq!(call(fcntl, [3, command, 0]), RET_EPERM, "{command}");
+        assert_eq!(call(fcntl, [0, command, 0x7fff_0000]), RET_EPERM, "{command}");
+    }
+    assert_eq!(libc::F_SETLEASE, 1024);
+    // Allowed: what the standard library and gix use on descriptors (`F_GETFD`, `F_SETFD`, `F_GETFL`, `F_DUPFD_CLOEXEC`), and
+    // the other commands that take no lock (`F_DUPFD`, `F_SETFL`, `F_GETLK`, which only asks, `F_GETLEASE`, `F_GETOWN`).
+    let allowed = [
+        libc::F_GETFD,
+        libc::F_SETFD,
+        libc::F_GETFL,
+        libc::F_DUPFD_CLOEXEC,
+        libc::F_DUPFD,
+        libc::F_SETFL,
+        libc::F_GETLK,
+        libc::F_GETLEASE,
+        libc::F_GETOWN,
+    ];
+    for command in allowed {
+        assert_eq!(call(fcntl, [3, command as u64, 1]), RET_ALLOW, "{command}");
+    }
+    // A command that is not a lock is not refused for sharing bits with one: the whole command is compared.
+    for command in [6_u64 | 0x100, 7 | 0x1_0000, 1024 | 1, 5, 8, 36, 39, 1025] {
+        assert_eq!(call(fcntl, [3, command, 0]), RET_ALLOW, "{command}");
+    }
+}
+
+#[test]
+fn the_other_preludes_and_tests_still_land_where_they_did() {
+    // The jumps of every prelude and test were moved by the one for `fcntl`: a few calls of each kind still land where they did.
+    let ioctl = i64::from(libc::SYS_ioctl as i32);
+    let openat = libc::SYS_openat;
+
+    assert_eq!(call(ioctl, [3, 0x541b, 0]), RET_ALLOW);
+    assert_eq!(call(ioctl, [3, 0x5412, 0]), RET_EPERM);
+    assert_eq!(call(openat, [0, 0, u64::from(libc::O_RDONLY as u32)]), RET_ALLOW);
+    assert_eq!(call(openat, [0, 0, u64::from(libc::O_WRONLY as u32)]), RET_EPERM);
+    assert_eq!(call(libc::SYS_openat2, [0, 0, 0]), ENOSYS);
+    assert_eq!(call(libc::SYS_read, [0, 0, 0]), RET_ALLOW);
+    assert_eq!(call(libc::SYS_socket, [0, 0, 0]), RET_EPERM);
+    assert_eq!(call(libc::SYS_unlinkat, [0, 0, 0]), RET_EPERM);
+    assert_eq!(call(i64::from(HIGHEST_REVIEWED) + 1, [0, 0, 0]), RET_EPERM);
+}
+
+#[test]
 fn an_open_that_writes_is_refused_and_one_that_reads_is_allowed() {
     let flags = |flags: libc::c_int| u64::from(flags as u32);
 
@@ -183,7 +233,7 @@ fn a_call_of_the_x32_abi_and_another_architecture_are_refused() {
 
 #[test]
 fn the_deny_list_of_the_picture_helpers_is_not_the_read_only_filter() {
-    // The HEIC helper's filter is the deny-list alone: a call numbered high, a lock and an ioctl are for its codecs.
+    // The HEIC helper's filter is the deny-list alone: a call numbered high, a lock, an `fcntl` lock and an ioctl are for its codecs.
     let (filter, arch) = (
         program(4242, false).expect("a filter"),
         AUDIT_ARCH.expect("an architecture"),
@@ -197,4 +247,5 @@ fn the_deny_list_of_the_picture_helpers_is_not_the_read_only_filter() {
         );
     }
     assert_eq!(answer(&filter, arch, libc::SYS_socket as u32, [0, 0, 0]), RET_EPERM);
+    assert_eq!(answer(&filter, arch, libc::SYS_fcntl as u32, [3, 6, 0]), RET_ALLOW);
 }

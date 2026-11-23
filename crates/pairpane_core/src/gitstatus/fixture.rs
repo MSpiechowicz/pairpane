@@ -81,6 +81,7 @@ impl<'a> Staged<'a> {
     }
 
     /// A file that is executable in the index.
+    #[cfg(unix)]
     pub(super) fn executable(path: &'a str, content: &'a [u8]) -> Self {
         Self {
             mode: Mode::FILE_EXECUTABLE,
@@ -146,6 +147,7 @@ impl Repo {
     /// Moves the objects of this repository to a store of an alternate, `store/objects` below `folder` (which is returned), and
     /// leaves the repository with an objects folder of its own that names the store: the line of its list of alternates is
     /// `line` of the store's path.
+    #[cfg(unix)]
     pub(super) fn move_objects_to_an_alternate(&self, folder: &Path, line: impl Fn(&Path) -> String) -> PathBuf {
         let store = folder.join("store/objects");
         fs::create_dir_all(store.parent().expect("a parent")).expect("a folder");

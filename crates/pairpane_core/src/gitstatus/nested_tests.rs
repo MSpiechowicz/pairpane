@@ -8,6 +8,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
+#[cfg(unix)]
 use super::fixture::within;
 use super::testing::status;
 use super::tests::{clean, owned};
@@ -20,6 +21,7 @@ fn answer(folder: &Path, limits: Limits) -> Result<GitStatus, GitError> {
 
 /// The status of `folder`, which has to come on a thread of its own in time: the time limit of the status does not end a read
 /// that waits for ever, so a test that hangs is the failure.
+#[cfg(unix)]
 fn in_time(folder: &Path) -> Result<GitStatus, GitError> {
     let folder = folder.to_path_buf();
 
@@ -27,6 +29,7 @@ fn in_time(folder: &Path) -> Result<GitStatus, GitError> {
 }
 
 /// A folder `sub` of the repository's work tree that has a `.git` folder with an `objects` and `refs`, and a file.
+#[cfg(unix)]
 fn nested_git_dir(repo: &super::fixture::Repo) -> std::path::PathBuf {
     let nested = repo.path("sub/.git");
     fs::create_dir_all(nested.join("objects")).expect("objects");
@@ -36,6 +39,7 @@ fn nested_git_dir(repo: &super::fixture::Repo) -> std::path::PathBuf {
     nested
 }
 
+#[cfg(unix)]
 fn assert_sub_is_untracked(answer: Result<GitStatus, GitError>, what: &str) {
     let answer = answer.unwrap_or_else(|error| panic!("{what}: {error:?}"));
 

@@ -4,6 +4,7 @@
   import { preferences } from '$lib/shell/preferences.svelte';
   import { type Decoded, drawDecoded } from '$lib/viewer/decoded';
 
+  import { shows } from './columns';
   import type { Cell } from './extras';
   import { displayName, formatDate, iconClass, splitName } from './format';
   import type { InlineRename } from './inlineRename.svelte';
@@ -58,7 +59,7 @@
     modified: !plain && preferences.value.showModified,
     dimensions: !plain && preferences.value.showDimensions,
     checksum: !plain && preferences.value.showChecksum,
-    git: !plain && preferences.value.showGit,
+    git: !plain && shows('git', preferences.value),
   });
 
   /** The tooltip of a name: where a link points; in the brief and thumbnails layouts the whole name, which may be cut short. */

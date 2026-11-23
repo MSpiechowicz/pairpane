@@ -63,6 +63,9 @@ sha2 = { version = "0.10.9", default-features = false }
 md-5 = { version = "0.10.6", default-features = false }
 crc32fast = { version = "1.5.5", default-features = false, features = ["std"] }
 uzers = { version = "0.12.2", default-features = false, features = ["cache"] }
+# Unicode normalisation (NFC) for the names of folders that a case-insensitive file system (macOS) reads as one (pairpane_core::gitstatus::names);
+# already in the lockfile through gix-utils.
+unicode-normalization = { version = "0.1.26", default-features = false }
 # Windows only: the identity of a file or folder (volume serial number and file index, from a handle the caller opens
 # without following links), so two spellings of one place (8.3 names, case, a volume GUID path) compare equal. A safe
 # API over `winapi-util`; both are in the lockfile already through `walkdir`.

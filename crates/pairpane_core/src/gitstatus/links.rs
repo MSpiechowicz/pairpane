@@ -1,15 +1,19 @@
 //! Looking at a path the way the system will resolve it, before it is opened. A repository names places (a `gitdir:` pointer,
 //! a `commondir`, an alternate object folder, a `.git` that is a link), and a path is not what it looks like: a link in the
 //! middle leads somewhere else, and a `..` after a link goes up from where the link leads, not from where it stands. So a
-//! path is resolved one component at a time with `lstat` and `readlink` only, and every hop is checked against the folders
-//! macOS mounts a network share into on first use (see [`is_automount`]) *before* it is followed, and not only the path as it
-//! was written. On Windows the same is done by [`platform::resolve_local`], which also knows network and device paths.
+//! path is resolved one component at a time with `lstat` and `readlink` only, and every hop is checked against the folders a
+//! network share is mounted into on first use (by name, and by asking the folder that is about to be entered which file system
+//! it is: see [`automount`]) *before* it is followed, and not only the path as it was written. On Windows the same is done by
+//! [`platform::resolve_local`], which also knows network and device paths.
 
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use super::automount::is_automount;
 use crate::listing::platform;
 
+#[cfg(not(windows))]
+use super::automount::{is_autofs, is_automount_with};
 #[cfg(not(windows))]
 use std::ffi::OsString;
 use std::fs;
@@ -45,38 +49,6 @@ pub(super) fn normalise(path: &Path) -> PathBuf {
     out
 }
 
-/// Whether `place` is under a folder the system mounts a network share into on first use (macOS `/net`, `/Network` and `/home`,
-/// which is an autofs mount point there, also as seen through the data volume), after its `..` are taken out. Never on Windows,
-/// where the same names are ordinary folders, and `/home` is one on Linux.
-/// A link on the way is not looked at here; see [`resolve`].
-pub(super) fn is_automount(place: &Path) -> bool {
-    if cfg!(windows) {
-        return false;
-    }
-
-    let place = normalise(place);
-    let mut names = place.components().filter_map(|component| match component {
-        Component::Normal(name) => name.to_str(),
-        _ => None,
-    });
-
-    match names.next() {
-        Some("net" | "Network") => true,
-        Some("home") => cfg!(target_os = "macos"),
-        Some("System") => {
-            let rest: Vec<_> = names.take(3).collect();
-
-            matches!(rest.as_slice(), ["Volumes", "Data", _]) && rest.last().is_some_and(|name| automounted(name))
-        }
-        _ => false,
-    }
-}
-
-/// Whether the name `name` of the data volume's top folder is an automount point (`net` and `Network`, and on macOS `home`).
-fn automounted(name: &str) -> bool {
-    matches!(name, "net" | "Network") || (name == "home" && cfg!(target_os = "macos"))
-}
-
 /// The path that the absolute `path` finally leads to, with every link on it followed one at a time and every hop checked
 /// before it is followed (an automounted network folder, too many links). `InvalidInput` says a hop must not be followed;
 /// `NotFound` that a name on the way is not there (the path is not a network place then, but it leads nowhere either).
@@ -87,15 +59,32 @@ fn automounted(name: &str) -> bool {
 /// for, which no look at its text can tell, so any such path is odd.
 #[cfg(not(windows))]
 pub(super) fn resolve(path: &Path) -> io::Result<PathBuf> {
-    match walk(path) {
+    resolved(path, &mut is_autofs)
+}
+
+/// [`resolve`] for the helper, which runs confined: the folders it is allowed to open are the ones of the repository, and the
+/// ones above them it may only look at (macOS's sandbox says so), so it cannot ask the file system of each folder it passes
+/// whether that is autofs. The names are checked as ever, and the parent has asked of every folder of every path it looked at
+/// before the helper was started.
+#[cfg(not(windows))]
+pub(super) fn resolve_confined(path: &Path) -> io::Result<PathBuf> {
+    resolved(path, &mut |_| false)
+}
+
+/// [`resolve`] with `is_autofs` as the answer to whether a folder that is about to be entered is an autofs mount point.
+#[cfg(not(windows))]
+fn resolved(path: &Path, is_autofs: &mut dyn FnMut(&Path) -> bool) -> io::Result<PathBuf> {
+    match walk_with(path, cfg!(target_os = "macos"), is_autofs) {
         Err(error) if leads_nowhere(&error) && fs::metadata(path).is_ok() => Err(refused()),
         other => other,
     }
 }
 
-/// The walk of [`resolve`].
+/// The walk of [`resolve`] for a system that is macOS or is not (`macos`: see [`is_automount_with`]), with `is_autofs` as the
+/// answer to whether a folder that is about to be entered is an autofs mount point. It is asked of every real folder the path goes
+/// through, after that folder was looked at and before anything below it is.
 #[cfg(not(windows))]
-fn walk(path: &Path) -> io::Result<PathBuf> {
+fn walk_with(path: &Path, macos: bool, is_autofs: &mut dyn FnMut(&Path) -> bool) -> io::Result<PathBuf> {
     if !path.is_absolute() {
         return Err(refused());
     }
@@ -115,13 +104,19 @@ fn walk(path: &Path) -> io::Result<PathBuf> {
             }
             Step::Name(name) => {
                 resolved.push(&name);
-                if is_automount(&resolved) {
+                if is_automount_with(&resolved, macos) {
                     return Err(refused());
                 }
                 let metadata = match fs::symlink_metadata(&resolved) {
                     Ok(metadata) => metadata,
-                    Err(error) => return Err(unreachable_or_automount(error, resolved, todo)),
+                    Err(error) => return Err(unreachable_or_automount(error, resolved, todo, macos)),
                 };
+
+                // A folder that is about to be entered: whatever its name is, it must not be a mount point that mounts a share when
+                // something below it is looked up.
+                if metadata.is_dir() && is_autofs(&resolved) {
+                    return Err(refused());
+                }
                 if !metadata.file_type().is_symlink() {
                     continue;
                 }
@@ -147,7 +142,7 @@ fn walk(path: &Path) -> io::Result<PathBuf> {
 /// may still lead into an automounted folder on a machine where that exists (`/System/Volumes/Data/net` is not there on Linux),
 /// and so the rest is read as written, and refused when it does.
 #[cfg(not(windows))]
-fn unreachable_or_automount(error: io::Error, mut at: PathBuf, rest: Vec<Step>) -> io::Error {
+fn unreachable_or_automount(error: io::Error, mut at: PathBuf, rest: Vec<Step>, macos: bool) -> io::Error {
     for step in rest.into_iter().rev() {
         match step {
             Step::Root => return error,
@@ -156,12 +151,22 @@ fn unreachable_or_automount(error: io::Error, mut at: PathBuf, rest: Vec<Step>) 
         }
     }
 
-    if is_automount(&at) { refused() } else { error }
+    if is_automount_with(&at, macos) {
+        refused()
+    } else {
+        error
+    }
 }
 
 /// See the other `resolve`: on Windows every link on the way is read and checked by [`platform::resolve_local`].
 #[cfg(windows)]
 pub(super) fn resolve(path: &Path) -> io::Result<PathBuf> {
+    platform::resolve_local(path)
+}
+
+/// See the other `resolve_confined`: on Windows [`resolve`] is all there is.
+#[cfg(windows)]
+pub(super) fn resolve_confined(path: &Path) -> io::Result<PathBuf> {
     platform::resolve_local(path)
 }
 
@@ -271,222 +276,5 @@ fn steps(path: &Path) -> impl DoubleEndedIterator<Item = Step> {
 }
 
 #[cfg(all(test, not(windows)))]
-mod tests {
-    use std::os::unix::fs::symlink;
-
-    use super::*;
-
-    #[test]
-    fn dots_are_taken_out_by_reading_the_path() {
-        for (text, flat) in [
-            ("/a/b/../c", "/a/c"),
-            ("/a/./b", "/a/b"),
-            ("/../a", "/a"),
-            ("/a/../..", "/"),
-            ("a/../../b", "../b"),
-            ("/net/../srv", "/srv"),
-        ] {
-            assert_eq!(normalise(Path::new(text)), PathBuf::from(flat), "{text}");
-        }
-    }
-
-    #[test]
-    fn an_automounted_folder_is_found_whatever_dots_lead_to_it() {
-        for text in [
-            "/net/host/x",
-            "/srv/../net/host",
-            "/srv/x/../../Network/Servers",
-            "/./net",
-            "/System/Volumes/Data/net/host",
-            "/home/../System/Volumes/Data/Network/x",
-        ] {
-            assert!(is_automount(Path::new(text)), "{text}");
-            assert!(!is_local(Path::new(text)), "{text}");
-        }
-        for text in ["/srv/net/x", "/net2", "/network"] {
-            assert!(!is_automount(Path::new(text)), "{text}");
-        }
-        // `/home` is an automount point on macOS (autofs), and an ordinary folder elsewhere.
-        for text in ["/home/x", "/srv/../home", "/System/Volumes/Data/home"] {
-            assert_eq!(is_automount(Path::new(text)), cfg!(target_os = "macos"), "{text}");
-        }
-    }
-
-    #[test]
-    fn a_link_may_be_followed_unless_a_dots_comes_straight_after_it() {
-        let folder = crate::gitstatus::testing::tempdir();
-        let root = gix::path::realpath(folder.path()).expect("its real path");
-        fs::create_dir_all(root.join("real/inner")).expect("folders");
-        symlink("real", root.join("via")).expect("a link");
-        symlink("inner", root.join("real/to-inner")).expect("a link");
-
-        for (path, physical, followable) in [
-            ("real/inner", true, true),
-            ("via/inner", false, true),
-            // A real folder of what the link leads to, and back out of it.
-            ("via/inner/..", false, true),
-            ("real/inner/../x", true, true),
-            // Straight after a link: the system goes up from the link's target, gix from the link.
-            ("via/..", false, false),
-            ("via/../real", false, false),
-            ("real/to-inner/..", false, false),
-            // Not there, then a dots.
-            ("via/none/..", false, false),
-        ] {
-            let path = root.join(path);
-
-            assert_eq!(is_physical(&path), physical, "{path:?}");
-            assert_eq!(is_followable(&path), followable, "{path:?}");
-        }
-        assert!(!is_followable(Path::new("relative/path")));
-    }
-
-    #[test]
-    fn a_hop_to_an_automounted_folder_is_found_even_when_the_dots_after_it_lead_back() {
-        // Read lexically `/net/../srv` is `/srv`, but the system goes through `/net` to get to the root again.
-        assert!(!is_local(Path::new("/net/../srv")));
-    }
-
-    #[test]
-    fn a_link_that_leads_to_an_automounted_folder_is_refused_at_any_hop() {
-        let folder = crate::gitstatus::testing::tempdir();
-        let root = gix::path::realpath(folder.path()).expect("its real path");
-        symlink("/net/host/export", root.join("direct")).expect("a link");
-        symlink(root.join("direct"), root.join("second")).expect("a link");
-        symlink("second", root.join("third")).expect("a link");
-        fs::create_dir(root.join("real")).expect("a folder");
-        symlink("/System/Volumes/Data/Network", root.join("real/inside")).expect("a link");
-
-        for name in ["direct", "second", "third", "third/deeper", "real/inside/x"] {
-            assert!(!is_local(&root.join(name)), "{name}");
-            assert_eq!(
-                resolve(&root.join(name)).expect_err(name).kind(),
-                io::ErrorKind::InvalidInput,
-                "{name}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_link_to_a_local_place_is_followed_to_where_it_leads() {
-        let folder = crate::gitstatus::testing::tempdir();
-        let root = gix::path::realpath(folder.path()).expect("its real path");
-        fs::create_dir_all(root.join("a/b")).expect("folders");
-        fs::write(root.join("a/b/file"), b"x").expect("a file");
-        symlink("a/b", root.join("one")).expect("a link");
-        symlink(root.join("one"), root.join("two")).expect("a link");
-        symlink("..", root.join("a/b/up")).expect("a link");
-
-        assert_eq!(
-            resolve(&root.join("two/file")).expect("resolved"),
-            root.join("a/b/file")
-        );
-        // `..` goes up from where the link leads: `one/..` is `a`, and not the folder that holds `one`.
-        assert_eq!(resolve(&root.join("one/..")).expect("resolved"), root.join("a"));
-        assert_eq!(resolve(&root.join("a/b/up/b")).expect("resolved"), root.join("a/b"));
-        assert!(is_local(&root.join("two")));
-    }
-
-    #[test]
-    fn a_path_that_leads_nowhere_is_local_and_a_loop_of_links_is_not() {
-        let folder = crate::gitstatus::testing::tempdir();
-        let root = gix::path::realpath(folder.path()).expect("its real path");
-        fs::write(root.join("file"), b"x").expect("a file");
-        symlink("loop-b", root.join("loop-a")).expect("a link");
-        symlink("loop-a", root.join("loop-b")).expect("a link");
-        symlink("gone", root.join("dangling")).expect("a link");
-
-        assert_eq!(
-            resolve(&root.join("none/deeper")).expect_err("missing").kind(),
-            io::ErrorKind::NotFound
-        );
-        assert!(is_local(&root.join("none/deeper")));
-        assert!(
-            is_local(&root.join("file/deeper")),
-            "a file is no folder: nothing is there"
-        );
-        assert!(is_local(&root.join("dangling")));
-        assert!(!is_local(&root.join("loop-a")));
-        assert!(
-            !is_local(Path::new("relative/path")),
-            "a path that is not absolute cannot be checked"
-        );
-    }
-
-    #[test]
-    fn a_path_is_physical_when_no_link_is_on_it_and_dots_follow_real_folders_only() {
-        let folder = crate::gitstatus::testing::tempdir();
-        let root = gix::path::realpath(folder.path()).expect("its real path");
-        fs::create_dir_all(root.join("a/b")).expect("folders");
-        fs::write(root.join("a/file"), b"x").expect("a file");
-        symlink("a/b", root.join("link")).expect("a link");
-
-        for physical in ["a/b", "a/b/../b", "a/./b", "a/none", "none/deeper", "a/file", "a/b/.."] {
-            assert!(is_physical(&root.join(physical)), "{physical}");
-        }
-        for odd in [
-            "link",
-            "link/..",
-            "link/../a",
-            "a/link2/../b",
-            "none/../a",
-            "a/file/../b",
-            "a/none/../b",
-        ] {
-            assert!(!is_physical(&root.join(odd)), "{odd}");
-        }
-        assert!(!is_physical(Path::new("relative")));
-        assert!(is_physical(Path::new("/")));
-    }
-
-    #[test]
-    fn a_path_whose_dots_the_link_would_read_differently_is_not_physical_and_resolves_elsewhere() {
-        // The auditor's `lexical` fixture: gix reads `l/../real` as `w/real`, the system as `x/real`.
-        let folder = crate::gitstatus::testing::tempdir();
-        let root = gix::path::realpath(folder.path()).expect("its real path");
-        fs::create_dir_all(root.join("x/y")).expect("folders");
-        fs::create_dir(root.join("x/real")).expect("a folder");
-        fs::create_dir(root.join("real")).expect("a folder");
-        symlink("x/y", root.join("l")).expect("a link");
-        let path = root.join("l/../real");
-
-        assert!(!is_physical(&path));
-        assert_eq!(resolve(&path).expect("resolved"), root.join("x/real"));
-        assert_ne!(resolve(&path).expect("resolved"), normalise(&path));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_magic_link_that_is_no_path_is_refused_and_never_leads_nowhere() {
-        use std::os::fd::AsRawFd;
-
-        let folder = crate::gitstatus::testing::tempdir();
-        let root = gix::path::realpath(folder.path()).expect("its real path");
-        let (reader, writer) = std::io::pipe().expect("a pipe");
-        let at = format!("/proc/self/fd/{}", reader.as_raw_fd());
-        symlink(&at, root.join("to-pipe")).expect("a link");
-        symlink(format!("/proc/self/fd/{}", writer.as_raw_fd()), root.join("to-writer")).expect("a link");
-
-        for name in ["to-pipe", "to-writer"] {
-            let error = resolve(&root.join(name)).expect_err(name);
-
-            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{name}");
-            assert!(!is_local(&root.join(name)), "{name}");
-        }
-        assert_eq!(
-            resolve(Path::new(&at)).expect_err("the pipe itself").kind(),
-            io::ErrorKind::InvalidInput
-        );
-
-        // A deleted file is the same: the link's text is a path that is not there, and the system opens the file.
-        let gone = root.join("gone");
-        let file = fs::File::create(&gone).expect("a file");
-        fs::remove_file(&gone).expect("removed");
-        let at = format!("/proc/self/fd/{}", file.as_raw_fd());
-
-        assert_eq!(
-            resolve(Path::new(&at)).expect_err("deleted").kind(),
-            io::ErrorKind::InvalidInput
-        );
-    }
-}
+#[path = "links_tests.rs"]
+mod tests;

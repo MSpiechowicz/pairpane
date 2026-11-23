@@ -99,6 +99,20 @@ pub(super) fn folder(path: &Path) -> Seen<()> {
     }
 }
 
+/// Whether the folder or file `path` belongs to the user who runs the app, as `lstat` says (the effective user, as git's own check
+/// of the owner has it; Windows has no such check here, see the module docs of [`super`]). An error is the one `lstat` gave.
+#[cfg(unix)]
+pub(super) fn owned_by_user(path: &Path) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+
+    Ok(fs::symlink_metadata(path)?.uid() == rustix::process::geteuid().as_raw())
+}
+
+#[cfg(not(unix))]
+pub(super) fn owned_by_user(_path: &Path) -> io::Result<bool> {
+    Ok(true)
+}
+
 /// A symbolic link, or on Windows any reparse point that names another place (a junction, a mount point).
 fn is_link(metadata: &Metadata) -> bool {
     metadata.file_type().is_symlink() || is_reparse_point(metadata)

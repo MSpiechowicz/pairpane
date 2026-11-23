@@ -4349,6 +4349,7 @@ dependencies = [
  "tracing",
  "trash",
  "ts-rs",
+ "unicode-normalization",
  "uzers",
  "winapi-util",
  "windows",

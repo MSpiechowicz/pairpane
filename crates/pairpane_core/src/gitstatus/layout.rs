@@ -8,7 +8,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::files;
-use super::links::{normalise, resolve};
+use super::links::{normalise, resolve_confined};
+use super::names::{equals, starts_with};
 
 /// The folders of a repository that was found, as gix is to open them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,7 +102,7 @@ impl Layout {
 
         [&self.workdir, &self.git_dir, &self.common_dir]
             .into_iter()
-            .any(|folder| is_too_broad_with(folder, home.as_deref()))
+            .any(|folder| is_too_broad_with(folder, home.as_deref(), cfg!(target_os = "macos")))
     }
 
     /// Whether the repository gix opened is the one that was looked at: the same git folder, common folder and work tree,
@@ -114,29 +115,80 @@ impl Layout {
     }
 }
 
-/// The user's home folder as the system resolves it, where the search for a repository ends.
+/// The user's home folder as the system resolves it, where the search for a repository ends: the one `HOME` names, or, when
+/// that is not set or is not a folder that is there, the one the user database (`getpwuid`) says.
 pub(super) fn home() -> Option<PathBuf> {
-    std::env::home_dir().and_then(|home| gix::path::realpath(home).ok())
+    home_from(std::env::home_dir(), user_database_home)
+}
+
+/// The home folder from `named` (what the environment says) as the system resolves it, else from `database` (asked only then).
+fn home_from(named: Option<PathBuf>, database: impl FnOnce() -> Option<PathBuf>) -> Option<PathBuf> {
+    // `realpath` of a folder that is not there is the path itself, so the folder is looked at too.
+    let resolved = |home: PathBuf| gix::path::realpath(home).ok().filter(|home| home.is_dir());
+
+    named.and_then(resolved).or_else(|| database().and_then(resolved))
+}
+
+/// The home folder of the user who runs the app, as the user database has it.
+#[cfg(unix)]
+fn user_database_home() -> Option<PathBuf> {
+    use uzers::os::unix::UserExt;
+
+    uzers::get_user_by_uid(uzers::get_current_uid()).map(|user| user.home_dir().to_path_buf())
+}
+
+#[cfg(not(unix))]
+fn user_database_home() -> Option<PathBuf> {
+    None
 }
 
 /// Whether `folder` is too broad to be given to the helper to read: the root or a drive root, the user's home folder or a
-/// folder above it (everything of the user's would be readable), or a place on a file system of the kernel's own (`/proc`,
-/// `/sys`: a repository is not there, and what is, is what the kernel makes up).
+/// folder above it (everything of the user's would be readable), a folder that every user shares (`/tmp`, `/var/tmp`, `/dev/shm`,
+/// `/run/user/<uid>`, `/mnt`, `/media`: a repository whose own folder is one of them would be everything that anyone left
+/// there; the folders below them are fine), or a place on a file system of the kernel's own (`/proc`, `/sys`: a repository is not
+/// there, and what is, is what the kernel makes up).
 pub(super) fn is_too_broad(folder: &Path) -> bool {
-    is_too_broad_with(folder, home().as_deref())
+    is_too_broad_with(folder, home().as_deref(), cfg!(target_os = "macos"))
 }
 
-/// [`is_too_broad`] with the home folder given (`None`: not known).
-pub(super) fn is_too_broad_with(folder: &Path, home: Option<&Path>) -> bool {
+/// [`is_too_broad`] with the home folder given (`None`: not known), and whether this is macOS (`macos`: names are compared without
+/// regard to case and to the way Unicode spells them, as its file system does; see [`super::names`]).
+pub(super) fn is_too_broad_with(folder: &Path, home: Option<&Path>, macos: bool) -> bool {
     let folder = normalise(folder);
 
-    folder.parent().is_none() || home.is_some_and(|home| home.starts_with(&folder)) || files::on_pseudo_path(&folder)
+    folder.parent().is_none()
+        || home.is_some_and(|home| starts_with(home, &folder, macos))
+        || shared_folders().iter().any(|shared| equals(&folder, shared, macos))
+        || files::on_pseudo_path(&folder)
+}
+
+/// The folders that are shared by every user of the machine, as they are spelled on Linux and (resolved) on macOS.
+#[cfg(unix)]
+fn shared_folders() -> Vec<PathBuf> {
+    let user = PathBuf::from(format!("/run/user/{}", rustix::process::getuid().as_raw()));
+    let fixed = [
+        "/tmp",
+        "/var/tmp",
+        "/dev/shm",
+        "/mnt",
+        "/media",
+        "/private/tmp",
+        "/private/var/tmp",
+    ];
+
+    fixed.into_iter().map(PathBuf::from).chain([user]).collect()
+}
+
+/// Windows has no such folders by a fixed name.
+#[cfg(not(unix))]
+fn shared_folders() -> Vec<PathBuf> {
+    Vec::new()
 }
 
 /// Whether two paths are the same place once the system has resolved both (and, on macOS, once they are precomposed, which
 /// gix does to the paths of a repository that asks for it).
 fn same(opened: &Path, looked_at: &Path) -> bool {
-    let (Ok(opened), Ok(looked_at)) = (resolve(opened), resolve(looked_at)) else {
+    let (Ok(opened), Ok(looked_at)) = (resolve_confined(opened), resolve_confined(looked_at)) else {
         return false;
     };
 
@@ -169,15 +221,95 @@ mod tests {
         };
 
         for broad in [Path::new(root), home.parent().expect("a parent"), home.as_path()] {
-            assert!(is_too_broad_with(broad, Some(&home)), "{broad:?}");
+            assert!(is_too_broad_with(broad, Some(&home), false), "{broad:?}");
         }
         for fine in [below.as_path(), elsewhere.as_path()] {
-            assert!(!is_too_broad_with(fine, Some(&home)), "{fine:?}");
+            assert!(!is_too_broad_with(fine, Some(&home), false), "{fine:?}");
         }
         // Dots are read away first, and an unknown home folder leaves the root and the file systems of the kernel.
-        assert!(is_too_broad_with(&below.join("../.."), Some(&home)));
-        assert!(is_too_broad_with(Path::new(root), None));
-        assert!(!is_too_broad_with(&home, None));
+        assert!(is_too_broad_with(&below.join("../.."), Some(&home), false));
+        assert!(is_too_broad_with(Path::new(root), None, false));
+        assert!(!is_too_broad_with(&home, None, false));
+    }
+
+    #[test]
+    fn the_home_folder_is_compared_without_regard_to_case_on_macos_only() {
+        let home = PathBuf::from("/Users/Ann");
+
+        for spelled in ["/users/ann", "/USERS", "/users/ANN", "/Users/An\u{6E}"] {
+            assert!(is_too_broad_with(Path::new(spelled), Some(&home), true), "{spelled}");
+        }
+        // Where names are case-sensitive `/users/ann` is another folder than the home folder; `/USERS` is not above it.
+        for spelled in ["/users/ann", "/USERS", "/users/ANN"] {
+            assert!(!is_too_broad_with(Path::new(spelled), Some(&home), false), "{spelled}");
+        }
+        // A folder below the home folder is fine on both.
+        assert!(!is_too_broad_with(Path::new("/USERS/ann/work"), Some(&home), true));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_folders_every_user_shares_are_too_broad_themselves_and_what_is_below_them_is_not() {
+        let user = format!("/run/user/{}", rustix::process::getuid().as_raw());
+        let home = Path::new("/home/a");
+
+        for shared in [
+            "/tmp",
+            "/tmp/",
+            "/var/tmp",
+            "/dev/shm",
+            "/mnt",
+            "/media",
+            "/private/tmp",
+            "/private/var/tmp",
+            user.as_str(),
+            // Dots are read away first.
+            "/srv/../tmp",
+        ] {
+            assert!(is_too_broad_with(Path::new(shared), Some(home), false), "{shared}");
+        }
+        for fine in [
+            "/tmp/repo",
+            "/var/tmp/x/y",
+            "/dev/shm/repo",
+            "/mnt/disk",
+            "/media/usb",
+            "/private/tmp/work",
+            "/run/user/0/x",
+            "/run/user",
+            "/tmpx",
+            "/var",
+        ] {
+            assert!(!is_too_broad_with(Path::new(fine), Some(home), false), "{fine}");
+        }
+        // On macOS `/TMP` is `/tmp` too.
+        assert!(is_too_broad_with(Path::new("/PRIVATE/TMP"), Some(home), true));
+        assert!(!is_too_broad_with(Path::new("/PRIVATE/TMP"), Some(home), false));
+    }
+
+    #[test]
+    fn the_home_folder_is_the_one_the_environment_names_and_else_the_user_database_has() {
+        let folder = crate::gitstatus::testing::tempdir();
+        let there = gix::path::realpath(folder.path()).expect("its real path");
+        let gone = there.join("not-there");
+        let database = there.join("database");
+        std::fs::create_dir(&database).expect("a folder");
+        let database_real = gix::path::realpath(&database).expect("its real path");
+
+        // `HOME` is a folder that is there: the database is not asked.
+        assert_eq!(
+            home_from(Some(there.clone()), || panic!("not asked")),
+            Some(there.clone())
+        );
+        // `HOME` is set but the folder is gone, or it is not set at all: the user database says.
+        assert_eq!(
+            home_from(Some(gone.clone()), || Some(database.clone())),
+            Some(database_real.clone())
+        );
+        assert_eq!(home_from(None, || Some(database.clone())), Some(database_real));
+        // Neither is a folder that is there.
+        assert_eq!(home_from(Some(gone.clone()), || Some(gone)), None);
+        assert_eq!(home_from(None, || None), None);
     }
 
     #[cfg(target_os = "linux")]
@@ -185,7 +317,7 @@ mod tests {
     fn a_folder_on_a_file_system_of_the_kernel_is_too_broad() {
         for folder in ["/proc", "/proc/self", "/sys", "/sys/kernel"] {
             if Path::new(folder).is_dir() {
-                assert!(is_too_broad_with(Path::new(folder), None), "{folder}");
+                assert!(is_too_broad_with(Path::new(folder), None, false), "{folder}");
             }
         }
     }

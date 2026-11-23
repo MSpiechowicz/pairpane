@@ -1,5 +1,6 @@
 import type { Preferences } from '$lib/ipc/bindings/Preferences';
 
+import { isWindowsPlatform } from './keys';
 import type { SortColumn } from './order';
 
 /** One column of the detailed layout besides the name. */
@@ -30,9 +31,14 @@ export const COLUMNS: readonly ColumnSpec[] = [
   { column: 'git', label: 'Git', cell: 'gt', shownBy: 'showGit', width: '44px', narrow: false },
 ];
 
+/** Whether the settings show the column of `spec` here: the Git column is not there on Windows (yet), whatever was saved in the settings. */
+function isOn(spec: ColumnSpec, preferences: Readonly<Preferences>): boolean {
+  return preferences[spec.shownBy] && !(spec.column === 'git' && isWindowsPlatform());
+}
+
 /** Whether the pane shows `column`; the name is always shown. */
 export function shows(column: SortColumn, preferences: Readonly<Preferences>): boolean {
-  return column === 'name' || COLUMNS.some((spec) => spec.column === column && preferences[spec.shownBy]);
+  return column === 'name' || COLUMNS.some((spec) => spec.column === column && isOn(spec, preferences));
 }
 
 /** The icon and the name, which are always there. */
@@ -43,7 +49,7 @@ const FIXED = '20px minmax(0, 1fr)';
  * header has them. The narrow layout drops the columns that do not stay in it, whatever the settings say about them.
  */
 export function columnTracks(preferences: Readonly<Preferences>): { full: string; narrow: string } {
-  const shown = COLUMNS.filter((spec) => preferences[spec.shownBy]);
+  const shown = COLUMNS.filter((spec) => isOn(spec, preferences));
   const tracks = (specs: readonly ColumnSpec[]) => specs.map((spec) => ` ${spec.width}`).join('');
 
   return { full: `${FIXED}${tracks(shown)}`, narrow: `${FIXED}${tracks(shown.filter((spec) => spec.narrow))}` };

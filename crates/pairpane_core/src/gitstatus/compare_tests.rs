@@ -3,16 +3,12 @@
 
 use std::fs;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
 use std::time::{Duration, SystemTime};
 
-use gix::index::entry::Stage;
-
-use super::fixture::{Repo, Staged, pairs, within};
-use super::testing::status;
+use super::fixture::Staged;
 use super::tests::{clean, marks_with, owned};
 use super::*;
-use crate::model::GitMark::{Conflicted, Modified, Staged as Added};
+use crate::model::GitMark::Modified;
 
 fn marks(folder: &Path, limits: Limits) -> Vec<(String, crate::model::GitMark)> {
     marks_with(folder, limits)
@@ -61,8 +57,14 @@ fn a_file_changed_within_the_second_of_the_index_is_found_and_one_that_is_not_ra
 #[cfg(unix)]
 mod unix {
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::AtomicBool;
 
+    use gix::index::entry::Stage;
+
+    use super::super::fixture::{Repo, pairs, within};
+    use super::super::testing::status;
     use super::*;
+    use crate::model::GitMark::{Conflicted, Staged as Added};
     use crate::view::testing::fifo;
 
     /// The marks of the repository's folder, read on a thread that has to answer.

@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use super::budget::SOURCE_BYTES;
 use super::files::{self, Seen};
+use super::gate::{Gate, Halt};
 use super::layout::Layout;
 use super::locate::POINTER_BYTES;
 use super::objects;
@@ -33,8 +34,11 @@ const PACKED_REFS_BYTES: u64 = 64 * 1024 * 1024;
 /// The most a ref may lead through with symbolic refs (gix's own limit is the same).
 const REF_HOPS: usize = 5;
 
-/// The most entries of one folder that is listed to be looked at (the pack folder, `.git`).
-const LISTED: usize = 16_384;
+/// The most entries of the folders that are listed to be looked at, over a whole repository: the loose objects, the packs, the
+/// incremental multi-pack index and the commit graphs of every object folder (its own and every alternate's), and the git folder.
+/// A repository with more is too big to read here (auto-gc keeps an ordinary one far below it). Each entry costs a look, and the
+/// alternates may name as many folders as they like, so this is what bounds the parent's work, whatever the repository says.
+pub(super) const ENTRIES: usize = 65_536;
 
 /// Why a repository must not be read.
 #[derive(Debug, PartialEq, Eq)]
@@ -43,8 +47,49 @@ pub(super) enum Refusal {
     Odd,
     /// A folder the repository names is too broad to give the helper to read (see [`super::layout::is_too_broad`]).
     Broad,
-    /// The index is over its cap.
+    /// A folder the repository names (an alternate object store) belongs to another user.
+    Owner,
+    /// The index is over its cap, or the repository has more entries than [`ENTRIES`].
     TooBig,
+    /// The look was stopped: the app is exiting, or the time limit is up.
+    Stopped(Halt),
+}
+
+impl From<Halt> for Refusal {
+    fn from(halt: Halt) -> Self {
+        Self::Stopped(halt)
+    }
+}
+
+/// What the look at one repository is held to: its gate (the exit flag and the time limit) and the entries it may still list
+/// ([`ENTRIES`]), the same for every folder of the repository.
+pub(super) struct Looking<'a> {
+    gate: Gate<'a>,
+    left: usize,
+}
+
+impl<'a> Looking<'a> {
+    pub(super) fn new(gate: Gate<'a>) -> Self {
+        Self::with_entries(gate, ENTRIES)
+    }
+
+    /// A look that may list `left` entries.
+    pub(super) fn with_entries(gate: Gate<'a>, left: usize) -> Self {
+        Self { gate, left }
+    }
+
+    /// The gate: whether the look may go on.
+    pub(super) fn gate(&self) -> Gate<'a> {
+        self.gate
+    }
+
+    /// Counts one more entry listed, after asking the gate: [`Refusal::TooBig`] past the cap.
+    fn count(&mut self) -> Result<(), Refusal> {
+        self.gate.check()?;
+        self.left = self.left.checked_sub(1).ok_or(Refusal::TooBig)?;
+
+        Ok(())
+    }
 }
 
 /// What the files of a repository add up to for the rules budget, and where its alternates are.
@@ -64,8 +109,8 @@ pub(super) fn fine<T>(seen: Seen<T>) -> Result<(), Refusal> {
 }
 
 /// Looks at every file of the repository that gix reads on opening it and on a status.
-pub(super) fn files(layout: &Layout) -> Result<Sources, Refusal> {
-    index(&layout.git_dir)?;
+pub(super) fn files(layout: &Layout, looking: &mut Looking<'_>) -> Result<Sources, Refusal> {
+    index(&layout.git_dir, looking)?;
 
     let mut folders = vec![layout.git_dir.as_path()];
     if layout.common_dir != layout.git_dir {
@@ -73,6 +118,7 @@ pub(super) fn files(layout: &Layout) -> Result<Sources, Refusal> {
     }
     let mut info_rules = 0;
     for folder in &folders {
+        looking.gate().check()?;
         // The ignore and attribute rules of the repository's own folder: read whole, as they are the first of the rules that
         // the budget of a status counts. One that is over the cap of a source is a repository too big to read.
         for name in ["info/exclude", "info/attributes"] {
@@ -86,6 +132,7 @@ pub(super) fn files(layout: &Layout) -> Result<Sources, Refusal> {
     }
 
     for config in [layout.common_dir.join("config"), layout.git_dir.join("config.worktree")] {
+        looking.gate().check()?;
         match files::read(&config, CONFIG_BYTES) {
             Seen::Missing | Seen::Plain(_) => {}
             Seen::Odd | Seen::Large => return Err(Refusal::Odd),
@@ -95,16 +142,16 @@ pub(super) fn files(layout: &Layout) -> Result<Sources, Refusal> {
     refs(layout)?;
 
     Ok(Sources {
-        alternates: objects::alternates(&layout.common_dir)?,
+        alternates: objects::alternates(&layout.common_dir, looking)?,
         info_rules,
     })
 }
 
 /// The index, and the shared index it may point to (a split index), which gix reads next to it.
-fn index(git_dir: &Path) -> Result<(), Refusal> {
+fn index(git_dir: &Path, looking: &mut Looking<'_>) -> Result<(), Refusal> {
     check_index(&git_dir.join("index"))?;
 
-    listed(git_dir, |entry| {
+    listed(git_dir, looking, |entry| {
         if entry.file_name().to_string_lossy().starts_with("sharedindex.") {
             check_index(&entry.path())?;
         }
@@ -113,16 +160,20 @@ fn index(git_dir: &Path) -> Result<(), Refusal> {
     })
 }
 
-/// Goes through the entries of `folder` (not there: none), at most [`LISTED`] of them, with `each`.
-pub(super) fn listed(folder: &Path, mut each: impl FnMut(&fs::DirEntry) -> Result<(), Refusal>) -> Result<(), Refusal> {
+/// Goes through the entries of `folder` (not there: none) with `each`, every one counted in `looking` (which also asks its gate
+/// before each): past the entries a repository may have the look ends with [`Refusal::TooBig`].
+pub(super) fn listed(
+    folder: &Path,
+    looking: &mut Looking<'_>,
+    mut each: impl FnMut(&fs::DirEntry) -> Result<(), Refusal>,
+) -> Result<(), Refusal> {
+    looking.gate().check()?;
     let Ok(listing) = fs::read_dir(folder) else {
         return Ok(());
     };
 
-    for (position, entry) in listing.enumerate() {
-        if position >= LISTED {
-            return Err(Refusal::Odd);
-        }
+    for entry in listing {
+        looking.count()?;
 
         each(&entry.map_err(|_| Refusal::Odd)?)?;
     }

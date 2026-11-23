@@ -3,7 +3,7 @@
 //! looked at.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 use super::fixture::{Repo, pairs, within};
@@ -107,12 +107,64 @@ fn what_gix_opened_must_be_what_was_looked_at() {
     assert!(!layout(".git", ".git", ".git", repo.path("..").as_path()).is_opened(&opened));
 }
 
+#[test]
+fn a_folder_inside_a_git_folder_or_a_bare_repository_is_in_no_repository_and_has_no_note() {
+    let repo = clean(&[("a.txt", b"a")]);
+    let folder = crate::gitstatus::testing::tempdir();
+    let bare = folder.path().join("project.git");
+    gix::init_bare(&bare).expect("a bare repository");
+
+    for place in [
+        repo.git_dir().to_path_buf(),
+        repo.git_dir().join("objects"),
+        repo.git_dir().join("refs/heads"),
+        bare.clone(),
+        bare.join("objects"),
+        bare.join("refs"),
+    ] {
+        let answer = in_time(&place);
+
+        // Not "links git's own files elsewhere": nothing is linked anywhere.
+        assert!(!answer.repo, "{place:?}");
+        assert_eq!(answer.note, None, "{place:?}");
+    }
+}
+
 #[cfg(unix)]
 mod unix {
     use std::os::unix::fs::symlink;
+    use std::path::PathBuf;
 
     use super::*;
     use crate::view::testing::fifo;
+
+    #[test]
+    fn a_dot_git_that_cannot_be_looked_at_is_in_no_repository_and_has_no_note_and_one_that_leads_elsewhere_has() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let folder = crate::gitstatus::testing::tempdir();
+        let work = folder.path().join("work");
+        fs::create_dir_all(work.join("sub")).expect("folders");
+        symlink("/net/host/x/.git", work.join("sub/.git")).expect("a link");
+
+        // A `.git` that leads to a network place is a repository that is refused for what it names.
+        let answer = in_time(&work.join("sub"));
+        assert!(!answer.repo);
+        assert!(answer.note.is_some(), "{answer:?}");
+
+        // A folder whose `.git` cannot be looked at (nobody may search the folder) names nothing: no note.
+        if rustix::process::geteuid().is_root() {
+            eprintln!("skipped: the user is root, who may search any folder");
+
+            return;
+        }
+        fs::set_permissions(&work, fs::Permissions::from_mode(0o600)).expect("no search permission");
+        let answer = in_time(&work);
+        fs::set_permissions(&work, fs::Permissions::from_mode(0o700)).expect("permission back");
+
+        assert!(!answer.repo);
+        assert_eq!(answer.note, None, "{answer:?}");
+    }
 
     fn is_repo(folder: &Path) -> bool {
         in_time(folder).repo
