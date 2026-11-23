@@ -3,26 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { IpcFailure } from '$lib/ipc/transport';
 
 import { compareBackend, facts, finished, folder, MODIFIED, row, rows } from '../../../tests/compare';
+import { actions, ARCHIVE, paths, planned, ROOTS, setup, started } from '../../../tests/syncer';
 import { Syncer } from './syncer.svelte';
-
-const ROOTS = { left: folder('/left'), right: folder('/right') };
-const ARCHIVE = { kind: 'archive', archive: '/right/a.zip', dir: '' } as const;
-
-function setup(answers: Parameters<typeof compareBackend>[0] = {}, roots: Parameters<Syncer['show']>[0] = ROOTS) {
-  const backend = compareBackend(answers);
-  const syncer = new Syncer(backend.ipc);
-  syncer.show(roots, false);
-  return { ...backend, syncer };
-}
-
-/** Starts a scan and lets its answer (the id) arrive. */
-async function started(s: ReturnType<typeof setup>) {
-  await s.syncer.start();
-  return s.scans.at(-1)!;
-}
-
-const actions = (syncer: Syncer) => Array.from({ length: syncer.count }, (_, index) => syncer.at(index)?.action);
-const paths = (syncer: Syncer) => Array.from({ length: syncer.count }, (_, index) => syncer.at(index)?.row.path);
 
 describe('Syncer scan', () => {
   it('asks for the two folders with the options, and lists the rows as they stream in', async () => {
@@ -308,25 +290,10 @@ describe('Syncer filters', () => {
 });
 
 describe('Syncer apply', () => {
-  async function planned() {
-    const s = setup();
-    const scan = await started(s);
-    scan.emit(
-      rows(
-        row('new.txt', 'leftOnly', facts({ size: 100 }), null),
-        row('dir', 'rightOnly', null, facts({ kind: 'dir', size: 0, files: 3, bytes: 3000 })),
-        row('over.txt', 'leftNewer', facts({ size: 5, modified: 2000 }), facts({ size: 7, modified: 1000 })),
-        row('skip.txt', 'differs'),
-      ),
-    );
-    scan.emit(finished(4));
-    return s;
-  }
-
   it('adds up the copies of each direction, a one-sided folder with its subtree, and the files it replaces', async () => {
     const { syncer } = await planned();
 
-    expect(syncer.totals).toEqual({ toRight: { items: 2, bytes: 105 }, toLeft: { items: 1, bytes: 3000 }, overwrites: 1 });
+    expect(syncer.totals).toEqual({ toRight: { items: 2, bytes: 105 }, toLeft: { items: 1, bytes: 3000 }, overwrites: 1, removeLeft: { items: 0, bytes: 0 }, removeRight: { items: 0, bytes: 0 } });
   });
 
   it('asks for a confirmation only when something is to be copied', async () => {
@@ -361,6 +328,8 @@ describe('Syncer apply', () => {
             target: { kind: 'file', size: 7, modified: 1000 },
           },
         ],
+        removals: [],
+        permanent: false,
       },
     ]);
   });
@@ -370,7 +339,7 @@ describe('Syncer apply', () => {
 
     syncer.nameFilter = 'new.*; skip.txt';
 
-    expect(syncer.totals).toEqual({ toRight: { items: 1, bytes: 100 }, toLeft: { items: 0, bytes: 0 }, overwrites: 0 });
+    expect(syncer.totals).toEqual({ toRight: { items: 1, bytes: 100 }, toLeft: { items: 0, bytes: 0 }, overwrites: 0, removeLeft: { items: 0, bytes: 0 }, removeRight: { items: 0, bytes: 0 } });
     expect(syncer.withheld).toBe(2);
 
     await syncer.apply();

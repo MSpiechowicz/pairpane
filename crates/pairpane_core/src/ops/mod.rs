@@ -143,7 +143,9 @@ mod runnable;
 mod split;
 mod sync;
 mod sync_archive;
+mod sync_remove;
 mod sync_terms;
+mod sync_unlink;
 #[cfg(unix)]
 mod sync_write;
 mod task;
@@ -249,6 +251,10 @@ mod sync_archive_tests;
 mod sync_race_tests;
 #[cfg(test)]
 mod sync_refusal_tests;
+#[cfg(all(test, unix))]
+mod sync_remove_link_tests;
+#[cfg(test)]
+mod sync_remove_tests;
 #[cfg(test)]
 mod sync_tests;
 #[cfg(test)]
@@ -267,7 +273,7 @@ pub(crate) use open::create_new;
 pub(crate) use partial::{Partial, run_token};
 pub(crate) use plan::{Child, Kind, is_inside, read_children, real};
 pub use rename_log::RenameLog;
-pub use request::{AnswerError, PackJob, Refused, Request, SyncPlan, SyncRoot, Task, UnknownJob};
+pub use request::{AnswerError, PackJob, Refused, Request, SyncPlan, SyncRemove, SyncRoot, Task, UnknownJob};
 pub(crate) use transfer::MAX_DEPTH;
 pub use trash::{CAN_UNTRASH, Trashed, UntrashFailure};
 pub(crate) use validate::fold_case;

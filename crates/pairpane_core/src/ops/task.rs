@@ -49,8 +49,15 @@ impl Run<'_> {
             return self.rename_batch(targets, *undo, log);
         }
 
-        if let Task::Sync { left, right, plans } = task {
-            return self.sync(left, right, plans);
+        if let Task::Sync {
+            left,
+            right,
+            plans,
+            removals,
+            permanent,
+        } = task
+        {
+            return self.sync(left, right, plans, removals, *permanent);
         }
 
         let scene = self.prepare_task(task)?;

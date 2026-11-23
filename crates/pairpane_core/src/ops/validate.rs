@@ -4,11 +4,12 @@ use std::collections::HashSet;
 
 use crate::archive;
 use crate::listing::platform;
-use crate::model::{ArchiveFormat, AttributeChange, EntryKind, ModeChange, OpKind, PackFormat, SyncDirection};
+use crate::model::{ArchiveFormat, AttributeChange, EntryKind, ModeChange, OpKind, PackFormat, PaneId, SyncDirection};
 
 use super::transfer::MAX_DEPTH;
 use super::{
-    MAX_NAME_UNITS, MAX_NAMES, MAX_NAMES_BYTES, MIN_PART_SIZE, PackJob, Refused, Request, SyncPlan, SyncRoot, Task,
+    MAX_NAME_UNITS, MAX_NAMES, MAX_NAMES_BYTES, MIN_PART_SIZE, PackJob, Refused, Request, SyncPlan, SyncRemove,
+    SyncRoot, Task,
 };
 
 /// The Unix permission bits a mask of a mode change may use (with setuid, setgid and sticky).
@@ -92,7 +93,9 @@ pub(super) fn validate(request: &Request) -> Result<(), Refused> {
     } else if matches!(request.task, Task::Sync { .. }) {
         check_names_with(&request.names, is_sync_path)?;
 
-        if has_nested_names(&request.names) {
+        // One item copied and removed under two spellings of its name would be the same item where case is ignored.
+        let folded: HashSet<String> = request.names.iter().map(|name| fold_case(name)).collect();
+        if has_nested_names(&request.names) || folded.len() != request.names.len() {
             return Err(Refused::InvalidNames);
         }
     } else {
@@ -210,7 +213,13 @@ fn validate_task(request: &Request) -> Result<(), Refused> {
 
             true
         }
-        Task::Sync { left, right, plans } => sync_acceptable(left, right, plans, request.names.len()),
+        Task::Sync {
+            left,
+            right,
+            plans,
+            removals,
+            ..
+        } => sync_acceptable(left, right, plans, removals, request.names.len()),
     };
 
     if accepted { Ok(()) } else { Err(Refused::InvalidTask) }
@@ -246,9 +255,16 @@ fn check_targets(names: &[String], targets: &[String]) -> Result<(), Refused> {
 }
 
 /// Whether a synchronization can run: at most one side is an archive and it names an archive that is read and a folder
-/// that is normalized, there is one plan for each name, nothing is copied into an archive, and each plan copies a file
-/// over a file (or onto nothing) or a folder onto nothing.
-fn sync_acceptable(left: &SyncRoot, right: &SyncRoot, plans: &[SyncPlan], names: usize) -> bool {
+/// that is normalized, there is one plan or removal for each name, nothing is copied into an archive or removed from one,
+/// each plan copies a file over a file (or onto nothing) or a folder onto nothing, and each removal is of a file or a
+/// folder.
+fn sync_acceptable(
+    left: &SyncRoot,
+    right: &SyncRoot,
+    plans: &[SyncPlan],
+    removals: &[SyncRemove],
+    names: usize,
+) -> bool {
     let archives = [left, right]
         .into_iter()
         .filter(|root| matches!(root, SyncRoot::Archive { .. }));
@@ -263,8 +279,17 @@ fn sync_acceptable(left: &SyncRoot, right: &SyncRoot, plans: &[SyncPlan], names:
             SyncRoot::Folder => true,
         });
 
+    let side = |pane: PaneId| match pane {
+        PaneId::Left => left,
+        PaneId::Right => right,
+    };
+
     sound
-        && plans.len() == names
+        && plans.len().checked_add(removals.len()) == Some(names)
+        && removals.iter().all(|removal| {
+            matches!(side(removal.side), SyncRoot::Folder)
+                && matches!(removal.seen.kind, EntryKind::File | EntryKind::Dir)
+        })
         && plans.iter().all(|plan| {
             let target = match plan.direction {
                 SyncDirection::ToRight => right,

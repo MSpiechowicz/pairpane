@@ -6,7 +6,7 @@
   import { displayName, formatSize } from '$lib/panes/format';
   import Modal from '$lib/shell/Modal.svelte';
 
-  import { STATUS_TEXT } from './plan';
+  import { itemCount, STATUS_TEXT } from './plan';
   import SyncConfirm from './SyncConfirm.svelte';
   import SyncTable from './SyncTable.svelte';
   import type { Roots, Syncer, SyncSummary } from './syncer.svelte';
@@ -17,7 +17,8 @@
   const STATUSES = ['leftOnly', 'rightOnly', 'leftNewer', 'rightNewer', 'differs', 'equal'] as const;
 
   const totals = $derived(syncer.totals);
-  const planned = $derived(totals.toRight.items + totals.toLeft.items);
+  const planned = $derived(itemCount(totals));
+  const removing = $derived(totals.removeLeft.items + totals.removeRight.items);
 
   const count = (n: number, noun: string) => `${n.toLocaleString('en-US')} ${noun}${n === 1 ? '' : 's'}`;
 
@@ -119,6 +120,22 @@
       <button class="btn" type="button" disabled={syncer.picked === 0} aria-label="Copy picked rows to the right" onclick={() => syncer.chooseAll('toRight')}>→</button>
       <button class="btn" type="button" disabled={syncer.picked === 0} aria-label="Copy picked rows to the left" onclick={() => syncer.chooseAll('toLeft')}>←</button>
       <button class="btn" type="button" disabled={syncer.picked === 0} aria-label="Skip picked rows" onclick={() => syncer.chooseAll('skip')}>Skip</button>
+      <button class="btn" type="button" disabled={syncer.picked === 0} aria-label="Remove picked rows" onclick={() => syncer.chooseAll('remove')}>✕</button>
+      <span class="gap"></span>
+      <button
+        class="btn"
+        type="button"
+        disabled={syncer.count === 0}
+        title="Make the right side match the left: copy, and remove what only the right has"
+        onclick={() => syncer.mirror('toRight')}>Mirror →</button
+      >
+      <button
+        class="btn"
+        type="button"
+        disabled={syncer.count === 0}
+        title="Make the left side match the right: copy, and remove what only the left has"
+        onclick={() => syncer.mirror('toLeft')}>Mirror ←</button
+      >
       {#if syncer.notice}
         <span class="note" role="status">{displayName(syncer.notice)}</span>
       {/if}
@@ -126,9 +143,12 @@
 
     <p class="totals" role="status">
       {#if planned === 0}
-        Nothing is to be copied.
+        Nothing is to be copied or removed.
       {:else}
         → {count(totals.toRight.items, 'item')} · {formatSize(totals.toRight.bytes)} &nbsp; ← {count(totals.toLeft.items, 'item')} · {formatSize(totals.toLeft.bytes)}
+        {#if removing > 0}
+          &nbsp; ✕ {count(removing, 'item')} · {formatSize(totals.removeLeft.bytes + totals.removeRight.bytes)}
+        {/if}
       {/if}
     </p>
   </div>
@@ -167,6 +187,10 @@
 
   .bar {
     gap: 12px;
+  }
+
+  .gap {
+    flex: 1;
   }
 
   .status,

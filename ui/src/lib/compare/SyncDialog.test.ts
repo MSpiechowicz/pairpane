@@ -122,7 +122,7 @@ describe('SyncDialog', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Skip: a.txt' }));
 
-    expect(screen.getByText('Nothing is to be copied.')).toBeInTheDocument();
+    expect(screen.getByText('Nothing is to be copied or removed.')).toBeInTheDocument();
     expect(button('Synchronize')).toBeDisabled();
   });
 
@@ -307,5 +307,75 @@ describe('SyncDialog confirmation', () => {
     const asked = screen.getByRole('dialog', { name: 'Synchronize 1 item?' });
     expect(within(asked).getByText(/Nothing will be overwritten\./)).toBeInTheDocument();
     expect(within(asked).getByRole('button', { name: 'Synchronize' })).toHaveFocus();
+  });
+
+  describe('a mirror', () => {
+    async function mirrored() {
+      const s = open();
+      await scanned(
+        s,
+        row('new.txt', 'leftOnly', facts({ size: 10 }), null),
+        row('old.txt', 'rightOnly', null, facts({ size: 20 })),
+        row('old-dir', 'rightOnly', null, facts({ kind: 'dir', size: 0, files: 2, bytes: 30 })),
+      );
+      await fireEvent.click(button('Mirror →'));
+      await fireEvent.click(button('Synchronize'));
+      return s;
+    }
+
+    const asked = () => screen.getByRole('dialog', { name: 'Synchronize 3 items?' });
+
+    it('lists every item it removes, says how many, and sends them to the Trash', async () => {
+      const s = await mirrored();
+
+      expect(within(asked()).getByText(/Remove 2 items \(50 B\) from the right, to the Trash\./)).toBeInTheDocument();
+      const listed = within(asked()).getByRole('list', { name: 'Items to remove' });
+      expect(within(listed).getAllByRole('listitem').map((item) => item.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+        'Right old.txt',
+        'Right old-dir',
+      ]);
+      expect(within(asked()).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+
+      await fireEvent.click(within(asked()).getByRole('button', { name: 'Synchronize' }));
+
+      await waitFor(() => expect(s.calls('ops_sync')).toHaveLength(1));
+      expect(s.calls('ops_sync')[0]).toMatchObject({
+        items: [{ path: 'new.txt', direction: 'toRight' }],
+        removals: [
+          { path: 'old.txt', side: 'right' },
+          { path: 'old-dir', side: 'right', files: 2, bytes: 30 },
+        ],
+        permanent: false,
+      });
+    });
+
+    it('deletes for good only after a second confirmation of its own; Back returns to the first', async () => {
+      const s = await mirrored();
+      await fireEvent.click(within(asked()).getByRole('checkbox', { name: 'Delete permanently instead of moving to the Trash' }));
+
+      await fireEvent.click(within(asked()).getByRole('button', { name: 'Continue…' }));
+
+      const second = screen.getByRole('dialog', { name: 'Delete 2 items permanently?' });
+      expect(within(second).getByText(/do not go to the Trash and cannot be restored/)).toBeInTheDocument();
+      expect(within(second).getByRole('button', { name: 'Back' })).toHaveFocus();
+      expect(s.calls('ops_sync')).toEqual([]);
+
+      await fireEvent.click(within(second).getByRole('button', { name: 'Back' }));
+      await fireEvent.click(within(asked()).getByRole('button', { name: 'Continue…' }));
+      await fireEvent.click(within(screen.getByRole('dialog', { name: 'Delete 2 items permanently?' })).getByRole('button', { name: 'Delete permanently' }));
+
+      await waitFor(() => expect(s.calls('ops_sync')).toHaveLength(1));
+      expect(s.calls('ops_sync')[0]).toMatchObject({ permanent: true });
+    });
+
+    it('a row can be set to removal on its own, and the totals say so', async () => {
+      const s = open();
+      await scanned(s, row('old.txt', 'rightOnly', null, facts({ size: 20 })));
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Remove: old.txt' }));
+
+      expect(screen.getByText(/✕ 1 item · 20 B/)).toBeInTheDocument();
+      expect(button('Synchronize')).toBeEnabled();
+    });
   });
 });

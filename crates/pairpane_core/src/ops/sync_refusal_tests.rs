@@ -102,6 +102,8 @@ fn a_copy_into_an_archive_and_two_archives_are_refused_when_the_job_is_submitted
                 left: left.clone(),
                 right: right.clone(),
                 plans: vec![plan],
+                removals: Vec::new(),
+                permanent: false,
             },
         ))
     };

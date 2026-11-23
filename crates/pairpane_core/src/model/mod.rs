@@ -26,7 +26,7 @@ pub use app::AppInfo;
 pub use archive::ArchiveSpot;
 pub use compare::{
     CompareEvent, CompareFacts, CompareId, CompareOptions, CompareRoot, CompareRow, CompareStatus, SyncDirection,
-    SyncFacts, SyncItem,
+    SyncFacts, SyncItem, SyncRemoval,
 };
 pub use edit::{EditDocument, EditOpened, EditSaveOptions, EditSaved, ExternalEdit, LineEnding};
 pub use find::{FindCriteria, FindEvent, FindHit, FindId, FindQuery, FindText, SavedSearch, Tri};

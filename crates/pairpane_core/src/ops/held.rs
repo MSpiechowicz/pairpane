@@ -37,6 +37,8 @@ pub(super) struct Node {
     pub(super) mode: u32,
     /// The last modification in milliseconds since the Unix epoch (negative before it), when the filesystem says.
     pub(super) modified: Option<i64>,
+    /// The last change of the entry itself (Unix `ctime`, which nobody can set back), as `modified`; `None` on Windows.
+    pub(super) changed: Option<i64>,
     /// The filesystem it is on (Unix).
     pub(super) device: Option<u64>,
     /// Device and inode (Unix): what the entry is, to compare with what a handle opened.
@@ -118,6 +120,7 @@ impl Node {
             size: u64::try_from(stat.st_size).unwrap_or(0),
             mode: stat.st_mode as u32 & 0o7777,
             modified: Some((stat.st_mtime as i64).saturating_mul(1000) + stat.st_mtime_nsec as i64 / 1_000_000),
+            changed: Some((stat.st_ctime as i64).saturating_mul(1000) + stat.st_ctime_nsec as i64 / 1_000_000),
             device: Some(device),
             id: Some((device, inode)),
         }
@@ -240,6 +243,7 @@ impl From<super::plan::Child> for Node {
             size: child.meta.len(),
             mode: 0,
             modified: child.meta.modified().ok().and_then(millis),
+            changed: None,
             device: crate::listing::platform::device(&child.meta),
             name: child.name,
             kind: child.kind,

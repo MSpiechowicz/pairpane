@@ -6,4 +6,4 @@
  *
  * A job that finished has no phase; it ends with [`OpsEvent::Ended`].
  */
-export type JobPhase = "queued" | "preparing" | "renaming" | "scanning" | "copying" | "verifying" | "hashing" | "splitting" | "combining" | "changing" | "extracting" | "packing" | "waiting" | "cancelling";
+export type JobPhase = "queued" | "preparing" | "renaming" | "scanning" | "copying" | "verifying" | "hashing" | "splitting" | "combining" | "changing" | "extracting" | "packing" | "removing" | "waiting" | "cancelling";

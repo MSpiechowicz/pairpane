@@ -24,6 +24,7 @@
     changing: 'Changing…',
     extracting: 'Extracting…',
     packing: 'Packing…',
+    removing: 'Removing…',
     waiting: 'Waiting for your answer',
     cancelling: 'Cancelling…',
   } as const;

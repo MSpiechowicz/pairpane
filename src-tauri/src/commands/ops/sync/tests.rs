@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
-use pairpane_core::model::{EntryKind, IpcErrorCode, OpKind, OpsEvent, Outcome, SyncFacts};
+use pairpane_core::model::{EntryKind, IpcErrorCode, OpKind, OpsEvent, Outcome, PaneId, SyncFacts, SyncRemoval};
 use tauri::async_runtime::block_on;
 
 use super::*;
@@ -52,7 +52,28 @@ fn to_right(path: &str, source: SyncFacts) -> SyncItem {
 
 /// Asks `ops` to synchronize `items` between the two sides.
 fn between(ops: &Ops, left: CompareRoot, right: CompareRoot, items: Vec<SyncItem>) -> CommandResult<JobId> {
-    block_on(ops.sync(&Archives::default(), (left, right), items))
+    mirror(ops, (left, right), items, Vec::new())
+}
+
+/// Asks `ops` to synchronize `items` and remove `removals` for good, between the two sides.
+fn mirror(
+    ops: &Ops,
+    (left, right): (CompareRoot, CompareRoot),
+    items: Vec<SyncItem>,
+    removals: Vec<SyncRemoval>,
+) -> CommandResult<JobId> {
+    block_on(ops.sync(&Archives::default(), (left, right), items, (removals, true)))
+}
+
+fn removal_of(path: &str, side: PaneId, seen: SyncFacts) -> SyncRemoval {
+    SyncRemoval {
+        path: path.to_owned(),
+        side,
+        seen,
+        files: 0,
+        bytes: 0,
+        scanned: i64::MAX,
+    }
 }
 
 fn refused_as_invalid(refused: CommandResult<JobId>) {
@@ -74,9 +95,14 @@ fn two_folders_are_synchronized_by_a_sync_job() {
 
     let id = between(&ops, folder(&left_path), folder(&right_path), items).expect("accepted");
 
-    assert_eq!(wait_for_end(&events), Outcome::Done);
-    assert!(was_added_as_sync(&events, id));
-    assert_eq!(fs::read(right.path().join("a.txt")).expect("copied"), b"alpha");
+    ended_with_a_copied(&events, id, right.path());
+}
+
+/// The sync job `id` ended done, and `a.txt` ("alpha") is in `right`.
+fn ended_with_a_copied(events: &std::sync::Arc<std::sync::Mutex<Vec<OpsEvent>>>, id: JobId, right: &Path) {
+    assert_eq!(wait_for_end(events), Outcome::Done);
+    assert!(was_added_as_sync(events, id));
+    assert_eq!(fs::read(right.join("a.txt")).expect("copied"), b"alpha");
 }
 
 #[test]
@@ -199,4 +225,51 @@ fn encrypted_entries_without_a_password_fail_before_the_job_starts() {
             .iter()
             .all(|event| !matches!(event, OpsEvent::Added { .. }))
     );
+}
+
+#[test]
+fn a_mirror_copies_and_removes_what_only_the_target_has_in_one_job() {
+    let (left, left_path) = folder_with(&[("a.txt", b"alpha")]);
+    let (right, right_path) = folder_with(&[("old.txt", b"old")]);
+    let (ops, _, events) = running();
+    let items = vec![to_right("a.txt", facts_of(&left.path().join("a.txt")))];
+    let removals = vec![removal_of(
+        "old.txt",
+        PaneId::Right,
+        facts_of(&right.path().join("old.txt")),
+    )];
+
+    let id = mirror(&ops, (folder(&left_path), folder(&right_path)), items, removals).expect("accepted");
+
+    ended_with_a_copied(&events, id, right.path());
+    assert!(!right.path().join("old.txt").exists());
+}
+
+#[test]
+fn removals_alone_run_and_an_archive_is_never_removed_from() {
+    let bytes = tar_of(&[item("readme.txt", b"hello")]);
+    let (_folder, archive_path) = archive_in_folder("pack.tar", &bytes);
+    let tar = || archive(Path::new(&archive_path), "");
+    let (right, right_path) = folder_with(&[("extra.txt", b"extra")]);
+    let (ops, _, events) = running();
+    let extra = facts_of(&right.path().join("extra.txt"));
+
+    refused_as_invalid(mirror(
+        &ops,
+        (tar(), folder(&right_path)),
+        Vec::new(),
+        vec![removal_of("readme.txt", PaneId::Left, entry_of(5))],
+    ));
+
+    // Only removals, on the folder side of an archive: nothing of the archive is read.
+    mirror(
+        &ops,
+        (tar(), folder(&right_path)),
+        Vec::new(),
+        vec![removal_of("extra.txt", PaneId::Right, extra)],
+    )
+    .expect("accepted");
+
+    assert_eq!(wait_for_end(&events), Outcome::Done);
+    assert!(!right.path().join("extra.txt").exists());
 }

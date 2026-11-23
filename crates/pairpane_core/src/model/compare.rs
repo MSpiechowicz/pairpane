@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::{EntryKind, IpcError};
+use super::{EntryKind, IpcError, PaneId};
 
 /// Identifies one folder comparison. Monotonic within a run and never reused; a `number` in TypeScript.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, TS)]
@@ -157,6 +157,29 @@ pub struct SyncItem {
     pub source: SyncFacts,
     /// The side that is copied onto, as the scan saw it; `null` when it was not there.
     pub target: Option<SyncFacts>,
+}
+
+/// One removal of a synchronization (a mirror): an item only one side has, removed from that side so that it matches the
+/// other. The job removes it only while it is still what the scan saw.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SyncRemoval {
+    /// The path below the two folders, names joined with `/`.
+    pub path: String,
+    /// The side the item is removed from.
+    pub side: PaneId,
+    /// The item as the scan saw it.
+    pub seen: SyncFacts,
+    /// For a folder: the files in its whole subtree, as the scan counted them; 0 for a file.
+    #[ts(type = "number")]
+    pub files: u64,
+    /// For a folder: the bytes of those files; 0 for a file.
+    #[ts(type = "number")]
+    pub bytes: u64,
+    /// When the scan began, in milliseconds since the Unix epoch: a folder with anything newer in it is kept.
+    #[ts(type = "number")]
+    pub scanned: i64,
 }
 
 #[cfg(test)]

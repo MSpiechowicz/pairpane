@@ -9,11 +9,12 @@
 
   let { syncer }: { syncer: Syncer } = $props();
 
-  /** The choices of a row, in the order the arrows point: to the left, nowhere, to the right. */
+  /** The choices of a row, in the order the arrows point: to the left, nowhere, to the right; then removing it. */
   const CHOICES: readonly { action: SyncAction; glyph: string; text: string }[] = [
     { action: 'toLeft', glyph: '←', text: 'Copy to the left' },
     { action: 'skip', glyph: '–', text: 'Skip' },
     { action: 'toRight', glyph: '→', text: 'Copy to the right' },
+    { action: 'remove', glyph: '✕', text: 'Remove' },
   ];
 
   const allPicked = $derived(syncer.count > 0 && syncer.picked === syncer.count);
@@ -54,7 +55,7 @@
         {#if item !== undefined}
           {@const action = syncer.actionOf(item)}
           {@const picked = syncer.pickedOf(item)}
-          <div class="row {item.row.status}" class:picked role="row">
+          <div class="row {item.row.status}" class:picked class:removed={action === 'remove'} role="row">
             <span role="cell">
               <input type="checkbox" aria-label="Pick {displayName(item.row.path)}" checked={picked} onchange={() => syncer.pick(item)} />
             </span>
@@ -66,6 +67,7 @@
                 <button
                   type="button"
                   class:on={action === choice.action}
+                  class:remove={choice.action === 'remove'}
                   aria-pressed={action === choice.action}
                   aria-label="{choice.text}: {displayName(item.row.path)}"
                   title={why ?? choice.text}
@@ -86,7 +88,7 @@
 <style>
   .head,
   .row {
-    grid-template-columns: 20px minmax(0, 1fr) minmax(0, 150px) 78px minmax(0, 150px) 82px;
+    grid-template-columns: 20px minmax(0, 1fr) minmax(0, 150px) 104px minmax(0, 150px) 82px;
   }
 
   .body {
@@ -117,6 +119,11 @@
 
   .row.equal {
     color: var(--dim);
+  }
+
+  .row.removed .name {
+    color: var(--danger);
+    text-decoration: line-through;
   }
 
   input[type='checkbox'] {
@@ -158,6 +165,11 @@
   .choices button:hover:not(:disabled) {
     border-color: var(--accent);
     color: var(--text);
+  }
+
+  .choices button.remove.on {
+    border-color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 22%, transparent);
   }
 
   .choices button.on {

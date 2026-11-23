@@ -224,10 +224,11 @@ describe('TransfersPanel file tools', () => {
       { kind: 'added', job: job(4, { kind: 'attributes', phase: 'changing', label: 'd' }) },
       { kind: 'added', job: job(5, { kind: 'pack', phase: 'packing', label: 'e' }) },
       { kind: 'added', job: job(6, { kind: 'rename', phase: 'renaming', label: 'f' }) },
+      { kind: 'added', job: job(7, { kind: 'sync', phase: 'removing', label: 'g' }) },
     );
     render(TransfersPanel, { transfers, onClose: vi.fn() });
 
-    for (const text of ['Hashing…', 'Splitting…', 'Combining…', 'Changing…', 'Packing…', 'Moving…']) {
+    for (const text of ['Hashing…', 'Splitting…', 'Combining…', 'Changing…', 'Packing…', 'Removing…', 'Moving…']) {
       expect(screen.getByText(text)).toBeInTheDocument();
     }
   });

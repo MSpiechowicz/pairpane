@@ -94,10 +94,18 @@ pub(super) fn is_mount(folder: &Path, outer: u64) -> io::Result<bool> {
 
 #[cfg(target_os = "linux")]
 fn is_mount_root(folder: &Path) -> io::Result<bool> {
-    use rustix::fs::{AtFlags, CWD, StatxAttributes, StatxFlags, statx};
+    use rustix::fs::{AtFlags, CWD, StatxFlags, statx};
+
+    is_mount_root_stat(statx(CWD, folder, AtFlags::SYMLINK_NOFOLLOW, StatxFlags::empty()))
+}
+
+/// Whether what `statx` answered says a mount root.
+#[cfg(target_os = "linux")]
+pub(super) fn is_mount_root_stat(answer: rustix::io::Result<rustix::fs::Statx>) -> io::Result<bool> {
+    use rustix::fs::StatxAttributes;
     use rustix::io::Errno;
 
-    match statx(CWD, folder, AtFlags::SYMLINK_NOFOLLOW, StatxFlags::empty()) {
+    match answer {
         // An older kernel does not tell, and its answer is not "no": the device alone has to do.
         Ok(stat) => Ok(stat.stx_attributes_mask.contains(StatxAttributes::MOUNT_ROOT)
             && stat.stx_attributes.contains(StatxAttributes::MOUNT_ROOT)),

@@ -50,6 +50,28 @@ impl Session {
         })
     }
 
+    /// Takes the folder `held`, open already, which `folder` names: the item is renamed from that very handle. The path is
+    /// still resolved for the record and to choose the Trash, and it must lead to the same folder as the handle now.
+    pub(super) fn of_held(folder: &Path, held: OwnedFd) -> io::Result<Self> {
+        let canonical = std::fs::canonicalize(folder)?;
+        let here = Facts::of_handle(&held)?;
+        let named = Facts::of_handle(&open_folder_exact(&canonical)?)?;
+
+        if !named.is_same_place(&here) {
+            return Err(refusal(
+                io::ErrorKind::Other,
+                "the folder changed while it was being walked",
+            ));
+        }
+
+        Ok(Self {
+            canonical,
+            folder: held,
+            here,
+            chosen: None,
+        })
+    }
+
     /// Moves the item `name` of the folder to the Trash. A link goes as the link, never its target.
     ///
     /// An item that is not there is reported before anything is chosen or made: its absence leaves no trace in any
