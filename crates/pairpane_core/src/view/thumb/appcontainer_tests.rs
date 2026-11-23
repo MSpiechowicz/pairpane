@@ -106,7 +106,12 @@ fn the_helper_runs_in_its_container() {
         &["--exact", TEST, "--nocapture", "--test-threads=1", &secret, &port],
         MEMORY,
     )
-    .expect("the test program starts in its container");
+    .unwrap_or_else(|error| {
+        panic!(
+            "the test program starts in its container: {error:?}; the last failure of the container: {:?}",
+            super::appcontainer::last_failure()
+        )
+    });
     drop(stdin);
 
     let mut text = String::new();

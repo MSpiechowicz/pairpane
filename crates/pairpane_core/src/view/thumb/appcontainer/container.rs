@@ -12,13 +12,18 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr;
 
+use super::step::{at, at_code, at_result};
+
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Security::Authorization::{
     EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, SetEntriesInAclW,
     SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::Isolation::{CreateAppContainerProfile, DeriveAppContainerSidFromAppContainerName};
-use windows_sys::Win32::Security::{ACL, DACL_SECURITY_INFORMATION, FreeSid, NO_INHERITANCE, PSID};
+use windows_sys::Win32::Security::{
+    ACL, DACL_SECURITY_INFORMATION, FreeSid, GetSecurityDescriptorControl, NO_INHERITANCE,
+    PROTECTED_DACL_SECURITY_INFORMATION, PSID, SE_DACL_PROTECTED, UNPROTECTED_DACL_SECURITY_INFORMATION,
+};
 use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
 
 /// The name of the container: fixed, so every run of the app (and every version) is the same container, with the same
@@ -77,17 +82,13 @@ pub(super) fn container_sid() -> io::Result<Sid> {
         return Ok(Sid(sid));
     }
     if made != ALREADY_EXISTS {
-        return Err(io::Error::other(format!(
-            "the container profile cannot be made ({made:#x})"
-        )));
+        return Err(at_result("CreateAppContainerProfile", made));
     }
 
     // SAFETY: the name is NUL-terminated and lives through the call; `sid` is a place for the SID, set only on success.
     let derived = unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &raw mut sid) };
     if derived < 0 {
-        return Err(io::Error::other(format!(
-            "the container SID cannot be derived ({derived:#x})"
-        )));
+        return Err(at_result("DeriveAppContainerSidFromAppContainerName", derived));
     }
 
     Ok(Sid(sid))
@@ -106,10 +107,17 @@ impl Drop for Local {
     }
 }
 
-/// Gives the container `sid` the right to read and run the file `path` (an entry that is its own and no one else's), on
-/// top of what the file's access list says already. Does nothing when the file has no access list at all (everyone may
-/// then use it, and a list with one entry would shut the others out). Needs the right to change the file's access list,
-/// which the owner of the file has; without it this fails and the container cannot run the file.
+/// Gives the container `sid` the right to read and run the file `path`, or to list and enter it when it is a folder (an
+/// entry that is its own and no one else's, for that one object, not inherited), on top of what its access list says
+/// already. The entry is never removed: it stays as long as the file does (an update that replaces the file drops it).
+///
+/// Does nothing when the object has no access list at all (everyone may then use it, and a list with one entry would
+/// shut the others out). Whether the list is protected from inheritance is kept as it is (the control bits are read and
+/// passed back deliberately), so the change neither cuts the object off from its folder's list nor ties it to it. Needs the
+/// right to change the access list, which the owner has; without it this fails and the container cannot run the file.
+///
+/// The read, the merge and the write are three calls and not one atomic step: a change of the list by someone else in
+/// between is lost. That is acceptable for an object that the app's own installer and updater write.
 pub(super) fn allow_read_and_execute(path: &Path, sid: &Sid) -> io::Result<()> {
     let name = wide(path.as_os_str());
     let mut old: *mut ACL = ptr::null_mut();
@@ -132,11 +140,26 @@ pub(super) fn allow_read_and_execute(path: &Path, sid: &Sid) -> io::Result<()> {
     };
     let _descriptor = Local(descriptor);
     if read != 0 {
-        return Err(io::Error::from_raw_os_error(read as i32));
+        return Err(at_code("GetNamedSecurityInfoW", read));
     }
     if old.is_null() {
         return Ok(());
     }
+
+    let mut control = 0_u16;
+    let mut revision = 0_u32;
+
+    // SAFETY: `descriptor` is the live security descriptor that the call above returned; `control` and `revision` are the
+    // places for what it reports.
+    let known = unsafe { GetSecurityDescriptorControl(descriptor, &raw mut control, &raw mut revision) };
+    if known == 0 {
+        return Err(at("GetSecurityDescriptorControl", io::Error::last_os_error()));
+    }
+    let protection = if control & SE_DACL_PROTECTED != 0 {
+        PROTECTED_DACL_SECURITY_INFORMATION
+    } else {
+        UNPROTECTED_DACL_SECURITY_INFORMATION
+    };
 
     let entry = EXPLICIT_ACCESS_W {
         grfAccessPermissions: FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
@@ -158,16 +181,16 @@ pub(super) fn allow_read_and_execute(path: &Path, sid: &Sid) -> io::Result<()> {
     let merged = unsafe { SetEntriesInAclW(1, &raw const entry, old, &raw mut new) };
     let _new = Local(new.cast());
     if merged != 0 {
-        return Err(io::Error::from_raw_os_error(merged as i32));
+        return Err(at_code("SetEntriesInAclW", merged));
     }
 
     // SAFETY: the name is NUL-terminated and lives through the call; only the access list is set (the owner, group and
-    // system list are NULL), to `new`, which lives until `_new` is dropped.
+    // system list are NULL), to `new`, which lives until `_new` is dropped, with the protection it had.
     let set = unsafe {
         SetNamedSecurityInfoW(
             name.as_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
+            DACL_SECURITY_INFORMATION | protection,
             ptr::null_mut(),
             ptr::null_mut(),
             new,
@@ -175,7 +198,7 @@ pub(super) fn allow_read_and_execute(path: &Path, sid: &Sid) -> io::Result<()> {
         )
     };
     if set != 0 {
-        return Err(io::Error::from_raw_os_error(set as i32));
+        return Err(at_code("SetNamedSecurityInfoW", set));
     }
 
     Ok(())

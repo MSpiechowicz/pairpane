@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use pairpane_core::view::is_refusal;
-use pairpane_core::view::thumb::{CHILD_ARG, Source, helper_command, make, open, read};
+use pairpane_core::view::thumb::{CHILD_ARG, Source, helper_command, last_failure, make, open, read};
 
 mod common;
 
@@ -97,8 +97,18 @@ fn thumbnail(bytes: &[u8], size: u32) -> std::io::Result<Vec<u8>> {
     let (_folder, source) = source(bytes);
 
     let bytes = read(&source, &idle())?;
+    let made = make(&source, bytes, size, &idle(), program());
 
-    make(&source, bytes, size, &idle(), program())
+    // Where the helper is started in a sandbox that did not start, what failed (the call and the system's error) is told
+    // here: it is in the output of the test that fails.
+    if let Err(error) = &made {
+        eprintln!(
+            "no thumbnail: {error:?}; the last failure of the sandbox: {:?}",
+            last_failure()
+        );
+    }
+
+    made
 }
 
 fn size_of(answer: &[u8]) -> (u32, u32) {
@@ -356,23 +366,31 @@ unsafe extern "C" {
     fn fcntl(fd: i32, command: i32, ...) -> i32;
 }
 
-/// The descriptors of the process `pid`, by `lsof` (a tool of the system, started with fixed arguments and no shell).
+/// The descriptors of the process `pid`, by `lsof` (a tool of the system, started with fixed arguments and no shell). The
+/// answer is checked to be one: `lsof` that tells nothing would make every test of what is closed pass.
 #[cfg(target_os = "macos")]
 fn descriptors_of(pid: u32) -> Vec<u32> {
     let output = std::process::Command::new("/usr/sbin/lsof")
-        .args(["-a", "-p", &pid.to_string(), "-F", "f"])
+        .args(["-a", "-p", &pid.to_string(), "-F", "pf"])
         .output()
         .expect("lsof runs");
+    let text = String::from_utf8_lossy(&output.stdout);
 
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
+    assert!(
+        text.lines().any(|line| line == format!("p{pid}")),
+        "lsof tells about the process {pid}: {text} {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    text.lines()
         .filter_map(|line| line.strip_prefix('f')?.parse().ok())
         .collect()
 }
 
 /// The helper closes the descriptors it inherits and keeps what is its own: a descriptor of this test program that is
-/// not close-on-exec (as one that a library of the app may leak) is in the helper when it starts, and is gone once the
-/// helper has confined itself, which is before it reads the picture; the picture is still decoded in the sandbox.
+/// not close-on-exec (as one that a library of the app may leak) is in a process this program starts, which a program that
+/// is not sandboxed shows, and is gone from the helper once it has confined itself, which is before it reads the picture;
+/// the picture is still decoded in the sandbox.
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code, reason = "`fcntl` makes a descriptor inheritable; see the test")]
 #[test]
@@ -380,15 +398,31 @@ fn the_helper_closes_the_descriptors_it_inherits_and_still_decodes_in_its_sandbo
     use std::os::fd::IntoRawFd;
 
     // Opened close-on-exec (as the standard library opens everything), then made inheritable and given up by its owner:
-    // the descriptor is open in this program and in every helper it starts, and nothing owns it.
+    // the descriptor is open in this program and in every process it starts, and nothing owns it.
     let leaked = std::fs::File::open("/dev/null").expect("a file").into_raw_fd();
     // SAFETY: `fcntl` with `F_SETFD` takes the descriptor and the flags by value; `leaked` is open and owned by nothing.
     assert_eq!(unsafe { fcntl(leaked, 2, 0) }, 0, "the descriptor is made inheritable");
+    let leaked = u32::try_from(leaked).expect("a descriptor");
+
+    // The control: a program that is not sandboxed, started the same way, holds it. Without this a helper that does not
+    // show it would prove nothing.
+    let mut control = std::process::Command::new("/bin/sleep")
+        .arg("30")
+        .spawn()
+        .expect("a program of the system starts");
+    let held = descriptors_of(control.id());
+    let _ = control.kill();
+    let _ = control.wait();
+    assert!(
+        held.contains(&leaked),
+        "the descriptor reaches a process that is started: {held:?}"
+    );
 
     let child = start(&[CHILD_ARG, "64"]);
+    let confined = |open: &[u32]| [0, 1, 2].iter().all(|fd| open.contains(fd)) && !open.contains(&leaked);
     let mut open_in_helper = descriptors_of(child.id());
     let patience = Instant::now();
-    while open_in_helper.iter().any(|&fd| fd > 2) && patience.elapsed() < Duration::from_secs(20) {
+    while !confined(&open_in_helper) && patience.elapsed() < Duration::from_secs(20) {
         std::thread::sleep(Duration::from_millis(100));
         open_in_helper = descriptors_of(child.id());
     }
@@ -396,8 +430,8 @@ fn the_helper_closes_the_descriptors_it_inherits_and_still_decodes_in_its_sandbo
     let (answer, exited_well) = finish(child, &encode(ImageFormat::Png, 200, 100));
 
     assert!(
-        open_in_helper.iter().all(|&fd| fd <= 2),
-        "the helper holds only its standard streams: {open_in_helper:?}"
+        confined(&open_in_helper),
+        "the helper has its standard streams and not the descriptor that was leaked to it: {open_in_helper:?}"
     );
     assert!(exited_well);
     assert_eq!(size_of(&answer[1..]), (64, 32));

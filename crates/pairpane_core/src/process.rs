@@ -77,6 +77,22 @@ where
     command
 }
 
+/// Held while a process is started, on Windows: a handle that is inheritable while it is made (the pipes of the thumbnail
+/// helper in its container, see `view::thumb::appcontainer`) is inherited by any process that is started at the same time
+/// by the standard library, which inherits every handle that is inheritable. So every start in the app goes through
+/// [`spawn`], and none runs while that helper's pipes are made inheritable. (A start by a plugin of the shell is not under
+/// the lock; the window it could use is the few microseconds between making the pipes inheritable and `CreateProcessW`.)
+#[cfg(windows)]
+pub(crate) static SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Starts `command`, under [`SPAWN_LOCK`] on Windows.
+pub fn spawn(command: &mut Command) -> io::Result<Child> {
+    #[cfg(windows)]
+    let _held = SPAWN_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    command.spawn()
+}
+
 /// A process this module can wait for and stop: the standard library's [`Child`], and on Windows the helper that is started
 /// in an AppContainer with `CreateProcessW` (`view::thumb::windows`), which `Command` cannot do on stable Rust.
 pub trait Started {

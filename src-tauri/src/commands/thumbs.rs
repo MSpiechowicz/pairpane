@@ -16,10 +16,11 @@
 //!   again.
 //! - The cache (`cache.rs`) is bound by [`CACHE_BYTES`] and keyed by the file's path and the size bucket. It is stamped
 //!   with the file's length, modification time and identity (device, file number and time of change), so a changed or
-//!   replaced file is made again. It also remembers the failures that are the file's own (not a picture, too big, cannot
-//!   be decoded) for a small fixed cost each (not a helper that was too slow, which a loaded system can cause), with the code and text the page was told, so a file that is bad or slow to
-//!   decode is not tried again until it changes; a failure of the system (a read that failed, a helper that did not
-//!   start, a cancelled request) is never remembered.
+//!   replaced file is made again. It also remembers the failures that are the file's own (not a picture, too big, or a
+//!   decoder that crashed on it or answered wrongly) for a small fixed cost each, with the code and text the page was
+//!   told, so a file that is bad is not tried again until it changes. What is the state of the moment is never
+//!   remembered: a helper that ran past its deadline or stalled (which a loaded system can cause), a read that failed, a
+//!   helper that did not start or did not get a place, a cancelled request, a system where the sandbox is not available.
 //! - [`Thumbs::shut_down`] raises the flag every helper of this module watches, as the app exits, so none outlives it.
 //! - What the page is told is fixed text with no path: `unsupported` for a file that is not a picture of the supported
 //!   formats (and for HEIC without a decoder on the system, and on Windows, which makes no HEIC thumbnails), `invalidInput`

@@ -50,7 +50,9 @@ pub use format::{Format, MAX_SIZE, MIN_SIZE, bucket, clamp_size, fit};
 pub use identity::Identity;
 
 use super::file::ViewFile;
-use super::heic::{self, process};
+use super::heic;
+#[cfg(not(windows))]
+use super::heic::process;
 use super::{Refusals, open_regular, refusal};
 
 /// The first argument (a second one holds the side of the thumbnail) with which the app's executable is started as the
@@ -161,8 +163,14 @@ pub fn make(source: &Source, bytes: Vec<u8>, size: u32, cancel: &AtomicBool, pro
 
     let side = size.to_string();
 
-    run_helper(program, &[CHILD_ARG, &side], bytes, cancel, size).map_err(|error| {
-        // The helper's "no decoder" is the HEIC helper's text, which is not what is wrong with this file.
+    run_helper(program, &[CHILD_ARG, &side], bytes, cancel, size)
+}
+
+/// What the helper answered, with its "no decoder" (the HEIC helper's text, which the shared framing gives for the status
+/// that means the file is no picture of this helper's) as what is wrong with this file. It is only the helper's own
+/// answer that is changed here: a system where the helper cannot be started in its sandbox says so in its own words.
+fn helper_answer(answer: io::Result<Vec<u8>>) -> io::Result<Vec<u8>> {
+    answer.map_err(|error| {
         if error.kind() == io::ErrorKind::Unsupported {
             return not_a_picture();
         }
@@ -174,13 +182,30 @@ pub fn make(source: &Source, bytes: Vec<u8>, size: u32, cancel: &AtomicBool, pro
 /// The helper `program` with `args` on `bytes`: a process of its own with the sandbox of the system (see the module).
 #[cfg(not(windows))]
 fn run_helper(program: &Path, args: &[&str], bytes: Vec<u8>, cancel: &AtomicBool, size: u32) -> io::Result<Vec<u8>> {
-    process::run_within(program, args, bytes, cancel, DEADLINE, size)
+    helper_answer(process::run_within(program, args, bytes, cancel, DEADLINE, size))
 }
 
 /// The helper `program` with `args` on `bytes`: a process in an AppContainer and a job (see the module).
 #[cfg(windows)]
 fn run_helper(program: &Path, args: &[&str], bytes: Vec<u8>, cancel: &AtomicBool, size: u32) -> io::Result<Vec<u8>> {
     appcontainer::run(program, args, bytes, cancel, DEADLINE, size, MEMORY)
+}
+
+/// What failed last when a thumbnail helper could not be started in its sandbox, in words (the call, the system's error and
+/// its code), for the logs and the tests; `None` where nothing failed and on the systems whose helper is not started in a
+/// container. Never for a page: it holds what the system says.
+#[doc(hidden)]
+#[must_use]
+pub fn last_failure() -> Option<String> {
+    #[cfg(windows)]
+    {
+        appcontainer::last_failure()
+    }
+
+    #[cfg(not(windows))]
+    {
+        None
+    }
 }
 
 /// The command that starts the thumbnail helper `program` with `args` (the pipes, the cleared environment): for the tests

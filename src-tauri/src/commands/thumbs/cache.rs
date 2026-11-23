@@ -6,8 +6,8 @@
 //! (the file changed, so it is made again), so a changed file never leaves a stale picture behind. What is kept is
 //! either the picture or the failure (`Failed`: the code and the fixed text the page was told, which are told again), and
 //! a failure costs [`FAILURE_BYTES`] of the budget. An entry is charged for what it holds and for what it costs to keep:
-//! its picture or failure, the path of its key and [`ENTRY_BYTES`] for the entry itself (the two maps, the key and the
-//! stamp), so a great many tiny entries cannot take more memory than the budget says. The cache is bound by those bytes:
+//! its picture or failure, the path of its key twice (the key is in both maps) and [`ENTRY_BYTES`] for the entry itself (the
+//! two maps, the stamp), so a great many tiny entries cannot take more memory than the budget says. The cache is bound by those bytes:
 //! when a new entry does not fit, the ones used longest ago go first. An entry that is bigger than the whole budget is
 //! not kept.
 
@@ -22,8 +22,8 @@ use pairpane_core::view::thumb::Identity;
 /// What a failure costs of the budget, whatever its text: a file that is bad is remembered cheaply.
 pub(super) const FAILURE_BYTES: usize = 256;
 
-/// What an entry costs of the budget besides its value and the path of its key: the entry in the two maps, the key, the
-/// stamp and the allocator's overhead, in round numbers.
+/// What an entry costs of the budget besides its value and the path of its key (counted twice, as the key is kept in both
+/// maps): the entry in the two maps, the stamp and the allocator's overhead, in round numbers.
 pub(super) const ENTRY_BYTES: usize = 256;
 
 /// What a thumbnail is of: the file, by its path in the folder the page named (the folder with links resolved where
@@ -81,7 +81,7 @@ struct Entry {
 fn cost(key: &Key, value: &Cached) -> usize {
     value
         .bytes()
-        .saturating_add(key.path.as_os_str().len())
+        .saturating_add(key.path.as_os_str().len().saturating_mul(2))
         .saturating_add(ENTRY_BYTES)
 }
 
@@ -238,10 +238,11 @@ mod tests {
     fn an_entry_is_charged_for_its_value_its_key_and_the_entry_itself() {
         let entry = costs("a", &picture(100, 1));
 
-        assert_eq!(entry, 100 + "/pictures/a".len() + ENTRY_BYTES);
+        // The path is in both maps.
+        assert_eq!(entry, 100 + 2 * "/pictures/a".len() + ENTRY_BYTES);
         assert_eq!(
             costs("a", &failed("bad")),
-            FAILURE_BYTES + "/pictures/a".len() + ENTRY_BYTES
+            FAILURE_BYTES + 2 * "/pictures/a".len() + ENTRY_BYTES
         );
         assert!(
             costs("a-much-longer-name", &picture(100, 1)) > entry,

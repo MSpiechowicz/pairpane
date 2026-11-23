@@ -28,7 +28,7 @@ fn a_file_that_cannot_be_made_into_a_picture_is_remembered_and_not_tried_again()
     let path_len = folder.path().join("huge.png").as_os_str().len();
     assert_eq!(
         thumbs.cache().bytes(),
-        cache::FAILURE_BYTES + path_len + cache::ENTRY_BYTES,
+        cache::FAILURE_BYTES + 2 * path_len + cache::ENTRY_BYTES,
         "a small fixed cost"
     );
 

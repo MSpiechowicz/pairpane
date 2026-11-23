@@ -20,6 +20,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::PoisonError;
 
 use windows_sys::Win32::Foundation::{HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation};
 use windows_sys::Win32::Security::SECURITY_CAPABILITIES;
@@ -31,7 +32,10 @@ use windows_sys::Win32::System::Threading::{
     STARTF_USESTDHANDLES, STARTUPINFOEXW, UpdateProcThreadAttribute,
 };
 
+use crate::process::SPAWN_LOCK;
+
 use super::container::{Sid, wide};
+use super::step::at;
 
 /// The variables the helper is given, which the loader and the C runtime read (a Windows process needs its system
 /// directory); it starts with no others, so nothing of the app's own (tokens, proxy settings) reaches it. Sorted.
@@ -54,7 +58,7 @@ pub(super) fn resume(thread: &OwnedHandle) -> io::Result<()> {
     // one `CreateProcessW` returns has it).
     let before = unsafe { ResumeThread(thread.as_raw_handle()) };
     if before == u32::MAX {
-        return Err(io::Error::last_os_error());
+        return Err(at("ResumeThread", io::Error::last_os_error()));
     }
 
     Ok(())
@@ -72,7 +76,10 @@ impl Attributes {
         // fails with `ERROR_INSUFFICIENT_BUFFER`, which is not an error here: `size` is checked below).
         unsafe { InitializeProcThreadAttributeList(ptr::null_mut(), count, 0, &raw mut size) };
         if size == 0 {
-            return Err(io::Error::last_os_error());
+            return Err(at(
+                "InitializeProcThreadAttributeList (size)",
+                io::Error::last_os_error(),
+            ));
         }
 
         let mut storage = vec![0_usize; size.div_ceil(size_of::<usize>())];
@@ -83,7 +90,7 @@ impl Attributes {
             InitializeProcThreadAttributeList(storage.as_mut_ptr().cast::<c_void>(), count, 0, &raw mut size)
         };
         if made == 0 {
-            return Err(io::Error::last_os_error());
+            return Err(at("InitializeProcThreadAttributeList", io::Error::last_os_error()));
         }
 
         Ok(Self(storage))
@@ -113,7 +120,7 @@ impl Attributes {
             )
         };
         if set == 0 {
-            return Err(io::Error::last_os_error());
+            return Err(at("UpdateProcThreadAttribute", io::Error::last_os_error()));
         }
 
         Ok(())
@@ -135,19 +142,22 @@ fn pipe() -> io::Result<(OwnedHandle, OwnedHandle)> {
     // default security) and the default size of the buffer.
     let made = unsafe { CreatePipe(&raw mut read, &raw mut write, ptr::null(), 0) };
     if made == 0 {
-        return Err(io::Error::last_os_error());
+        return Err(at("CreatePipe", io::Error::last_os_error()));
     }
 
     // SAFETY: `CreatePipe` made the two handles, each owned by nothing else; they are closed by these values.
     Ok(unsafe { (OwnedHandle::from_raw_handle(read), OwnedHandle::from_raw_handle(write)) })
 }
 
-/// Makes the handle one that a process made with a list of handles to inherit can be given.
-fn inheritable(handle: &OwnedHandle) -> io::Result<()> {
+/// Makes the handle one that a process made with a list of handles to inherit can be given (`inherit`), or one that no
+/// process inherits.
+fn set_inheritable(handle: &OwnedHandle, inherit: bool) -> io::Result<()> {
+    let flags = if inherit { HANDLE_FLAG_INHERIT } else { 0 };
+
     // SAFETY: the handle is live and owned by `handle`; only its inherit flag is set.
-    let set = unsafe { SetHandleInformation(handle.as_raw_handle(), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+    let set = unsafe { SetHandleInformation(handle.as_raw_handle(), HANDLE_FLAG_INHERIT, flags) };
     if set == 0 {
-        return Err(io::Error::last_os_error());
+        return Err(at("SetHandleInformation", io::Error::last_os_error()));
     }
 
     Ok(())
@@ -162,7 +172,10 @@ fn command_line(program: &Path, args: &[&str]) -> io::Result<Vec<u16>> {
 
     for arg in args {
         if arg.is_empty() || arg.chars().any(|c| c.is_whitespace() || c == '"') {
-            return Err(io::Error::other("an argument of the helper needs quoting"));
+            return Err(at(
+                "command line",
+                io::Error::other("an argument of the helper needs quoting"),
+            ));
         }
 
         line.push(u16::from(b' '));
@@ -208,8 +221,6 @@ fn system_directory() -> Option<Vec<u16>> {
 pub(super) fn create(program: &Path, args: &[&str], container: &Sid) -> io::Result<Created> {
     let (child_in, parent_in) = pipe()?;
     let (parent_out, child_out) = pipe()?;
-    inheritable(&child_in)?;
-    inheritable(&child_out)?;
 
     // What the attribute list points to, which lives until the process is made.
     let handles = [child_in.as_raw_handle(), child_out.as_raw_handle()];
@@ -251,6 +262,12 @@ pub(super) fn create(program: &Path, args: &[&str], container: &Sid) -> io::Resu
     startup.lpAttributeList = attributes.list();
     let mut info = PROCESS_INFORMATION::default();
 
+    // Nothing else of the app starts a process while the helper's ends of the pipes can be inherited (`SPAWN_LOCK`), and
+    // they can be only from here to the end of the call: the window of a start by a plugin of the shell is that call.
+    let held = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    set_inheritable(&child_in, true)?;
+    set_inheritable(&child_out, true)?;
+
     // SAFETY: the program and the command line are NUL-terminated and live through the call (the command line is the
     // mutable buffer the function wants); no security attributes for the process and its thread; the handles are
     // inherited, which only the two of the attribute list are; the environment is a Unicode block of NUL-ended entries
@@ -271,8 +288,15 @@ pub(super) fn create(program: &Path, args: &[&str], container: &Sid) -> io::Resu
             &raw mut info,
         )
     };
-    if created == 0 {
-        return Err(io::Error::last_os_error());
+    let failure = (created == 0).then(io::Error::last_os_error);
+
+    // The pipes are the helper's from here: no process that is started later inherits them, whether the call worked or not.
+    let _ = set_inheritable(&child_in, false);
+    let _ = set_inheritable(&child_out, false);
+    drop(held);
+
+    if let Some(error) = failure {
+        return Err(at("CreateProcessW", error));
     }
 
     // SAFETY: `CreateProcessW` made the two handles, each owned by nothing else; they are closed by these values.

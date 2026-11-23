@@ -165,7 +165,7 @@ struct Running {
 
 impl Running {
     fn start(shell: &Shell, line: &str, folder: &Path) -> io::Result<(Self, ChildStdout, ChildStderr)> {
-        let mut child = shell.command(line, folder).spawn()?;
+        let mut child = crate::process::spawn(&mut shell.command(line, folder))?;
 
         let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
             crate::process::stop(&mut child);

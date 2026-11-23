@@ -155,7 +155,7 @@ impl Unrar {
             command.current_dir(folder);
         }
 
-        command.spawn().map_err(|error| {
+        process::spawn(&mut command).map_err(|error| {
             tracing::debug!(%error, "unrar did not start");
 
             if error.kind() == io::ErrorKind::NotFound {

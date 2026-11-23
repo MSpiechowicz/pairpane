@@ -267,7 +267,7 @@ pub(in crate::view) fn run_within(
     #[cfg(target_os = "linux")]
     super::sandbox::note_kernel();
 
-    let mut child = command(program, args).spawn().map_err(|error| {
+    let mut child = process::spawn(&mut command(program, args)).map_err(|error| {
         tracing::debug!(%error, "the helper did not start");
 
         // Not our text and not a kind the page maps to a message (a missing helper is not a missing file).
