@@ -1,3 +1,10 @@
+# [0.30.0](https://github.com/MSpiechowicz/pairpane/compare/v0.29.0...v0.30.0) (2026-11-23)
+
+
+### Features
+
+* **ui:** brief view and per-tab layout (#62) ([179928b](https://github.com/MSpiechowicz/pairpane/commit/179928bf39916ca2170d176dcf61350cf2302676))
+
 # [0.29.0](https://github.com/MSpiechowicz/pairpane/compare/v0.28.0...v0.29.0) (2026-11-23)
 
 
