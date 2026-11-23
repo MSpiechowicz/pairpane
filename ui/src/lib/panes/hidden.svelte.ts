@@ -4,6 +4,7 @@ import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import { type Preferences, preferences } from '$lib/shell/preferences.svelte';
 
 import { shows } from './columns';
+import type { SortColumn } from './order';
 import type { PaneTabs } from './tabs.svelte';
 
 /**
@@ -23,12 +24,24 @@ export function followPreferences(panes: Record<PaneId, PaneTabs>, prefs: Prefer
   });
 
   // A pane sorted by a column the settings hide (now, or a tab that brings its sort back) is sorted by name instead:
-  // a sort by a column that is not on the screen could not be seen or changed.
+  // a sort by a column that is not on the screen could not be seen or changed. The sort it had comes back when the
+  // column is shown again, unless the pane was sorted otherwise meanwhile.
+  const displaced = new Map<PaneId, { column: SortColumn; desc: boolean }>();
   $effect(() => {
-    for (const tabs of [panes.left, panes.right]) {
-      const view = tabs.view;
-      if (!shows(view.column, prefs.value)) {
+    for (const side of ['left', 'right'] as const) {
+      const view = panes[side].view;
+      const column = view.column;
+      const desc = view.desc;
+      const before = displaced.get(side);
+
+      if (!shows(column, prefs.value)) {
+        displaced.set(side, { column, desc });
         untrack(() => view.restoreSort('name', false));
+      } else if (before !== undefined && (column !== 'name' || desc)) {
+        displaced.delete(side); // sorted otherwise meanwhile
+      } else if (before !== undefined && shows(before.column, prefs.value)) {
+        displaced.delete(side);
+        untrack(() => view.restoreSort(before.column, before.desc));
       }
     }
   });

@@ -52,4 +52,24 @@ describe('followPreferences', () => {
     flushSync();
     expect(panes.left.view.column).toBe('name');
   });
+
+  it('brings the sort back when its column is shown again, unless the pane was sorted otherwise meanwhile', () => {
+    const backend = fakeBackend();
+    const preferences = new Preferences();
+    const panes = { left: new PaneTabs(backend.ipc, 'left'), right: new PaneTabs(backend.ipc, 'right') };
+    panes.left.view.restoreSort('size', true);
+    panes.right.view.restoreSort('size', false);
+    render(WatchHost, { start: () => followPreferences(panes, preferences) });
+    flushSync();
+
+    preferences.set({ showSize: false });
+    flushSync();
+    panes.right.view.sortBy('ext');
+    flushSync();
+    preferences.set({ showSize: true });
+    flushSync();
+
+    expect([panes.left.view.column, panes.left.view.desc]).toEqual(['size', true]);
+    expect(panes.right.view.column).toBe('ext');
+  });
 });

@@ -331,4 +331,21 @@ describe('Pane keyboard and accessibility', () => {
     expect(document.querySelector('.row .ex')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Size' })).not.toBeInTheDocument();
   });
+
+  it('writes the extension after the name when its column is hidden, so that two files never read as one', async () => {
+    const { backend } = await huge();
+    backend.last().emit({ kind: 'batch', offset: 0, entries: [entry('report.pdf', 'file'), entry('report.png', 'file')] });
+    await tick();
+    const names = () => [...document.querySelectorAll('.row .nm')].slice(1, 3).map((name) => name.textContent);
+    const inline = () => document.querySelector('.row .nx');
+
+    expect(inline()).toHaveAttribute('aria-hidden', 'true'); // the Ext column is the one read out
+
+    preferences.set({ showExt: false });
+    await tick();
+
+    expect(names()).toEqual(['report.pdf', 'report.png']);
+    expect(inline()).toHaveClass('shown');
+    expect(inline()).toHaveAttribute('aria-hidden', 'false');
+  });
 });

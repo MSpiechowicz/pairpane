@@ -67,6 +67,7 @@ const COMMANDS: &[&str] = &[
     "edit_save",
     "edit_external",
     "settings_open",
+    "settings_editor",
     "editor_set_dirty",
     "editor_close_ack",
     "app_close_confirmed",

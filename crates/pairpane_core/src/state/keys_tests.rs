@@ -141,3 +141,30 @@ fn a_file_from_before_the_preferences_or_with_some_of_them_takes_the_defaults_fo
     assert!(partial.show_hidden);
     assert!(partial.confirm_trash && partial.show_size && partial.check_updates_at_start);
 }
+
+#[test]
+fn preferences_that_cannot_be_read_take_their_defaults_and_never_lose_the_rest_of_the_state() {
+    use crate::model::ThemeChoice;
+
+    let base = serde_json::to_value(state()).expect("json");
+    let with = |preferences: serde_json::Value| {
+        let mut value = base.clone();
+        value["preferences"] = preferences;
+        serde_json::from_value::<SavedState>(value).expect("the rest of the state is kept")
+    };
+
+    let newer = with(serde_json::json!({ "theme": "sepia", "showExt": false }));
+    let newer = newer.preferences.expect("read");
+    assert_eq!((newer.theme, newer.show_ext), (ThemeChoice::System, false));
+
+    let broken = with(serde_json::json!({ "showExt": "no", "confirmTrash": false }));
+    let read = broken.preferences.expect("read");
+    assert!(
+        read.show_ext && !read.confirm_trash,
+        "a field of the wrong kind takes its default, the others are kept"
+    );
+    assert_eq!(broken.hotlist, state().hotlist);
+
+    let not_an_object = with(serde_json::json!("dark"));
+    assert_eq!(not_an_object.preferences, Some(crate::model::Preferences::default()));
+}

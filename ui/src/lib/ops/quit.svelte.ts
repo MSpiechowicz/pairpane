@@ -31,6 +31,12 @@ export class QuitGuard {
   /** Keeps the backend told. Call while a component is being set up: it starts an effect. */
   watch() {
     $effect(() => this.#unsaved.report('transfers', this.#wanted));
+    // The last transfer ended while the question was on the screen: nothing is left to ask about, so the close goes on.
+    $effect(() => {
+      if (this.asking && !this.#wanted) {
+        this.answer(true);
+      }
+    });
   }
 
   /**

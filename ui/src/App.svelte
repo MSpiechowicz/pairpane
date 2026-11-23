@@ -296,7 +296,8 @@
   onMount(async () => {
     // The panes open the folders of the last session (the home folder when there is none); the rest does not wait.
     // The startup check does: what the session restores says whether it is wanted.
-    void session.restore().then(() => updates.checkAtStart());
+    // Not when the state could not be read: whether the user turned the check off is not known then.
+    void session.restore().then((known) => (known ? updates.checkAtStart() : undefined));
     void volumes.refresh();
     // Without the desktop runtime there are no jobs.
     void transfers.subscribe().catch(() => {});
@@ -399,7 +400,7 @@
   <Palette {palette} onTake={takePicked} />
 {/if}
 
-<ShellDialogs open={dialog} {quit} onEditSettings={editSettings} onClose={() => (dialog = undefined)} />
+<ShellDialogs open={dialog} {ipc} {quit} onEditSettings={editSettings} onClose={() => (dialog = undefined)} />
 
 {#if files.dialog}
   <OpDialog

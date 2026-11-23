@@ -17,6 +17,29 @@ function open() {
 
 const group = (name: string) => screen.getByRole('group', { name });
 
+describe('the Editor section', () => {
+  const show = (loadEditor: () => Promise<unknown>) =>
+    render(SettingsDialog, { preferences: new Preferences(), loadEditor: loadEditor as never, onEditSettings: vi.fn(), onClose: vi.fn() });
+
+  it('shows the external editor the settings file names, as it is', async () => {
+    show(() => Promise.resolve({ program: 'code', args: ['--wait', '{file}'] }));
+
+    expect(await screen.findByLabelText('External editor')).toHaveTextContent('code --wait {file}');
+  });
+
+  it('says when the settings file sets none', async () => {
+    show(() => Promise.resolve(null));
+    expect(await screen.findByLabelText('External editor')).toHaveTextContent('None: F4 opens the built-in editor.');
+  });
+
+  it('says why the settings file cannot be used', async () => {
+    const { IpcFailure } = await import('$lib/ipc/transport');
+    show(() => Promise.reject(new IpcFailure({ code: 'invalidInput', message: 'the settings file is not valid' })));
+
+    expect(await screen.findByLabelText('External editor')).toHaveTextContent('the settings file is not valid');
+  });
+});
+
 /** Each checkbox: the group it is in, its label and the preference it sets. */
 const CHECKBOXES: [string, string, keyof Saved][] = [
   ['Columns', 'Ext', 'showExt'],

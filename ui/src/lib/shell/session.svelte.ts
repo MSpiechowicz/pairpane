@@ -61,8 +61,11 @@ export class Session {
     this.#parts = parts;
   }
 
-  /** Brings back the saved state, or the defaults (both panes in the home folder), and opens the folders. */
-  async restore(): Promise<void> {
+  /**
+   * Brings back the saved state, or the defaults (both panes in the home folder), and opens the folders. Whether the
+   * state is known: `false` when it could not be read (or took too long), when what the user set is not known either.
+   */
+  async restore(): Promise<boolean> {
     const loaded = await this.#load();
     const saved = loaded === UNKNOWN ? null : loaded;
     const { panes, hotlist, searches, renames, keymap, preferences, active } = this.#parts;
@@ -86,6 +89,8 @@ export class Session {
     }
 
     this.#ready = loaded !== UNKNOWN;
+
+    return this.#ready;
   }
 
   /** `null` when nothing (usable) is saved; {@link UNKNOWN} when the load failed or takes too long. */

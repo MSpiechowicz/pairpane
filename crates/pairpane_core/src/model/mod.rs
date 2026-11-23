@@ -29,7 +29,7 @@ pub use compare::{
     CompareEvent, CompareFacts, CompareId, CompareOptions, CompareRoot, CompareRow, CompareStatus, SyncDirection,
     SyncFacts, SyncItem, SyncRemoval,
 };
-pub use edit::{EditDocument, EditOpened, EditSaveOptions, EditSaved, ExternalEdit, LineEnding};
+pub use edit::{EditDocument, EditOpened, EditSaveOptions, EditSaved, EditorSetting, ExternalEdit, LineEnding};
 pub use find::{FindCriteria, FindEvent, FindHit, FindId, FindQuery, FindText, SavedSearch, Tri};
 pub use ipc_error::{IpcError, IpcErrorCode};
 pub use items::{LinkKind, TrashOutcome};

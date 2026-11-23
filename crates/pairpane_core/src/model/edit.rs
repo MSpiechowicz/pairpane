@@ -89,6 +89,15 @@ pub enum EditSaved {
     Changed { gone: bool },
 }
 
+/// The external editor the user's settings file names, as the settings page shows it (it never changes it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct EditorSetting {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
 /// The answer to opening a file in the external editor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

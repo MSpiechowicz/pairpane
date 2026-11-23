@@ -71,7 +71,8 @@ pub struct SavedState {
     pub preferences: Option<Preferences>,
 }
 
-/// The colours of the app: the system's, or always light or dark.
+/// The colours of the app: the system's, or always light or dark. In the preferences, one this version does not know (a
+/// newer version's) reads as the system's.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -84,8 +85,11 @@ pub enum ThemeChoice {
 
 /// What the settings page sets. A field missing from the file (one added later) takes its default; an unknown one is
 /// ignored. The external editor is not here: it is in the user's own `settings.json`, which the page never writes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", default)]
+///
+/// It is read field by field: a field of the wrong kind (a file edited by hand, a newer version's) takes its default,
+/// and preferences that are not an object at all are the defaults, so they never make the rest of the state unreadable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct Preferences {
     pub theme: ThemeChoice,
@@ -103,6 +107,30 @@ pub struct Preferences {
     pub confirm_quit_with_transfers: bool,
     /// The app looks for an update when it starts.
     pub check_updates_at_start: bool,
+}
+
+impl<'de> Deserialize<'de> for Preferences {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let defaults = Self::default();
+        let flag = |name: &str, default: bool| value.get(name).and_then(serde_json::Value::as_bool).unwrap_or(default);
+
+        Ok(Self {
+            theme: match value.get("theme").and_then(serde_json::Value::as_str) {
+                Some("light") => ThemeChoice::Light,
+                Some("dark") => ThemeChoice::Dark,
+                _ => ThemeChoice::System,
+            },
+            show_ext: flag("showExt", defaults.show_ext),
+            show_size: flag("showSize", defaults.show_size),
+            show_modified: flag("showModified", defaults.show_modified),
+            show_hidden: flag("showHidden", defaults.show_hidden),
+            confirm_trash: flag("confirmTrash", defaults.confirm_trash),
+            confirm_transfer: flag("confirmTransfer", defaults.confirm_transfer),
+            confirm_quit_with_transfers: flag("confirmQuitWithTransfers", defaults.confirm_quit_with_transfers),
+            check_updates_at_start: flag("checkUpdatesAtStart", defaults.check_updates_at_start),
+        })
+    }
 }
 
 impl Default for Preferences {

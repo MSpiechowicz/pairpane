@@ -4,6 +4,9 @@ import type { ThemeChoice } from "./ThemeChoice";
 /**
  * What the settings page sets. A field missing from the file (one added later) takes its default; an unknown one is
  * ignored. The external editor is not here: it is in the user's own `settings.json`, which the page never writes.
+ *
+ * It is read field by field: a field of the wrong kind (a file edited by hand, a newer version's) takes its default,
+ * and preferences that are not an object at all are the defaults, so they never make the rest of the state unreadable.
  */
 export type Preferences = { theme: ThemeChoice, 
 /**

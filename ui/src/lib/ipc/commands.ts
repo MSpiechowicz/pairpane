@@ -9,6 +9,7 @@ import type { CompareRoot } from './bindings/CompareRoot';
 import type { ControlAction } from './bindings/ControlAction';
 import type { EditOpened } from './bindings/EditOpened';
 import type { EditSaved } from './bindings/EditSaved';
+import type { EditorSetting } from './bindings/EditorSetting';
 import type { EditSaveOptions } from './bindings/EditSaveOptions';
 import type { ExternalEdit } from './bindings/ExternalEdit';
 import type { FindEvent } from './bindings/FindEvent';
@@ -137,6 +138,7 @@ export const commands = {
   edit_save: cmd<{ path: string; name: string; text: string; options: EditSaveOptions }, EditSaved>(),
   edit_external: cmd<{ path: string; name: string }, ExternalEdit>(),
   settings_open: cmd<undefined, null>(),
+  settings_editor: cmd<undefined, EditorSetting | null>(),
   editor_set_dirty: cmd<{ dirty: boolean }, null>(),
   editor_close_ack: cmd<undefined, null>(),
   app_close_confirmed: cmd<undefined, null>(),

@@ -109,4 +109,16 @@ describe('QuitGuard', () => {
     guard.answer(false);
     expect(await next).toBe('stay');
   });
+
+  it('lets the close go on by itself when the last transfer ends while the question is on the screen', async () => {
+    const { guard, start, end } = await world();
+    start();
+    const answer = guard.discard();
+    expect(guard.asking).toBe(true);
+
+    end();
+
+    expect(await answer).toBe('go');
+    expect(guard.asking).toBe(false);
+  });
 });

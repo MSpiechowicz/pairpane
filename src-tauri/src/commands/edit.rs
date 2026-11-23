@@ -56,6 +56,7 @@ mod approval;
 #[cfg(test)]
 mod guard_tests;
 mod opened;
+pub mod setting;
 #[cfg(test)]
 mod tests;
 

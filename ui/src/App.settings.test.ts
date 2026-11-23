@@ -360,6 +360,16 @@ describe('the update check at startup', () => {
     expect(backend.sent('update_check')).toEqual([]);
   });
 
+  it('is not made when the state could not be read, as whether the user turned it off is not known', async () => {
+    const backend = await shown({
+      state_load: () => Promise.reject(new IpcFailure({ code: 'io', message: 'cannot read' })),
+      update_check: () => info,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(backend.sent('update_check')).toEqual([]);
+  });
+
   it('is not made when the setting is off, but the menu`s check still is', async () => {
     const backend = await shown({ state_load: () => savedWith({ checkUpdatesAtStart: false }), update_check: () => info });
     await new Promise((resolve) => setTimeout(resolve, 20));
