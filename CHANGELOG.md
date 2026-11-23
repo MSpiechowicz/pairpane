@@ -1,3 +1,10 @@
+# [0.27.0](https://github.com/MSpiechowicz/pairpane/compare/v0.26.0...v0.27.0) (2026-11-23)
+
+
+### Features
+
+* **shell:** command line in the dock and Open terminal here (#56) ([efd403a](https://github.com/MSpiechowicz/pairpane/commit/efd403a027cd91adc843a8251aab8354c73eb1ae)), closes [#52](https://github.com/MSpiechowicz/pairpane/issues/52)
+
 # [0.26.0](https://github.com/MSpiechowicz/pairpane/compare/v0.25.0...v0.26.0) (2026-11-23)
 
 
