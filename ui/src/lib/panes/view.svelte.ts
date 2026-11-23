@@ -23,6 +23,8 @@ export interface ViewHooks {
   onFail?: () => void;
   /** An open of another folder failed and the pane stays in the folder it had. */
   onNotice?: () => void;
+  /** Whether hidden entries are listed (the preference). */
+  showHidden?: () => boolean;
 }
 
 /**
@@ -101,6 +103,7 @@ export class PaneView {
       },
       onFail: hooks.onFail,
       onNotice: hooks.onNotice,
+      showHidden: hooks.showHidden,
     });
   }
 

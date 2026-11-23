@@ -9,6 +9,7 @@ import { Volumes } from '$lib/panes/volumes.svelte';
 import { entry, fakeBackend } from '../../../tests/panes';
 import type { Menu } from './menu';
 import Pane from './Pane.svelte';
+import { preferences } from './preferences.svelte';
 
 const TOTAL = 100_000;
 
@@ -313,5 +314,21 @@ describe('Pane keyboard and accessibility', () => {
     const shown = await huge(true, 'drives');
     await fireEvent.click(screen.getByRole('button', { name: 'Drives' }));
     expect(shown.onMenu).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('lays the header and the rows out on the columns the settings show, the narrow layout included', async () => {
+    await huge();
+    const pane = screen.getByRole('region', { name: 'Left pane' });
+    const grid = (name: string) => pane.style.getPropertyValue(name);
+    expect(grid('--cols-full')).toBe('20px minmax(0, 1fr) 48px 74px 118px');
+
+    preferences.set({ showExt: false, showSize: false });
+    await tick();
+
+    expect(grid('--cols-full')).toBe('20px minmax(0, 1fr) 118px');
+    expect(grid('--cols-narrow')).toBe('20px minmax(0, 1fr)');
+    expect(grid('--rename-end')).toBe('3');
+    expect(document.querySelector('.row .ex')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Size' })).not.toBeInTheDocument();
   });
 });

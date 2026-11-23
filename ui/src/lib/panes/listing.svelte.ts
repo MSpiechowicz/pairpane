@@ -29,6 +29,8 @@ export interface ListingHooks {
   onFail?: () => void;
   /** An open of another folder failed and the pane stays in the folder it had (the notice says why). */
   onNotice?: () => void;
+  /** Whether hidden entries are listed; asked as an open begins, so that a folder opened at startup is listed as the preferences say. */
+  showHidden?: () => boolean;
 }
 
 /**
@@ -157,7 +159,7 @@ export class Listing {
   }
 
   #request(target: Target, onEvent: (event: ListEvent) => void, signal: AbortSignal) {
-    const showHidden = this.#showHidden;
+    const showHidden = (this.#showHidden = this.#hooks.showHidden?.() ?? this.#showHidden);
     if ('results' in target) {
       return this.#ipc.invoke('find_open', { pane: this.#pane, id: target.results, onEvent });
     }
@@ -231,7 +233,12 @@ export class Listing {
     return this.#open(this.#here(), false);
   }
 
+  /** Lists hidden entries or not; the folder is listed again when that is a change. */
   setShowHidden(show: boolean): Promise<void> {
+    if (show === this.#showHidden) {
+      return Promise.resolve();
+    }
+
     this.#showHidden = show;
     return this.reload();
   }

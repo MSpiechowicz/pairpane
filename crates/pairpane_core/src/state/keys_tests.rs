@@ -93,3 +93,51 @@ fn an_action_none_of_whose_keys_is_left_keeps_its_defaults_and_one_set_to_none_s
 
     assert_eq!(cleaned, vec![set("trash", Vec::new())]);
 }
+
+#[test]
+fn the_preferences_come_back_and_an_update_without_them_keeps_the_stored_ones() {
+    use crate::model::{Preferences, ThemeChoice};
+
+    let folder = tempfile::tempdir().expect("a folder");
+    let file = folder.path().join("state.json");
+    let preferences = Preferences {
+        theme: ThemeChoice::Dark,
+        show_ext: false,
+        confirm_trash: false,
+        ..Preferences::default()
+    };
+    save(
+        &file,
+        SavedState {
+            preferences: Some(preferences.clone()),
+            ..state()
+        },
+    )
+    .expect("saved");
+
+    let mut update = SavedUpdate::from(state());
+    update.preferences = None;
+    save_update(&file, update, &mut None).expect("saved again");
+
+    assert_eq!(load(&file).expect("loaded").preferences, Some(preferences));
+}
+
+#[test]
+fn a_file_from_before_the_preferences_has_none_so_the_page_keeps_what_it_had() {
+    let folder = tempfile::tempdir().expect("a folder");
+    let file = folder.path().join("state.json");
+    save(&file, state()).expect("saved");
+
+    let text = std::fs::read_to_string(&file).expect("read");
+
+    assert!(!text.contains("preferences"), "{text}");
+    assert_eq!(load(&file).expect("loaded").preferences, None);
+}
+
+#[test]
+fn a_file_from_before_the_preferences_or_with_some_of_them_takes_the_defaults_for_the_rest() {
+    let partial: crate::model::Preferences = serde_json::from_str(r#"{"showHidden": true, "later": 1}"#).expect("read");
+
+    assert!(partial.show_hidden);
+    assert!(partial.confirm_trash && partial.show_size && partial.check_updates_at_start);
+}

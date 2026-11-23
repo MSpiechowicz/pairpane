@@ -7,6 +7,7 @@ export type CommandId =
   | Exclude<Action, 'palette'>
   | FilesChoice
   | 'toggleHidden'
+  | 'settings'
   | 'editSettings'
   | 'keyboardShortcuts'
   | 'checkUpdates';
@@ -52,6 +53,7 @@ export const COMMANDS: readonly { id: CommandId; label: string }[] = [
   { id: 'transfers', label: 'Transfers' },
   { id: 'terminal', label: 'Open terminal here' },
   { id: 'toggleHidden', label: 'Show or hide hidden files' },
+  { id: 'settings', label: 'Settings…' },
   { id: 'editSettings', label: 'Edit settings' },
   { id: 'keyboardShortcuts', label: 'Keyboard shortcuts…' },
   { id: 'checkUpdates', label: 'Check for updates' },

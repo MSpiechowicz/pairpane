@@ -1,6 +1,7 @@
 <script lang="ts">
   import { type Mark, MARK_TEXT } from '$lib/compare/quick';
   import type { Entry } from '$lib/ipc/bindings/Entry';
+  import { preferences } from '$lib/shell/preferences.svelte';
 
   import { displayName, formatDate, iconClass, splitName } from './format';
   import type { InlineRename } from './inlineRename.svelte';
@@ -60,10 +61,16 @@
       <RenameField rename={edit} />
     {:else}
       <span class="nm" title={entry.linkTarget ? displayName(`${entry.name} → ${entry.linkTarget}`) : undefined}>{displayName(parts.base)}</span>
-      <span class="ex">{displayName(parts.ext)}</span>
+      {#if preferences.value.showExt}
+        <span class="ex">{displayName(parts.ext)}</span>
+      {/if}
     {/if}
-    <span class="sz">{#if size !== undefined}{size}{:else}<span class="dirtag">DIR</span>{/if}</span>
-    <span class="dt">{formatDate(entry.modified)}</span>
+    {#if preferences.value.showSize}
+      <span class="sz">{#if size !== undefined}{size}{:else}<span class="dirtag">DIR</span>{/if}</span>
+    {/if}
+    {#if preferences.value.showModified}
+      <span class="dt">{formatDate(entry.modified)}</span>
+    {/if}
   {/if}
 </div>
 

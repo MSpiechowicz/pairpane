@@ -13,6 +13,11 @@ never writes it after that; it is read again every time it is needed, so a chang
 }
 ```
 
+The rest is set in the app: **Settings > Settings…** (or "Settings…" in the command palette) has the theme, the
+columns the panes show, hidden files, the confirmations that can be turned off (moving to the Trash, the target of a
+copy or move, quitting while transfers run; deleting for good always asks) and whether updates are looked for at
+start. Those are kept with the session in Pairpane's own state file, not in `settings.json`, which only you write.
+
 Unknown keys are refused (a typo is reported instead of being ignored); a top-level `"$comment"` is allowed for notes.
 The file may be at most 64 KiB, and it may be a link (for a dotfiles folder).
 

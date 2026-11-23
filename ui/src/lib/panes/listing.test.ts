@@ -121,6 +121,24 @@ describe('Listing', () => {
     expect(backend.last().args).toMatchObject({ path: '/x', showHidden: true });
   });
 
+  it('lists a folder as the hook says about hidden entries, and the same setting again lists nothing', async () => {
+    const backend = fakeBackend();
+    let hidden = true;
+    const listing = new Listing(backend.ipc, 'left', { showHidden: () => hidden });
+
+    await listing.open('/x');
+    expect(backend.last().args).toMatchObject({ path: '/x', showHidden: true });
+    backend.last().emit(start(0, '/x'));
+
+    await listing.setShowHidden(true);
+    expect(backend.opens).toHaveLength(1);
+
+    hidden = false;
+    await listing.setShowHidden(false);
+    expect(backend.opens).toHaveLength(2);
+    expect(backend.last().args).toMatchObject({ path: '/x', showHidden: false });
+  });
+
   it('onFail is called when the pane is left with nothing to show, not for a failed move away from a folder', async () => {
     const backend = fakeBackend();
     const onFail = vi.fn();

@@ -1,15 +1,18 @@
 import type { Transport } from '$lib/ipc/transport';
 
-/** What holds text that is not saved: the editor, or the diff (either of its two files). */
-export type Owner = 'editor' | 'diff';
+/**
+ * What makes a window close worth asking about: the editor or the diff (either of its two files) holds text that is
+ * not saved, or transfers are running and the user wants to be asked before they are stopped.
+ */
+export type Owner = 'editor' | 'diff' | 'transfers';
 
 /**
- * Tells the backend whether a window close would lose changes, so that it asks before it closes. Several owners
- * can hold changes at once; the backend hears only of the one fact (any owner dirty) and only when it changes.
+ * Tells the backend whether a window close would lose something, so that it asks before it closes. Several owners
+ * can hold something at once; the backend hears only of the one fact (any owner dirty) and only when it changes.
  */
 export class Unsaved {
   readonly #ipc: Transport;
-  readonly #owners: Record<Owner, boolean> = { editor: false, diff: false };
+  readonly #owners: Record<Owner, boolean> = { editor: false, diff: false, transfers: false };
   #told = false;
 
   constructor(ipc: Transport) {
@@ -18,7 +21,7 @@ export class Unsaved {
 
   /** Whether any owner holds changes. */
   get dirty(): boolean {
-    return this.#owners.editor || this.#owners.diff;
+    return this.#owners.editor || this.#owners.diff || this.#owners.transfers;
   }
 
   /** An owner's changes appeared or went. */

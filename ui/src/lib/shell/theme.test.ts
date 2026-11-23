@@ -1,5 +1,9 @@
+import { render } from '@testing-library/svelte';
+import { flushSync } from 'svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import WatchHost from '../../../tests/WatchHost.svelte';
+import { Preferences } from './preferences.svelte';
 import { Theme } from './theme.svelte';
 
 /** A window whose OS preference can be flipped, with real (happy-dom) storage and <html>. */
@@ -73,5 +77,45 @@ describe('Theme', () => {
     expect(theme.mode).toBe('system');
     expect(() => theme.set('light')).not.toThrow();
     expect(document.documentElement.dataset.theme).toBe('light');
+  });
+
+  it('a theme choice is a preference: choosing it sets the preference, and the other way round', () => {
+    const preferences = new Preferences();
+    const theme = new Theme(fakeWindow(false).win, preferences);
+
+    theme.set('light');
+    expect(preferences.value.theme).toBe('light');
+
+    render(WatchHost, { start: () => theme.watch() });
+    preferences.set({ theme: 'dark' });
+    flushSync();
+
+    expect(theme.mode).toBe('dark');
+    expect(document.documentElement.dataset.theme).toBe('dark');
+  });
+
+  it('shows the theme of the last session at once, and the restored preference replaces it', () => {
+    window.localStorage.setItem('pairpane.theme', 'dark');
+    const preferences = new Preferences();
+    const theme = new Theme(fakeWindow(true).win, preferences);
+    render(WatchHost, { start: () => theme.watch() });
+    flushSync();
+    expect(document.documentElement.dataset.theme).toBe('dark');
+
+    preferences.restore({ ...preferences.value, theme: 'light' });
+    flushSync();
+
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(window.localStorage.getItem('pairpane.theme')).toBe('light');
+  });
+
+  it('keeps the theme it shows when the session has nothing saved', () => {
+    window.localStorage.setItem('pairpane.theme', 'dark');
+    const preferences = new Preferences();
+    const theme = new Theme(fakeWindow(true).win, preferences);
+
+    preferences.restore(undefined);
+
+    expect(theme.mode).toBe('dark');
   });
 });

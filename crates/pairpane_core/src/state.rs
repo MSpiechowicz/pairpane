@@ -79,6 +79,8 @@ pub fn clean(state: SavedState) -> SavedState {
         searches: searches::clean_searches(state.searches),
         renames: renames::clean_renames(state.renames),
         keys: keys::clean_keys(state.keys),
+        // Flags and a choice of three: nothing to clean.
+        preferences: state.preferences,
     }
 }
 
@@ -97,6 +99,7 @@ fn empty() -> SavedState {
         searches: Vec::new(),
         renames: Vec::new(),
         keys: Vec::new(),
+        preferences: None,
     }
 }
 

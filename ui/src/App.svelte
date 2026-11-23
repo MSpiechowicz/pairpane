@@ -22,12 +22,14 @@
   import OpDialog from '$lib/ops/OpDialog.svelte';
   import PasswordDialog from '$lib/ops/PasswordDialog.svelte';
   import { Passwords } from '$lib/ops/passwords.svelte';
+  import { QuitGuard } from '$lib/ops/quit.svelte';
   import { Transfers } from '$lib/ops/transfers.svelte';
   import TransfersChip from '$lib/ops/TransfersChip.svelte';
   import TransfersPanel from '$lib/ops/TransfersPanel.svelte';
   import ToolDialogs from '$lib/ops/ToolDialogs.svelte';
   import { focusActiveList } from '$lib/panes/focus';
   import { sameArchivePath } from '$lib/panes/archive';
+  import { followPreferences } from '$lib/panes/hidden.svelte';
   import { Hotlist } from '$lib/panes/hotlist.svelte';
   import { PaneTabs } from '$lib/panes/tabs.svelte';
   import { Volumes } from '$lib/panes/volumes.svelte';
@@ -36,10 +38,11 @@
   import Dock from '$lib/shell/Dock.svelte';
   import type { FilesChoice, Menu } from '$lib/shell/menu';
   import Pane from '$lib/shell/Pane.svelte';
+  import { preferences } from '$lib/shell/preferences.svelte';
   import { Session } from '$lib/shell/session.svelte';
+  import ShellDialogs from '$lib/shell/ShellDialogs.svelte';
   import { isTyping, reloadsPage } from '$lib/shell/shortcuts';
   import { keymap } from '$lib/shell/keymap.svelte';
-  import KeymapDialog from '$lib/shell/KeymapDialog.svelte';
   import { switchesPane } from '$lib/shell/switchPane';
   import { type ActionContext, runAction } from '$lib/shell/actions';
   import { isAction } from '$lib/palette/commands';
@@ -61,8 +64,8 @@
   let info = $state<AppInfo | undefined>();
   let failure = $state<string | undefined>();
   let active = $state<Side>('left');
-  let showHidden = $state(false);
-  let keysOpen = $state(false);
+  /** The dialog of the top bar's Settings menu that is open. */
+  let dialog = $state<'keys' | 'settings'>();
   /** The dropdown that is open, and the pane under whose header it is. */
   let menu = $state<{ side: Side; kind: Menu } | undefined>();
 
@@ -70,7 +73,8 @@
   // viewer all work through this transport.
   const passwords = new Passwords(backend);
   const ipc = passwords.wrap(backend);
-  const panes = { left: new PaneTabs(ipc, 'left'), right: new PaneTabs(ipc, 'right') };
+  const hooks = { showHidden: () => preferences.value.showHidden };
+  const panes = { left: new PaneTabs(ipc, 'left', hooks), right: new PaneTabs(ipc, 'right', hooks) };
   // The volumes name the first step of the paths and fill the drive menu.
   const volumes = new Volumes(ipc);
   const hotlist = new Hotlist();
@@ -85,20 +89,18 @@
     searches,
     renames,
     keymap,
+    preferences,
     active: { get: () => active, set: (side) => (active = side) },
   });
   session.watch();
+  followPreferences(panes);
 
   const palette = new PaletteModel({
     folders: () => recentFolders([panes[active], panes[active === 'left' ? 'right' : 'left']]),
     names: () => namesOf(panes[active].view),
   });
 
-  function toggleHidden() {
-    showHidden = !showHidden;
-    void panes.left.view.listing.setShowHidden(showHidden);
-    void panes.right.view.listing.setShowHidden(showHidden);
-  }
+  const toggleHidden = () => preferences.set({ showHidden: !preferences.value.showHidden });
 
   /** An add to an archive ended (or stopped): the panes that show that archive list it again, from the file. */
   function archiveChanged(archive: string) {
@@ -120,7 +122,7 @@
   });
   let panelOpen = $state(false);
   const files = new FileActions(ipc, panes, () => active);
-  const comparison = new Comparison(ipc, panes, (text, error) => files.say(text, error), () => showHidden);
+  const comparison = new Comparison(ipc, panes, (text, error) => files.say(text, error), () => preferences.value.showHidden);
   comparison.syncer.onQueued = (job, undoable) => files.syncs.expect(job, undoable);
   const viewer = new Viewer(ipc, panes, () => active);
   // The editor and the diff both hold text that is not saved: the backend hears of the two as one.
@@ -141,6 +143,9 @@
     say: (text, error) => files.say(text, error),
     blocked: (): boolean => editor.busy,
   });
+  // Quitting with transfers running is asked about too (unless the settings say not to), after the unsaved text.
+  const quit = new QuitGuard(unsaved, transfers);
+  quit.watch();
   const question = $derived(transfers.question);
   /** A dialog (or the viewer's or editor's overlay) has the keyboard: the shortcuts and Tab are its own then. */
   const modal = $derived(
@@ -153,7 +158,8 @@
       finder.modal ||
       comparison.modal ||
       palette.shown ||
-      keysOpen,
+      dialog !== undefined ||
+      quit.asking,
   );
 
   /** Alt+F7: the Find dialog, on the folder the active pane shows (inside an archive: the folder that holds it). */
@@ -174,11 +180,13 @@
   }
 
   const theme = new Theme();
-  // A restart cannot be stopped once it has begun: an editor or a diff with changes asks before it.
+  theme.watch();
+  // A restart cannot be stopped once it has begun: an editor or a diff with changes, or transfers, ask before it.
   const updates = new Updates(
     ipc,
     () => info?.version,
-    async () => (await editor.confirmDiscard()) && (await diff.confirmDiscard()),
+    async () => (await editor.confirmDiscard()) && (await diff.confirmDiscard()) && (await quit.discard()) === 'go',
+    () => preferences.value.checkUpdatesAtStart,
   );
   // macOS has a native app menu (with "Check for Updates…"); Windows and Linux have only the top bar.
   const nativeMenu = /Mac/.test(navigator.userAgent);
@@ -243,7 +251,9 @@
     } else if (item.id === 'editSettings') {
       editSettings();
     } else if (item.id === 'keyboardShortcuts') {
-      keysOpen = true;
+      dialog = 'keys';
+    } else if (item.id === 'settings') {
+      dialog = 'settings';
     } else if (item.id === 'checkUpdates') {
       void updates.check(true);
     } else if (isAction(item.id)) {
@@ -285,7 +295,8 @@
 
   onMount(async () => {
     // The panes open the folders of the last session (the home folder when there is none); the rest does not wait.
-    void session.restore();
+    // The startup check does: what the session restores says whether it is wanted.
+    void session.restore().then(() => updates.checkAtStart());
     void volumes.refresh();
     // Without the desktop runtime there are no jobs.
     void transfers.subscribe().catch(() => {});
@@ -303,17 +314,14 @@
           if (command === 'checkForUpdates') {
             void updates.check(true);
           } else if (command === 'closeRequested') {
-            // Each overlay with changes is asked about, one after the other.
-            void editor.onCloseRequested(() => diff.discard());
+            // Each overlay with changes is asked about, one after the other, and the transfers last.
+            void editor.onCloseRequested(async () => quit.after(await diff.discard()));
           }
         },
       });
     } catch {
       // Without the desktop runtime there is no menu.
     }
-
-    // Silent unless a newer release exists.
-    void updates.check(false);
   });
 </script>
 
@@ -325,10 +333,11 @@
     {failure}
     {theme}
     {nativeMenu}
-    {showHidden}
+    showHidden={preferences.value.showHidden}
     onCheckForUpdates={() => void updates.check(true)}
+    onSettings={() => (dialog = 'settings')}
     onEditSettings={editSettings}
-    onKeyboardShortcuts={() => (keysOpen = true)}
+    onKeyboardShortcuts={() => (dialog = 'keys')}
     onToggleHidden={toggleHidden}
     onFiles={chooseFile}
     onFind={find}
@@ -390,9 +399,7 @@
   <Palette {palette} onTake={takePicked} />
 {/if}
 
-{#if keysOpen}
-  <KeymapDialog {keymap} onClose={() => (keysOpen = false)} />
-{/if}
+<ShellDialogs open={dialog} {quit} onEditSettings={editSettings} onClose={() => (dialog = undefined)} />
 
 {#if files.dialog}
   <OpDialog

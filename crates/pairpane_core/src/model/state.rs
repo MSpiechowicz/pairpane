@@ -64,6 +64,61 @@ pub struct SavedState {
     #[serde(default)]
     #[ts(as = "Option<Vec<KeyOverride>>", optional)]
     pub keys: Vec<KeyOverride>,
+    /// What the settings page sets. Absent in a file from before it (`None`), so that the page can tell "never set" from
+    /// the defaults: it then keeps what it had (the theme it cached), instead of resetting it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub preferences: Option<Preferences>,
+}
+
+/// The colours of the app: the system's, or always light or dark.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ThemeChoice {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+/// What the settings page sets. A field missing from the file (one added later) takes its default; an unknown one is
+/// ignored. The external editor is not here: it is in the user's own `settings.json`, which the page never writes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct Preferences {
+    pub theme: ThemeChoice,
+    /// The columns the panes show besides the name.
+    pub show_ext: bool,
+    pub show_size: bool,
+    pub show_modified: bool,
+    /// The panes list hidden files.
+    pub show_hidden: bool,
+    /// Moving to the Trash asks first (deleting for good always does).
+    pub confirm_trash: bool,
+    /// Copy and move ask for the target folder first; without, they go to the other pane's folder at once.
+    pub confirm_transfer: bool,
+    /// Quitting while copies or moves still run asks first.
+    pub confirm_quit_with_transfers: bool,
+    /// The app looks for an update when it starts.
+    pub check_updates_at_start: bool,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            theme: ThemeChoice::System,
+            show_ext: true,
+            show_size: true,
+            show_modified: true,
+            show_hidden: false,
+            confirm_trash: true,
+            confirm_transfer: true,
+            confirm_quit_with_transfers: true,
+            check_updates_at_start: true,
+        }
+    }
 }
 
 /// A key and the modifiers held with it, as the keymap writes it (`key` is `KeyboardEvent.key`).

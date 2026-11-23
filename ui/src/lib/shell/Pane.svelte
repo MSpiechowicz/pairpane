@@ -2,6 +2,7 @@
   import { untrack } from 'svelte';
 
   import ColumnHeader from '$lib/panes/ColumnHeader.svelte';
+  import { columnTracks, shows } from '$lib/panes/columns';
   import { displayName } from '$lib/panes/format';
   import type { Hotlist } from '$lib/panes/hotlist.svelte';
   import { handleKey } from '$lib/panes/keys';
@@ -16,6 +17,7 @@
   import HotlistMenu from './HotlistMenu.svelte';
   import type { Menu } from './menu';
   import PaneHeader from './PaneHeader.svelte';
+  import { preferences } from './preferences.svelte';
 
   let {
     label,
@@ -42,6 +44,7 @@
     rename?: InlineRename;
   } = $props();
 
+  const tracks = $derived(columnTracks(preferences.value));
   const view = $derived(tabs.view);
   const listing = $derived(view.listing);
   const uid = $props.id();
@@ -140,6 +143,9 @@
   aria-label={label}
   aria-current={active ? 'true' : undefined}
   aria-busy={listing.status === 'loading'}
+  style:--cols-full={tracks.full}
+  style:--cols-narrow={tracks.narrow}
+  style:--rename-end={shows('ext', preferences.value) ? 4 : 3}
   {@attach activateOnClick}
 >
   <PaneHeader
@@ -209,8 +215,8 @@
 
 <style>
   .pane {
-    /* The columns of the header and of every row: icon, name, ext, size, modified. */
-    --pane-cols: 20px minmax(0, 1fr) 48px 74px 118px;
+    /* The columns of the header and of every row: icon, name, then ext, size and modified as far as the settings show them. */
+    --pane-cols: var(--cols-full);
     --cursor-line: color-mix(in srgb, var(--accent) 35%, transparent);
     --cursor-bg: color-mix(in srgb, var(--text) 5%, transparent);
     flex: 1;
@@ -291,7 +297,7 @@
 
   @media (max-width: 760px) {
     .pane {
-      --pane-cols: 20px minmax(0, 1fr) 74px;
+      --pane-cols: var(--cols-narrow);
     }
   }
 </style>

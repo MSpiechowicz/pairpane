@@ -1,9 +1,10 @@
-//! Closing the window or quitting the app while the editor holds unsaved text.
+//! Closing the window or quitting the app while the page has something to ask first: unsaved text in the editor or the
+//! file comparison, or (when the user's preference says so) copies and moves that still run.
 //!
-//! The page tells the shell whether its editor buffer is dirty (`editor_set_dirty`). When the window is asked to close
-//! (or the app to exit) with a dirty buffer, the shell stops it and sends the page `MenuCommand::CloseRequested` over
-//! the menu channel; the page asks Save / Don't save / Cancel and, unless the user cancels, calls `app_close_confirmed`,
-//! which carries out what was stopped. Without a page that can answer (no channel, a closed one) the close goes ahead.
+//! The page tells the shell whether a close must be asked about (`editor_set_dirty`, named after its first use). When
+//! the window is asked to close (or the app to exit) while it must, the shell stops it and sends the page
+//! `MenuCommand::CloseRequested` over the menu channel; the page asks its questions (Save / Don't save / Cancel, Quit
+//! anyway?) and, unless the user cancels, calls `app_close_confirmed`, which carries out what was stopped. Without a page that can answer (no channel, a closed one) the close goes ahead.
 //!
 //! A close that was stopped must never make the app impossible to close: a page that cannot answer (hung, or its
 //! dialog lost) would leave it so. The page acknowledges a question the moment it receives it (`editor_close_ack`).

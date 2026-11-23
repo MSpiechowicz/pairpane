@@ -10,6 +10,7 @@ import type { PaneTabs } from '$lib/panes/tabs.svelte';
 import type { SavedRenames } from '$lib/rename/saved.svelte';
 
 import type { Keymap } from './keymap.svelte';
+import type { Preferences } from './preferences.svelte';
 
 /** The load is given this long; a config folder on a dead share must not keep the panes empty. */
 export const LOAD_TIMEOUT_MS = 2000;
@@ -28,13 +29,15 @@ export interface SessionParts {
   renames: SavedRenames;
   /** The keys the user set for actions. */
   keymap: Keymap;
+  /** What the settings set. */
+  preferences: Preferences;
   /** The pane that has the keyboard focus. */
   active: { get: () => PaneId; set: (pane: PaneId) => void };
 }
 
 /**
  * What survives a restart: both panes' tabs (folder and sort), their active tabs, the active pane and the
- * hotlist, the saved searches, the saved rename rules and the keys the user set. {@link restore} runs once at startup, before any folder is opened; {@link watch} then saves every change
+ * hotlist, the saved searches, the saved rename rules, the keys the user set and the preferences. {@link restore} runs once at startup, before any folder is opened; {@link watch} then saves every change
  * a moment after it, and once more when the page goes away.
  */
 export class Session {
@@ -62,7 +65,10 @@ export class Session {
   async restore(): Promise<void> {
     const loaded = await this.#load();
     const saved = loaded === UNKNOWN ? null : loaded;
-    const { panes, hotlist, searches, renames, keymap, active } = this.#parts;
+    const { panes, hotlist, searches, renames, keymap, preferences, active } = this.#parts;
+
+    // First: the folders are listed as the preferences say (with or without hidden files).
+    preferences.restore(saved?.preferences);
 
     for (const side of ['left', 'right'] as const) {
       const pane: SavedPane = saved?.[side] ?? { tabs: [], active: 0 };
@@ -122,7 +128,7 @@ export class Session {
 
   /** The state as it is now; `undefined` while a folder has not been listed yet (there is no path to save). */
   #snapshot(): { state: SavedState; text: string } | undefined {
-    const { panes, hotlist, searches, renames, keymap, active } = this.#parts;
+    const { panes, hotlist, searches, renames, keymap, preferences, active } = this.#parts;
     const left = this.#pane(panes.left);
     const right = this.#pane(panes.right);
     if (left === undefined || right === undefined) {
@@ -138,6 +144,7 @@ export class Session {
       searches: [...searches.list],
       renames: [...renames.list],
       keys: keymap.overrides,
+      preferences: { ...preferences.value },
     };
     return { state, text: JSON.stringify(state) };
   }

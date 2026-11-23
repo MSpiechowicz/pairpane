@@ -38,6 +38,21 @@ describe('Transfers', () => {
     expect(transfers.question?.info).toMatchObject({ job: 2, question: 3 });
   });
 
+  it('is running from the first job until the last one has ended, a paused one included', async () => {
+    const { transfers, send } = await subscribed();
+    expect(transfers.running).toBe(false);
+
+    send({ kind: 'added', job: job(1) }, { kind: 'added', job: job(2) }, { kind: 'paused', id: 2, paused: true });
+    expect(transfers.running).toBe(true);
+
+    send(done(1));
+    expect(transfers.running).toBe(true);
+
+    send(done(2));
+    expect(transfers.running).toBe(false);
+    expect(transfers.jobs).toHaveLength(2); // the rows stay a while: what has ended does not count
+  });
+
   it('a later snapshot (a reloaded page) replaces what was there', async () => {
     const { transfers, send } = await subscribed();
     send({ kind: 'added', job: job(1) }, { kind: 'conflict', conflict: conflict(1) });

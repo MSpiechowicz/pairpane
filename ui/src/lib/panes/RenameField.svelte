@@ -47,9 +47,9 @@
 />
 
 <style>
-  /* Spans the name and extension columns. */
+  /* Spans the name and extension columns (just the name when the extension is not shown: see Pane). */
   input {
-    grid-column: 2 / 4;
+    grid-column: 2 / var(--rename-end, 4);
     min-width: 0;
     user-select: text;
   }
