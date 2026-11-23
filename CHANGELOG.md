@@ -1,3 +1,10 @@
+# [0.21.0](https://github.com/MSpiechowicz/pairpane/compare/v0.20.0...v0.21.0) (2026-11-23)
+
+
+### Features
+
+* **sync:** mirror, removing what only the target has (#45) ([1b44945](https://github.com/MSpiechowicz/pairpane/commit/1b44945da60e2fb93023ed533928c312f0bfecdd)), closes [#39](https://github.com/MSpiechowicz/pairpane/issues/39)
+
 # [0.20.0](https://github.com/MSpiechowicz/pairpane/compare/v0.19.0...v0.20.0) (2026-11-22)
 
 
