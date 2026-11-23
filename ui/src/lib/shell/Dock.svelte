@@ -3,18 +3,22 @@
 
   import { RESULTS_NOTICE } from '$lib/ops/targets';
 
+  import type { CommandLine } from './command-line.svelte';
+  import CommandOutput from './CommandOutput.svelte';
+  import type { Action } from './shortcuts';
+
   /**
    * The function keys, in key order. Delete is the one destructive key and is marked as such. `needsFolder`: the key
    * does nothing on search results (they are not a folder), which the dock says. F4 included: a result is edited
-   * only after its folder has been opened.
+   * only after its folder has been opened. `action`: what the key does (its default in the keymap).
    */
-  const KEYS: readonly { key: string; label: string; hot?: boolean; needsFolder?: boolean }[] = [
-    { key: 'F3', label: 'View' },
-    { key: 'F4', label: 'Edit', needsFolder: true },
-    { key: 'F5', label: 'Copy' },
-    { key: 'F6', label: 'Move', needsFolder: true },
-    { key: 'F7', label: 'New folder', needsFolder: true },
-    { key: 'F8', label: 'Delete', hot: true },
+  const KEYS: readonly { key: string; action: Action; label: string; hot?: boolean; needsFolder?: boolean }[] = [
+    { key: 'F3', action: 'view', label: 'View' },
+    { key: 'F4', action: 'edit', label: 'Edit', needsFolder: true },
+    { key: 'F5', action: 'copy', label: 'Copy' },
+    { key: 'F6', action: 'move', label: 'Move', needsFolder: true },
+    { key: 'F7', action: 'newFolder', label: 'New folder', needsFolder: true },
+    { key: 'F8', action: 'trash', label: 'Delete', hot: true },
   ];
 
   /** What F5 is called inside an archive: the selection is extracted. */
@@ -23,30 +27,67 @@
   let {
     inArchive = false,
     inResults = false,
-    onKey,
+    commandLine,
+    onAction,
     children,
   }: {
     /** The active pane shows a folder inside an archive: there F5 extracts the selection instead of copying it. */
     inArchive?: boolean;
     /** The active pane shows search results: moving and making a folder are not possible there (the key says why when used). */
     inResults?: boolean;
-    /** A function key was clicked; it does what pressing it does. */
-    onKey?: (key: string) => void;
+    /** The command line: a line typed runs there, its output shows above the dock. */
+    commandLine?: CommandLine;
+    /** A function key was clicked: the action it stands for (F5 copy, also when it is called Extract). */
+    onAction?: (action: Action) => void;
     /** Between the command line and the keys. */
     children?: Snippet;
   } = $props();
+
+  let typed = $state('');
+
+  async function onLineKey(event: KeyboardEvent) {
+    if (commandLine === undefined || event.isComposing) {
+      return;
+    }
+
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (await commandLine.run(typed)) {
+        typed = '';
+      }
+    } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      const line = commandLine.recall(event.key === 'ArrowUp' ? -1 : 1);
+      if (line !== undefined) {
+        typed = line;
+      }
+    } else if (event.key === 'Escape' && commandLine.shown && !commandLine.running) {
+      event.preventDefault();
+      commandLine.close();
+    }
+  }
 </script>
 
 <!-- One row: the shell command line on the left, content-width function keys on the right, no separators; whatever
   the dock is given (the transfers chip) sits between them. -->
 <footer class="dock">
+  {#if commandLine}
+    <CommandOutput {commandLine} />
+  {/if}
   <label class="shell">
     <span class="prompt" aria-hidden="true">❯</span>
-    <input placeholder="Shell command in the active folder…" spellcheck="false" aria-label="Shell command" />
+    <input
+      placeholder="Shell command in the active folder…"
+      spellcheck="false"
+      autocomplete="off"
+      aria-label="Shell command"
+      bind:value={typed}
+      onkeydown={onLineKey}
+    />
   </label>
   {@render children?.()}
   <div class="keys">
-    {#each KEYS as { key, label: plain, hot, needsFolder } (key)}
+    {#each KEYS as { key, action, label: plain, hot, needsFolder } (key)}
       {@const label = labelOf(key, plain)}
       {@const unavailable = inResults && needsFolder}
       <button
@@ -57,7 +98,7 @@
         aria-label="{label} ({key})"
         aria-disabled={unavailable || undefined}
         title={unavailable ? RESULTS_NOTICE : undefined}
-        onclick={() => onKey?.(key)}
+        onclick={() => onAction?.(action)}
       >
         <kbd>{key}</kbd><span class="label">{label}</span>
       </button>
@@ -67,6 +108,7 @@
 
 <style>
   .dock {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 10px;

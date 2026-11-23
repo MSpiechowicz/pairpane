@@ -50,6 +50,7 @@ export const COMMANDS: readonly { id: CommandId; label: string }[] = [
   { id: 'driveMenuRight', label: 'Drives of the right pane' },
   { id: 'hotlist', label: 'Hotlist' },
   { id: 'transfers', label: 'Transfers' },
+  { id: 'terminal', label: 'Open terminal here' },
   { id: 'toggleHidden', label: 'Show or hide hidden files' },
   { id: 'editSettings', label: 'Edit settings' },
   { id: 'keyboardShortcuts', label: 'Keyboard shortcuts…' },

@@ -44,12 +44,22 @@ const SHELL_COMMAND = new RegExp(
   'i',
 );
 
+// The one place a shell runs: the dock's command line, whose purpose is to run what the user types in their own shell
+// (issue #52). The user allows it in a native dialog once per run of the app; see `crates/pairpane_core/src/shell/mod.rs`
+// and `src-tauri/src/commands/shell.rs`. Everywhere else both shell rules hold, and no marker can waive them.
+const COMMAND_LINE = [
+  'crates/pairpane_core/src/shell/**',
+  'src-tauri/src/commands/shell.rs',
+  'src-tauri/src/commands/shell/**',
+] as const;
+
 const RULES: readonly Rule[] = [
   {
     id: 'shell-spawn',
     reason: 'never spawn a shell; use a fixed binary with explicit argv',
     pattern: SHELL_COMMAND,
     extensions: ['.rs'],
+    skip: COMMAND_LINE,
     optOut: false,
   },
   {
@@ -58,6 +68,7 @@ const RULES: readonly Rule[] = [
       'never name a shell interpreter in Rust source; use a fixed binary with explicit argv',
     pattern: SHELL_PROGRAM,
     extensions: ['.rs'],
+    skip: COMMAND_LINE,
     optOut: false,
   },
   {

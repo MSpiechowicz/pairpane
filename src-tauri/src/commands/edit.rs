@@ -426,7 +426,7 @@ fn external_error(error: &io::Error) -> CommandError {
 
 /// Asks the user, in a native dialog of the shell, whether the external editor `question` names may run. Blocks until
 /// the answer, so it is called on a blocking thread only. The dialog is modal over the main window.
-fn ask_user(app: &AppHandle, question: String) -> bool {
+pub(super) fn ask_user(app: &AppHandle, question: String) -> bool {
     let dialog = app
         .dialog()
         .message(dialog_text(&question))

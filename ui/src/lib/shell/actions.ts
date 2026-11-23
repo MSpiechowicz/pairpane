@@ -19,6 +19,7 @@ export interface ActionContext {
   compareFiles: () => void;
   quickView: () => void;
   find: () => void;
+  terminal: () => void;
   palette: () => void;
 }
 
@@ -71,6 +72,9 @@ export function runAction(action: Action, context: ActionContext) {
       break;
     case 'find':
       context.find();
+      break;
+    case 'terminal':
+      context.terminal();
       break;
     case 'palette':
       context.palette();

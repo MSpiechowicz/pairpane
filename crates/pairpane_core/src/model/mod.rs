@@ -16,6 +16,7 @@ mod markdown;
 mod ops;
 mod pack;
 mod rename;
+mod shell;
 mod state;
 mod tasks;
 mod update;
@@ -42,6 +43,7 @@ pub use rename::{
     CaseChange, CasePart, RenameCounter, RenamePreview, RenameProblem, RenameRow, RenameRule, RuleError, RuleField,
     SavedRename,
 };
+pub use shell::{ShellEvent, ShellId};
 pub use state::{KeyChord, KeyOverride, SavedPane, SavedState, SavedTab, SortColumn};
 pub use tasks::{AttributeChange, HashAlgorithm, ItemProperties, JobTask, ModeChange, WindowsAttributes};
 pub use update::{MAX_UPDATE_NOTES_BYTES, MenuCommand, UpdateInfo, UpdatePhase, UpdateProgress};

@@ -32,6 +32,7 @@
   import { PaneTabs } from '$lib/panes/tabs.svelte';
   import { Volumes } from '$lib/panes/volumes.svelte';
   import { SavedRenames } from '$lib/rename/saved.svelte';
+  import { CommandLine, placeOf } from '$lib/shell/command-line.svelte';
   import Dock from '$lib/shell/Dock.svelte';
   import type { FilesChoice, Menu } from '$lib/shell/menu';
   import Pane from '$lib/shell/Pane.svelte';
@@ -172,22 +173,6 @@
     }
   }
 
-  function onDockKey(key: string) {
-    if (key === 'F3') {
-      viewer.open();
-    } else if (key === 'F4') {
-      edit();
-    } else if (key === 'F5') {
-      files.run('copy');
-    } else if (key === 'F6') {
-      files.run('move');
-    } else if (key === 'F7') {
-      files.run('newFolder');
-    } else if (key === 'F8') {
-      files.run('trash');
-    }
-  }
-
   const theme = new Theme();
   // A restart cannot be stopped once it has begun: an editor or a diff with changes asks before it.
   const updates = new Updates(
@@ -213,6 +198,8 @@
   }
 
   /** What the actions of the keymap and the palette act on (see `runAction`). */
+  const commandLine = new CommandLine(ipc, () => placeOf(panes[active].view.listing), (text, error) => files.say(text, error));
+
   const actions: ActionContext = {
     tabs: () => panes[active],
     active: () => active,
@@ -224,6 +211,7 @@
     compareFiles: () => diff.open(),
     quickView: () => viewer.toggleQuick(),
     find: () => find(),
+    terminal: () => commandLine.terminal(),
     palette: () => palette.show(),
   };
 
@@ -368,7 +356,12 @@
     {/each}
   </main>
 
-  <Dock inArchive={panes[active].view.listing.readonly} inResults={panes[active].view.listing.results !== undefined} onKey={onDockKey}>
+  <Dock
+    inArchive={panes[active].view.listing.readonly}
+    inResults={panes[active].view.listing.results !== undefined}
+    {commandLine}
+    onAction={(action) => runAction(action, actions)}
+  >
     <TransfersChip {transfers} open={panelOpen} onToggle={() => (panelOpen = !panelOpen)} />
   </Dock>
 </div>

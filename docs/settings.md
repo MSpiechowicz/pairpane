@@ -55,3 +55,16 @@ Prefer terminals that take the command as separate arguments (`kitty CMD…`, `g
 `x-terminal-emulator -e` on some systems, `konsole -e` in some versions) join the rest of the line into one string and
 split it again, so a file name with spaces or quotes is cut up, and a crafted file name could pass options to the editor.
 Put `--` before `{file}` where the editor supports it, so a name can never be read as an option.
+
+## The command line and Open terminal here
+
+These two are not settings, but they use what your system says:
+
+- **The command line** (the dock's `❯` field) runs what you type in your own shell (`$SHELL`, or `/bin/sh` when it is
+  not set; `%ComSpec%` on Windows) in the folder of the active pane. Its input is closed, and its output appears above
+  the dock: up to 1 MiB, with colours and other terminal codes left out. **Stop** ends the command and everything it
+  started. The first command after each start of Pairpane asks you to allow the command line.
+- **Open terminal here** (in the command palette, and it can be given a key) opens a terminal in that folder: on Linux
+  the one `$TERMINAL` names (a program name or an absolute path, with no arguments), otherwise the first of
+  `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `kitty`, `alacritty`, `wezterm`, `foot` and
+  `xterm` that is installed; Terminal on macOS; a new console window of your shell on Windows.
