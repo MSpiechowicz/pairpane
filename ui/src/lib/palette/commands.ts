@@ -1,5 +1,5 @@
 import type { FilesChoice } from '$lib/shell/menu';
-import { type Action, BINDINGS, keysOf } from '$lib/shell/shortcuts';
+import { ACTIONS, type Action, keysOf } from '$lib/shell/shortcuts';
 
 /** A command the palette lists: an action of the keymap, a choice of the Files menu, or one of the top bar's. */
 export type CommandId = Exclude<Action, 'palette'> | FilesChoice | 'toggleHidden' | 'editSettings' | 'checkUpdates';
@@ -48,9 +48,9 @@ export const COMMANDS: readonly { id: CommandId; label: string }[] = [
   { id: 'checkUpdates', label: 'Check for updates' },
 ];
 
-/** Whether `id` is an action of the keymap. */
+/** Whether `id` is an action of the keymap (whatever keys it has, if any). */
 export function isAction(id: string): id is Action {
-  return BINDINGS.some((binding) => binding.action === id);
+  return (ACTIONS as readonly string[]).includes(id);
 }
 
 /** The keys of the command `id`, as they are written, when it has any. */

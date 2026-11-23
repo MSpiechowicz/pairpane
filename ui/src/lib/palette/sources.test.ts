@@ -16,9 +16,10 @@ describe('recentFolders', () => {
 });
 
 describe('namesOf', () => {
-  it('gives the names of the entries loaded, in order', () => {
-    const view = { listing: { entries: [{ name: 'x' }, undefined, { name: 'y' }] } } as unknown as PaneView;
+  it('gives the names the pane shows, in its order: `..` and the entries not loaded left out', () => {
+    const rows = [undefined, { name: 'y' }, undefined, { name: 'x' }];
+    const view = { count: rows.length, entryAt: (row: number) => rows[row] } as unknown as PaneView;
 
-    expect(namesOf(view)).toEqual(['x', 'y']);
+    expect(namesOf(view)).toEqual(['y', 'x']);
   });
 });

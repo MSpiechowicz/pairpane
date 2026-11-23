@@ -2,35 +2,39 @@
  * What a window-level shortcut asks for. The drive menus, the hotlist, the file dialogs and the transfers panel
  * are run by the shell that owns them.
  */
-export type Action =
-  | 'newTab'
-  | 'closeTab'
-  | 'nextTab'
-  | 'previousTab'
-  | 'back'
-  | 'forward'
-  | 'driveMenuLeft'
-  | 'driveMenuRight'
-  | 'hotlist'
-  | 'copy'
-  | 'move'
-  | 'rename'
-  | 'renameInline'
-  | 'multiRename'
-  | 'newFolder'
-  | 'newFile'
-  | 'trash'
-  | 'deletePermanently'
-  | 'properties'
-  | 'extract'
-  | 'pack'
-  | 'find'
-  | 'transfers'
-  | 'view'
-  | 'edit'
-  | 'compareFiles'
-  | 'quickView'
-  | 'palette';
+export const ACTIONS = [
+  'newTab',
+  'closeTab',
+  'nextTab',
+  'previousTab',
+  'back',
+  'forward',
+  'driveMenuLeft',
+  'driveMenuRight',
+  'hotlist',
+  'copy',
+  'move',
+  'rename',
+  'renameInline',
+  'multiRename',
+  'newFolder',
+  'newFile',
+  'trash',
+  'deletePermanently',
+  'properties',
+  'extract',
+  'pack',
+  'find',
+  'transfers',
+  'view',
+  'edit',
+  'compareFiles',
+  'quickView',
+  'palette',
+] as const;
+
+/** An action of the keymap. */
+export type Action = (typeof ACTIONS)[number];
 
 /** A key that stands for an action, with the modifiers that must be held (and no other). */
 export interface Binding {

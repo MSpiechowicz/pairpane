@@ -20,6 +20,11 @@
   }
 
   function onKeyDown(event: KeyboardEvent) {
+    // A key of an input method that composes text (keyCode 229 in WebKit) is the method's, not the palette's.
+    if (event.isComposing || event.keyCode === 229) {
+      return;
+    }
+
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       palette.move(event.key === 'ArrowDown' ? 1 : -1);
@@ -48,6 +53,7 @@
     type="text"
     role="combobox"
     aria-expanded="true"
+    aria-autocomplete="list"
     aria-controls={listId}
     aria-activedescendant={items.length > 0 ? `${listId}-${palette.cursor}` : undefined}
     aria-label="Command, folder or name"

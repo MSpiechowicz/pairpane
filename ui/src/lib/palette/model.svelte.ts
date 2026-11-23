@@ -16,7 +16,7 @@ export interface PaletteSources {
   names: () => readonly string[];
 }
 
-/** The most rows the palette shows. */
+/** The most rows the palette shows for what is typed. */
 export const MOST_SHOWN = 50;
 
 /** How many recent folders show while nothing is typed. */
@@ -52,8 +52,9 @@ export class Palette {
     const commands: PaletteItem[] = COMMANDS.map(({ id, label }) => ({ kind: 'command', id, label, keys: keysFor(id) }));
     const folders: PaletteItem[] = this.#sources.folders().map((path) => ({ kind: 'folder', path, label: path }));
 
+    // Every command, and the latest folders whatever their number.
     if (query.trim() === '') {
-      return [...commands, ...folders.slice(0, RECENT_SHOWN)].slice(0, MOST_SHOWN);
+      return [...commands, ...folders.slice(0, RECENT_SHOWN)];
     }
 
     const names: PaletteItem[] = this.#sources.names().map((name) => ({ kind: 'file', name, label: name }));

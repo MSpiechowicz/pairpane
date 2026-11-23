@@ -44,6 +44,15 @@ describe('Palette', () => {
     expect(onTake).toHaveBeenCalledWith(expect.objectContaining({ kind: 'folder', path: '/srv/data' }));
   });
 
+  it('leaves the keys of an input method that composes text to it', async () => {
+    const { field, onTake } = open();
+
+    await fireEvent.keyDown(field, { key: 'Enter', isComposing: true });
+    await fireEvent.keyDown(field, { key: 'Enter', keyCode: 229 });
+
+    expect(onTake).not.toHaveBeenCalled();
+  });
+
   it('says when nothing matches', async () => {
     const { field } = open();
 

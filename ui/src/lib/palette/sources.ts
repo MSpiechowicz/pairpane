@@ -16,16 +16,17 @@ export function recentFolders([active, other]: readonly [PaneTabs, PaneTabs]): s
   return [...new Set(found)].filter((path) => path !== here);
 }
 
-/** The names of the folder `view` lists (those loaded, at most {@link MOST_NAMES}). */
+/**
+ * The names the pane `view` shows, in its order: those its filter lets through, loaded, at most {@link MOST_NAMES} (a
+ * name the cursor could not go to is never offered).
+ */
 export function namesOf(view: PaneView): string[] {
   const names: string[] = [];
 
-  for (const entry of view.listing.entries) {
+  for (let row = 0; row < view.count && names.length < MOST_NAMES; row += 1) {
+    const entry = view.entryAt(row);
     if (entry !== undefined) {
       names.push(entry.name);
-      if (names.length >= MOST_NAMES) {
-        break;
-      }
     }
   }
 
