@@ -67,18 +67,19 @@ struct Entries {
     ended: i64,
     /// The undo is no longer offered: the holding folders go as soon as nothing uses them.
     released: bool,
-    /// An undo runs.
-    undoing: bool,
+    /// An undo job runs.
+    running: bool,
+    /// The undo jobs queued whose end the caller has not been told of yet.
+    queued: u32,
     /// An undo went through to its end.
     undone: bool,
 }
 
 impl Entries {
-    /// Removes the holding folders when nothing needs them any more: the sync is over, no undo runs, and the undo is no
-    /// longer offered or was done.
-    /// The holding folders to remove now (see [`drop_all`]), taken out of the log.
+    /// The holding folders to remove now, taken out of the log: nothing needs them any more (the sync is over, no undo
+    /// runs or is queued, and the undo is no longer offered or was done).
     fn settle(&mut self) -> Vec<Holding> {
-        if self.finished && !self.undoing && (self.released || self.undone) {
+        if self.finished && !self.running && self.queued == 0 && (self.released || self.undone) {
             std::mem::take(&mut self.holdings)
         } else {
             Vec::new()
@@ -136,10 +137,12 @@ impl SyncLog {
         locked(&self.0).holdings.iter().map(path_of).collect()
     }
 
-    /// Whether an undo of the job runs now.
+    /// Whether an undo of the job runs now, or is queued.
     #[must_use]
     pub fn undoing(&self) -> bool {
-        locked(&self.0).undoing
+        let entries = locked(&self.0);
+
+        entries.running || entries.queued > 0
     }
 
     /// Whether an undo of the job went through to its end.
@@ -159,19 +162,17 @@ impl SyncLog {
         drop_all(dropping);
     }
 
-    /// An undo of the job is queued: until it is over (see [`SyncLog::end_undo`]) nothing it needs goes.
+    /// An undo job of the job is queued: until the caller says it ended ([`SyncLog::undo_ended`]) nothing it needs goes.
     pub fn undo_queued(&self) {
-        locked(&self.0).undoing = true;
+        let mut entries = locked(&self.0);
+        entries.queued = entries.queued.saturating_add(1);
     }
 
-    /// The undo is over; `through` when it went to its end with nothing failed (what it skipped included), else it can be
-    /// asked for again and the old files stay. Told by the undo job itself, and again by its caller once the job ended,
-    /// however it ended (a job cancelled before it ran tells nothing itself): the second time changes nothing.
-    pub fn end_undo(&self, through: bool) {
+    /// An undo job queued earlier ended, however it ended (also one cancelled before it ran, or one the engine refused).
+    pub fn undo_ended(&self) {
         let dropping = {
             let mut entries = locked(&self.0);
-            entries.undoing = false;
-            entries.undone |= through;
+            entries.queued = entries.queued.saturating_sub(1);
             entries.settle()
         };
 
@@ -226,9 +227,22 @@ impl SyncLog {
         drop_all(dropping);
     }
 
-    /// An undo starts.
+    /// An undo job starts.
     pub(super) fn begin_undo(&self) {
-        locked(&self.0).undoing = true;
+        locked(&self.0).running = true;
+    }
+
+    /// The undo job is over; `through` when it went to its end with nothing failed (what it skipped included), else it can
+    /// be asked for again and the old files stay.
+    pub(super) fn end_undo(&self, through: bool) {
+        let dropping = {
+            let mut entries = locked(&self.0);
+            entries.running = false;
+            entries.undone |= through;
+            entries.settle()
+        };
+
+        drop_all(dropping);
     }
 }
 

@@ -344,5 +344,11 @@ fn a_queued_undo_keeps_the_old_files_through_a_release_until_it_has_run() {
 
     is_done(&Rig::new().run(undo_of(&pair, &log)), 0);
     assert_eq!(read(&pair.right().join("over.txt")), b"older");
+    assert_eq!(
+        holdings(&pair.right()),
+        1,
+        "kept until the caller is told the queued job ended"
+    );
+    log.undo_ended();
     assert_eq!(holdings(&pair.right()), 0);
 }
