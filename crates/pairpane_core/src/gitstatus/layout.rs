@@ -3,6 +3,7 @@
 //! it, see [`super::links::is_physical`]; an alternate's is the folder its path leads to) that is a local place and no broad
 //! one (the root, the home folder or a folder above it, a file system of the kernel's own: [`is_too_broad`]).
 
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -76,13 +77,14 @@ impl Layout {
     /// folder, the common folder and the alternates' folders, each once.
     pub(super) fn folders(&self) -> Vec<PathBuf> {
         let mut folders: Vec<PathBuf> = Vec::new();
+        let mut seen: HashSet<PathBuf> = HashSet::new();
 
         for folder in [&self.workdir, &self.git_dir, &self.common_dir]
             .into_iter()
             .chain(&self.alternates)
         {
             let folder = normalise(folder);
-            if !folders.contains(&folder) {
+            if seen.insert(folder.clone()) {
                 folders.push(folder);
             }
         }
@@ -165,18 +167,30 @@ pub(super) fn is_too_broad_with(folder: &Path, home: Option<&Path>, macos: bool)
 /// The folders that are shared by every user of the machine, as they are spelled on Linux and (resolved) on macOS.
 #[cfg(unix)]
 fn shared_folders() -> Vec<PathBuf> {
-    let user = PathBuf::from(format!("/run/user/{}", rustix::process::getuid().as_raw()));
+    let uid = rustix::process::getuid().as_raw();
+    let user = PathBuf::from(format!("/run/user/{uid}"));
     let fixed = [
         "/tmp",
         "/var/tmp",
         "/dev/shm",
         "/mnt",
         "/media",
+        "/run/media",
+        "/run/lock",
         "/private/tmp",
         "/private/var/tmp",
+        "/Users/Shared",
+        "/Volumes",
     ];
+    // udisks2 mounts the user's removable media below `/run/media/<user name>`.
+    let media = uzers::get_current_username().map(|name| PathBuf::from("/run/media").join(name));
 
-    fixed.into_iter().map(PathBuf::from).chain([user]).collect()
+    fixed
+        .into_iter()
+        .map(PathBuf::from)
+        .chain([user])
+        .chain(media)
+        .collect()
 }
 
 /// Windows has no such folders by a fixed name.

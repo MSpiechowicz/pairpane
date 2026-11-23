@@ -38,7 +38,11 @@ pub(super) fn is_automount_with(place: &Path, macos: bool) -> bool {
         return false;
     };
 
-    if is(&first, "net") || is(&first, "Network") {
+    // `/.nofollow/…`, `/.resolve/<n>/…` and `/.vol/<dev>/<ino>` are prefixes macOS's kernel reads as a way of naming another
+    // path (with which `/.nofollow/net/<host>` is `/net/<host>`), so on macOS none of them is let through whatever follows.
+    let names_another_path = macos && (is(&first, ".nofollow") || is(&first, ".resolve") || is(&first, ".vol"));
+
+    if names_another_path || is(&first, "net") || is(&first, "Network") {
         true
     } else if is(&first, "home") {
         macos
@@ -85,7 +89,9 @@ pub(super) fn is_autofs(_path: &Path) -> bool {
 fn probe_flags() -> rustix::fs::OFlags {
     use rustix::fs::OFlags;
 
-    OFlags::PATH | OFlags::NOFOLLOW | OFlags::DIRECTORY | OFlags::CLOEXEC
+    // No `O_DIRECTORY`: with it the lookup asks for a folder, which makes the kernel mount a direct automount point it lands
+    // on (`follow_automount`), and then `fstatfs` would see the mounted file system rather than the trigger.
+    OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC
 }
 
 #[cfg(target_os = "macos")]
@@ -152,6 +158,20 @@ mod tests {
     fn every_spelling_of_an_automount_point_is_refused_on_macos() {
         for text in MACOS_SPELLINGS {
             assert!(is_automount_with(Path::new(text), true), "{text}");
+        }
+        // The kernel's prefixes that name another path are refused, in any case.
+        for text in [
+            "/.nofollow/net/x",
+            "/.NOFOLLOW/Net",
+            "/.resolve/1/net/x",
+            "/.vol/1/2",
+            "/srv/../.nofollow/x",
+        ] {
+            assert!(is_automount_with(Path::new(text), true), "{text}");
+            assert!(
+                !is_automount_with(Path::new(text), false) || text.contains("/net"),
+                "{text}"
+            );
         }
         // Dots are read away first, whatever case the names after them have.
         for text in [

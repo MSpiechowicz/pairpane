@@ -11,8 +11,24 @@ use unicode_normalization::UnicodeNormalization;
 
 /// The name `name` as a case-insensitive, normalisation-insensitive file system reads it: precomposed (NFC), each character in
 /// upper and then in lower case (so that the Kelvin sign and `K` meet at `k`, and the long s and `s` at `s`), precomposed again
-/// (a case change can leave a name that is not).
+/// (a case change can leave a name that is not), and all of that again until nothing changes (one round is not always enough:
+/// the capital sharp s `ẞ` becomes `ß` in the first and `ss` in the second, which is where `ss` lands at once).
 pub(super) fn fold(name: &str) -> String {
+    let mut folded = fold_once(name);
+
+    // Two rounds reach a fixed point for every character Unicode has today; the bound only guards against one that would not.
+    for _ in 0..4 {
+        let again = fold_once(&folded);
+        if again == folded {
+            break;
+        }
+        folded = again;
+    }
+
+    folded
+}
+
+fn fold_once(name: &str) -> String {
     name.nfc()
         .flat_map(char::to_uppercase)
         .flat_map(char::to_lowercase)
@@ -106,5 +122,12 @@ mod tests {
         assert!(equals(Path::new("/USERS/ann"), home, true));
         assert!(!equals(Path::new("/USERS/ann/x"), home, true));
         assert!(!equals(Path::new("/USERS/ann"), home, false));
+    }
+
+    #[test]
+    fn the_capital_sharp_s_folds_where_ss_does() {
+        assert_eq!(fold("STRAU\u{1E9E}"), fold("strauss"));
+        assert_eq!(fold("Stra\u{DF}e"), fold("STRASSE"));
+        assert_eq!(fold(&fold("\u{1E9E}")), fold("\u{1E9E}"));
     }
 }

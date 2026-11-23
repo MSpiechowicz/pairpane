@@ -75,7 +75,12 @@ pub(super) fn resolve_confined(path: &Path) -> io::Result<PathBuf> {
 #[cfg(not(windows))]
 fn resolved(path: &Path, is_autofs: &mut dyn FnMut(&Path) -> bool) -> io::Result<PathBuf> {
     match walk_with(path, cfg!(target_os = "macos"), is_autofs) {
-        Err(error) if leads_nowhere(&error) && fs::metadata(path).is_ok() => Err(refused()),
+        // A walk that ends at nothing but a path the kernel can still follow is a magic link (`/proc/<pid>/fd/<n>`). Only Linux
+        // has those; elsewhere the whole path is not looked up once more (on macOS a prefix the walk did not know of could name
+        // another path).
+        Err(error) if cfg!(target_os = "linux") && leads_nowhere(&error) && fs::metadata(path).is_ok() => {
+            Err(refused())
+        }
         other => other,
     }
 }
