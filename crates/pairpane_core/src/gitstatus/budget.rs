@@ -30,7 +30,7 @@ use super::watch::Stop;
 pub(super) const SOURCE_BYTES: u64 = 256 * 1024;
 
 /// The most the rules sources of one status may add up to.
-pub(super) const TOTAL_BYTES: u64 = 4 * 1024 * 1024;
+pub(super) const TOTAL_BYTES: u64 = 8 * 1024 * 1024;
 
 /// The rules files of a folder.
 const NAMES: [&str; 2] = [".gitignore", ".gitattributes"];

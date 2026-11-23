@@ -18,8 +18,8 @@ fn rules(bytes: usize) -> Vec<u8> {
     "a x\n".repeat(bytes / 4).into_bytes()
 }
 
-/// How many levels of folders: each holds 250 KiB, so 17 of them are over 4 MiB.
-const LEVELS: usize = 20;
+/// How many levels of folders: each holds 250 KiB, so 34 of them are over 8 MiB.
+const LEVELS: usize = 40;
 
 /// A repository of a chain of `LEVELS` folders `d/d/d/...` that each hold a tracked `name` of 250 KiB in the index, the files
 /// of which are in the work tree (`in_tree`) or not, with a tracked `f.txt` at the bottom that has another content than the

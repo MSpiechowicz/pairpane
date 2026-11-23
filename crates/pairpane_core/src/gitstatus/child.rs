@@ -4,11 +4,15 @@
 //!
 //! What it does, in order:
 //!
+//! 0. Starts a session of its own (`setsid`, Unix), so that it has no controlling terminal: nothing can be pushed into one with
+//!    `TIOCSTI` and it cannot be signalled through one.
 //! 1. Closes every descriptor it inherited that is not one of its three streams (Linux, macOS).
 //! 2. Reads the request from its standard input, at most [`MAX_REQUEST`] bytes: the folder, the limits and the folders of the
 //!    repository the parent looked at (`Layout`). It reads nothing else from anywhere but those folders from here on.
 //! 3. Confines itself before gix opens anything (see below). A process that cannot is a process that exits without an
-//!    answer: it never reads a repository unconfined where the system has a way to confine it.
+//!    answer: it never reads a repository unconfined where the system has a way to confine it. That includes a Landlock that the
+//!    kernel has and that is not enforced, and a folder that is not the one that the parent looked at (its device and inode, in
+//!    the request): the HEIC and thumbnail helpers, which hold no repository's files, go on without Landlock as before.
 //! 4. Runs the status in-process (`scan::read`: gix opens exactly the `Layout`, and re-checks it with `Layout::is_opened`), and
 //!    writes the answer (`request::encode_answer`): the marks, or only the kind of the error.
 //!
@@ -16,7 +20,7 @@
 //!
 //! - **Linux** (`view/heic/sandbox.rs`): it dies with the app (`PR_SET_PDEATHSIG`), can gain no privileges
 //!   (`PR_SET_NO_NEW_PRIVS`), has no core dump, a limit of [`MAX_FILES`] open files, of the processor time the status may take
-//!   and a second, and of [`MEMORY`] of data (the heap and the private writable mappings: not the address space, which would
+//!   and a second (its hard limit a second more, so that `SIGXCPU` is delivered and read as a time out), and of [`MEMORY`] of data (the heap and the private writable mappings: not the address space, which would
 //!   refuse to map a pack as big as the repository is). Landlock lets it **read only** below the folders of the layout (the work
 //!   tree, the git folder, the common folder and the object folders of the alternates), with every network right and the
 //!   abstract-socket and signal scopes handled and none allowed, so `/proc` (magic links, `pagemap`) and the rest of the file
@@ -27,10 +31,11 @@
 //! - **macOS** (`seatbelt.rs`): the descriptors and limits as above (the data segment is a best effort), and `sandbox_init`
 //!   with `(deny default)` and the read of the layout's folders only, with the network denied; the helper does not die with its
 //!   parent (macOS has no such signal): a parent that has gone closes its standard input and the helper ends when it writes.
-//! - **Windows**: no AppContainer. It would need a change of the access lists of the user's own repositories, which this must
-//!   not do. The parent puts the child in a Job Object (`view/heic/job.rs`) that bounds its memory, allows one process and ends
-//!   it when the app does (kill-on-close). What it may read is not bounded there; the parent's checks (no network or device
-//!   path, no link, nothing that is not a file where one is expected) are what the repository's own pointers are held to.
+//! - **Windows**: the column is not available there (see `super`): no AppContainer (it would need a change of the access lists of
+//!   the user's own repositories, which this must not do) and so nothing that bounds what the helper reads or reaches. The
+//!   parent would put the child in a Job Object (`view/heic/job.rs`) that bounds its memory, allows one process and ends it when
+//!   the app does (kill-on-close), and nothing starts it: `columns_git` answers `unsupported`. This function is built there for
+//!   the tests of what needs no confinement.
 
 use std::io::{self, Read, Write};
 use std::sync::atomic::AtomicBool;
@@ -61,6 +66,15 @@ pub fn child_main() -> i32 {
     crate::view::heic::sandbox::close_inherited_fds();
     #[cfg(target_os = "macos")]
     crate::view::thumb::macos::close_inherited_fds();
+
+    // A session of its own, before the repository is read: the helper has no controlling terminal, and so no terminal's input
+    // to push characters into (`TIOCSTI`) or to be signalled through.
+    #[cfg(unix)]
+    if let Err(error) = rustix::process::setsid() {
+        tracing::debug!(%error, "the git status helper cannot start a session of its own");
+
+        return 1;
+    }
 
     let Ok(request) = read_request(io::stdin().lock()) else {
         return 1;
@@ -109,11 +123,26 @@ fn confine(request: &Request) -> io::Result<()> {
 /// a harness, take them without it).
 #[cfg(target_os = "linux")]
 pub(super) fn apply(request: &Request) -> io::Result<()> {
-    use crate::view::heic::sandbox::{self, Filter, Memory};
+    use crate::view::heic::sandbox::{self, Filter, Landlock, Memory, Readable};
 
     sandbox::limit_to(cpu_seconds(request), MAX_FILES)?;
 
-    sandbox::confine_with(Memory::Data(MEMORY), Filter::ReadOnly, Some(&request.layout.folders()))
+    let readable: Vec<Readable> = request
+        .grants
+        .iter()
+        .map(|grant| Readable {
+            path: &grant.path,
+            identity: Some((grant.device, grant.inode)),
+        })
+        .collect();
+
+    // Landlock is required where the kernel has it: a helper that it does not confine does not read the repository.
+    sandbox::confine_with(
+        Memory::Data(MEMORY),
+        Filter::ReadOnly,
+        Some(&readable),
+        Landlock::Required,
+    )
 }
 
 #[cfg(target_os = "macos")]

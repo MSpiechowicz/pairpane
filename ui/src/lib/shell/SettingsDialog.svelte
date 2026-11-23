@@ -3,6 +3,8 @@
   import type { Preferences as Saved } from '$lib/ipc/bindings/Preferences';
   import { IpcFailure } from '$lib/ipc/transport';
   import { displayName } from '$lib/panes/format';
+  import { GIT_UNAVAILABLE } from '$lib/panes/git.svelte';
+  import { isWindowsPlatform } from '$lib/panes/keys';
   import type { ThemeChoice } from '$lib/ipc/bindings/ThemeChoice';
   import '$lib/ops/fields.css';
 
@@ -55,6 +57,8 @@
   interface Toggle {
     flag: Flag;
     text: string;
+    /** Why the preference cannot be set on this system: the box is off and cannot be changed, and the text says why. */
+    unavailable?: string;
   }
 
   const THEMES: readonly { choice: ThemeChoice; text: string }[] = [
@@ -69,7 +73,7 @@
     { flag: 'showModified', text: 'Modified' },
     { flag: 'showDimensions', text: 'Dimensions' },
     { flag: 'showChecksum', text: 'Checksum' },
-    { flag: 'showGit', text: 'Git status' },
+    { flag: 'showGit', text: 'Git status', unavailable: isWindowsPlatform() ? GIT_UNAVAILABLE : undefined },
   ];
 
   const FILES: readonly Toggle[] = [{ flag: 'showHidden', text: 'Show hidden files' }];
@@ -84,10 +88,18 @@
 </script>
 
 {#snippet toggles(items: readonly Toggle[])}
-  {#each items as { flag, text } (flag)}
-    <label class="check">
-      <input type="checkbox" checked={preferences.value[flag]} onchange={(event) => preferences.set({ [flag]: event.currentTarget.checked })} />{text}
+  {#each items as { flag, text, unavailable } (flag)}
+    <label class="check" title={unavailable}>
+      <input
+        type="checkbox"
+        checked={unavailable === undefined && preferences.value[flag]}
+        disabled={unavailable !== undefined}
+        onchange={(event) => preferences.set({ [flag]: event.currentTarget.checked })}
+      />{text}
     </label>
+    {#if unavailable !== undefined}
+      <p class="note">{unavailable}.</p>
+    {/if}
   {/each}
 {/snippet}
 

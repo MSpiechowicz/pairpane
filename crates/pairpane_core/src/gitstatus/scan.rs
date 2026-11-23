@@ -49,6 +49,7 @@ pub(super) fn not_a_repository() -> GitStatus {
     GitStatus {
         repo: false,
         marks: Vec::new(),
+        note: None,
     }
 }
 
@@ -109,7 +110,11 @@ impl Read<'_> {
             None => GitError::Folder(error.kind()),
         })?;
 
-        Ok(GitStatus { repo: true, marks })
+        Ok(GitStatus {
+            repo: true,
+            marks,
+            note: None,
+        })
     }
 
     fn compare(

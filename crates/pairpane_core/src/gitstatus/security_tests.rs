@@ -34,7 +34,7 @@ impl Trap {
         let touch = ["/usr/bin/touch", "/bin/touch"]
             .into_iter()
             .find(|candidate| Path::new(candidate).exists())?;
-        let dir = tempfile::tempdir().expect("a folder");
+        let dir = crate::gitstatus::testing::tempdir();
         let marker = dir.path().join("marker");
         let script = Self::make(&dir.path().join("trap"), touch, &marker);
 

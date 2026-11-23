@@ -21,6 +21,8 @@ use std::io;
 #[cfg(target_os = "macos")]
 use super::child::MEMORY;
 #[cfg(target_os = "macos")]
+use super::layout::Grant;
+#[cfg(target_os = "macos")]
 use super::request::Request;
 
 /// The profile that lets a process read the files below `folders` and nothing else, or `None` when a path cannot be written
@@ -64,7 +66,17 @@ pub(super) fn confine(request: &Request, cpu_seconds: u64) -> io::Result<()> {
     use crate::view::thumb::macos;
 
     macos::limit_to(cpu_seconds, super::child::MAX_FILES, MEMORY)?;
-    let profile = profile(&request.layout.folders())
+
+    // Each folder must still be the one that was looked at: the profile names paths, and a path that now leads elsewhere would
+    // allow the read of something else. (The profile matches paths when a file is opened, so a swap after this check is the
+    // residual that Landlock's descriptors do not have.)
+    if !request.grants.iter().all(Grant::is_unchanged) {
+        return Err(io::Error::other(
+            "a folder of the repository is not the one that was looked at",
+        ));
+    }
+    let folders: Vec<PathBuf> = request.grants.iter().map(|grant| grant.path.clone()).collect();
+    let profile = profile(&folders)
         .ok_or_else(|| io::Error::other("a folder of the repository cannot be written into the profile"))?;
 
     macos::enter(&profile)

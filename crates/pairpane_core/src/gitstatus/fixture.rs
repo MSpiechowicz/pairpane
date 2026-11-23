@@ -91,7 +91,7 @@ impl<'a> Staged<'a> {
 
 impl Repo {
     pub(super) fn new() -> Self {
-        let dir = tempfile::tempdir().expect("a folder");
+        let dir = crate::gitstatus::testing::tempdir();
         let root = gix::path::realpath(dir.path()).expect("its real path");
         let repo = gix::init(&root).expect("a repository");
 
@@ -143,6 +143,23 @@ impl Repo {
     }
 
     /// The path of `rela` inside the work tree.
+    /// Moves the objects of this repository to a store of an alternate, `store/objects` below `folder` (which is returned), and
+    /// leaves the repository with an objects folder of its own that names the store: the line of its list of alternates is
+    /// `line` of the store's path.
+    pub(super) fn move_objects_to_an_alternate(&self, folder: &Path, line: impl Fn(&Path) -> String) -> PathBuf {
+        let store = folder.join("store/objects");
+        fs::create_dir_all(store.parent().expect("a parent")).expect("a folder");
+        fs::rename(self.git_dir().join("objects"), &store).expect("the objects are moved");
+        fs::create_dir_all(self.git_dir().join("objects/info")).expect("a folder");
+        fs::write(
+            self.git_dir().join("objects/info/alternates"),
+            format!("{}\n", line(&store)),
+        )
+        .expect("a list");
+
+        store
+    }
+
     pub(super) fn path(&self, rela: &str) -> PathBuf {
         self.root.join(rela)
     }

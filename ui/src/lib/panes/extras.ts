@@ -61,7 +61,10 @@ export interface GitPlace {
   dir?: boolean;
 }
 
-/** What is known of one folder's git status: the marks of its entries by name, why there are none, or `null` outside a repository. */
+/**
+ * What is known of one folder's git status: the marks of its entries by name, why there are none (a repository too big to read,
+ * one that cannot be read here or is not read for what it names, a system without the column), or `null` outside a repository.
+ */
 export type GitFolder = { marks: ReadonlyMap<string, GitMark> } | { problem: string } | null;
 
 /** The colour of a cell's text, by the name of the variable that gives it. */
@@ -175,7 +178,7 @@ export function pixelsOf(value: Dimensions | null | undefined): number | undefin
   return value ? value.width * value.height : undefined;
 }
 
-/** The Git cell: empty until the folder is known, for a clean item and outside a repository; a dash with the reason for a folder too big to read. */
+/** The Git cell: empty until the folder is known, for a clean item and outside a repository; a dash with the reason for a folder whose repository is not read. */
 export function gitCell(place: GitPlace | undefined, folder: GitFolder | undefined): Cell {
   if (place === undefined || !folder) {
     return { text: '' };

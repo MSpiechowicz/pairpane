@@ -118,29 +118,30 @@ fn is_reparse_point(_metadata: &Metadata) -> bool {
     false
 }
 
+/// `f_type` of `statfs(2)` for the file systems that make their files up: procfs, sysfs, debugfs, cgroup, tracefs and the like.
+#[cfg(target_os = "linux")]
+const PSEUDO: [u64; 14] = [
+    0x0000_9fa0, // procfs
+    0x6265_6572, // sysfs
+    0x6462_6720, // debugfs
+    0x0027_e0eb, // cgroup
+    0x6367_7270, // cgroup2
+    0x7472_6163, // tracefs
+    0x7363_6673, // securityfs
+    0xcafe_4a11, // bpf
+    0xf97c_ff8c, // selinuxfs
+    0x6165_676c, // pstore
+    0x6265_6570, // configfs
+    0x4249_4e4d, // binfmt_misc
+    0x6573_5543, // fuse control
+    0x0000_1cd1, // devpts
+];
+
 /// Whether `file` is on a file system of the kernel's own (procfs, sysfs, debugfs, cgroup, tracefs, ...), whose files say
 /// they are regular, give a size of 0 and read as much as the kernel makes up. A file whose file system cannot be told is
 /// taken for one.
 #[cfg(target_os = "linux")]
 fn on_pseudo_file_system(file: &File) -> bool {
-    /// `f_type` of `statfs(2)` for the file systems that make their files up.
-    const PSEUDO: [u64; 14] = [
-        0x0000_9fa0, // procfs
-        0x6265_6572, // sysfs
-        0x6462_6720, // debugfs
-        0x0027_e0eb, // cgroup
-        0x6367_7270, // cgroup2
-        0x7472_6163, // tracefs
-        0x7363_6673, // securityfs
-        0xcafe_4a11, // bpf
-        0xf97c_ff8c, // selinuxfs
-        0x6165_676c, // pstore
-        0x6265_6570, // configfs
-        0x4249_4e4d, // binfmt_misc
-        0x6573_5543, // fuse control
-        0x0000_1cd1, // devpts
-    ];
-
     match rustix::fs::fstatfs(file) {
         Ok(stat) => u64::try_from(stat.f_type).map_or(true, |kind| PSEUDO.contains(&kind)),
         Err(_) => true,
@@ -150,6 +151,44 @@ fn on_pseudo_file_system(file: &File) -> bool {
 #[cfg(not(target_os = "linux"))]
 fn on_pseudo_file_system(_file: &File) -> bool {
     false
+}
+
+/// Whether the folder `path` is on a file system of the kernel's own (see [`on_pseudo_file_system`]), as `statfs` says. One that
+/// is not there is not on any; one that cannot be told is taken for one. Only Linux has such file systems that are not special
+/// folders of their own (macOS and Windows have none that hold a repository).
+#[cfg(target_os = "linux")]
+pub(super) fn on_pseudo_path(path: &Path) -> bool {
+    match rustix::fs::statfs(path) {
+        Ok(stat) => u64::try_from(stat.f_type).map_or(true, |kind| PSEUDO.contains(&kind)),
+        Err(error) => error != rustix::io::Errno::NOENT && error != rustix::io::Errno::NOTDIR,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(super) fn on_pseudo_path(_path: &Path) -> bool {
+    false
+}
+
+/// Whether the entry of a folder that was listed is a regular file, by what the listing says of it and without following a
+/// link; on Windows a reparse point is not one either, whatever its attributes otherwise say.
+pub(super) fn is_plain_entry(entry: &fs::DirEntry) -> bool {
+    entry.file_type().is_ok_and(|kind| kind.is_file()) && not_reparse_point(entry)
+}
+
+/// Whether the entry of a folder that was listed is a real folder (no link or reparse point).
+pub(super) fn is_plain_folder_entry(entry: &fs::DirEntry) -> bool {
+    entry.file_type().is_ok_and(|kind| kind.is_dir()) && not_reparse_point(entry)
+}
+
+/// Windows says what a reparse point is by the attributes of the entry, which the listing has already (no call is made for them).
+#[cfg(windows)]
+fn not_reparse_point(entry: &fs::DirEntry) -> bool {
+    entry.metadata().is_ok_and(|metadata| !is_reparse_point(&metadata))
+}
+
+#[cfg(not(windows))]
+fn not_reparse_point(_entry: &fs::DirEntry) -> bool {
+    true
 }
 
 /// The path of the file `relative` (`/` separated) below `root`, once every folder on the way is known to be a folder and

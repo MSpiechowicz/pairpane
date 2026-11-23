@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::links::{is_local, is_physical};
+use super::links::{is_followable, is_local, is_physical, leads_nowhere, normalise, resolve};
 
 /// The place the pointer `pointer` leads to, read from the folder `base` (an absolute path), or `None` when it is not a
 /// pointer to a local place that has no link on it: it is empty, holds a NUL, is a network or device path (`\\host\share`,
@@ -17,14 +17,39 @@ use super::links::{is_local, is_physical};
 /// the parser of gix gave it (a `gitdir:` file and the list of alternates are parsed by gix's own functions, so that what is
 /// checked here is what gix opens). A relative pointer is joined to `base` as gix joins it and is not otherwise changed.
 pub(super) fn pointer_target(base: &Path, pointer: &Path) -> Option<PathBuf> {
+    let target = joined(base, pointer)?;
+
+    (is_local(&target) && is_physical(&target)).then_some(target)
+}
+
+/// The place `base` joined to `pointer` (an absolute path, or a path from `base`, as gix joins it), or `None` for a pointer that
+/// is empty, holds a NUL or names a network or device path.
+fn joined(base: &Path, pointer: &Path) -> Option<PathBuf> {
     let text = pointer.to_string_lossy();
     if text.is_empty() || text.contains('\0') || looks_like_network_path(&text) {
         return None;
     }
 
-    let target = base.join(pointer);
+    Some(base.join(pointer))
+}
 
-    (is_local(&target) && is_physical(&target)).then_some(target)
+/// The folder an entry of a list of alternates leads to, read from the objects folder `base`: like [`pointer_target`] but a link
+/// on the way is followed (`git clone --shared` writes the path of its source as the user wrote it, which may go through a linked
+/// home or data folder) and the answer is the folder that it leads to, as [`resolve`] says (every hop of it is checked for being a
+/// local place), which is what is looked at and what the helper is allowed to read. A `..` after a link is refused (see
+/// [`is_followable`]), and so is a folder that is no local place. A folder that is not there is its path read without its dots:
+/// nothing is read from it, and nothing is allowed there.
+pub(super) fn alternate_target(base: &Path, pointer: &Path) -> Option<PathBuf> {
+    let target = joined(base, pointer)?;
+    if !is_local(&target) || !is_followable(&target) {
+        return None;
+    }
+
+    match resolve(&target) {
+        Ok(resolved) => is_local(&resolved).then_some(resolved),
+        Err(error) if leads_nowhere(&error) => Some(normalise(&target)),
+        Err(_) => None,
+    }
 }
 
 /// A text that starts like a network or device path in either separator (`\\host\share`, `//host/share`, `\\.\pipe\x`, a
@@ -117,7 +142,7 @@ mod tests {
 
     #[test]
     fn a_relative_pointer_is_read_from_the_folder_that_holds_it() {
-        let folder = tempfile::tempdir().expect("a folder");
+        let folder = crate::gitstatus::testing::tempdir();
         let root = gix::path::realpath(folder.path()).expect("its real path");
         let base = root.join("work/project");
         std::fs::create_dir_all(&base).expect("folders");
@@ -136,7 +161,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_pointer_with_a_link_on_its_way_is_refused_whatever_it_leads_to() {
-        let folder = tempfile::tempdir().expect("a folder");
+        let folder = crate::gitstatus::testing::tempdir();
         let root = gix::path::realpath(folder.path()).expect("its real path");
         std::fs::create_dir_all(root.join("x/y")).expect("folders");
         std::os::unix::fs::symlink("x/y", root.join("l")).expect("a link");
@@ -175,14 +200,16 @@ mod tests {
         ] {
             assert_eq!(pointer_target(&base(), Path::new(text)), None, "{text}");
         }
-        for text in [
-            "/network/x",
-            "/netx/y",
-            "/System/Volumes/Data/home",
-            "/System/Library",
-            "/srv/net/x",
-        ] {
+        for text in ["/network/x", "/netx/y", "/System/Library", "/srv/net/x"] {
             assert!(pointer_target(&base(), Path::new(text)).is_some(), "{text}");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn home_is_an_automount_point_on_macos_and_is_refused() {
+        for text in ["/home/x", "/System/Volumes/Data/home/x"] {
+            assert_eq!(pointer_target(&base(), Path::new(text)), None, "{text}");
         }
     }
 
@@ -195,7 +222,8 @@ mod tests {
 
             assert_eq!(pointer_target(&base, Path::new(text)), None, "{text}");
         }
-        assert!(pointer_target(Path::new("/work/project"), Path::new("/srv/../home")).is_some());
+        // `/usr` is a real folder on every system (`/home` is an automount point on macOS, and `/srv` is not there).
+        assert!(pointer_target(Path::new("/work/project"), Path::new("/usr/../usr/bin")).is_some());
     }
 
     #[cfg(windows)]

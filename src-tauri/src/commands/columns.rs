@@ -30,6 +30,14 @@
 //!   [`GIT_THREADS`] until the child has ended. At the deadline (the time limit and a short grace) the child is killed and the
 //!   request answers as for the time limit, so no status ever holds a thread, a processor or memory past it: there is nothing
 //!   that is left running and counted as stuck. [`Columns::shut_down`] kills the children that run.
+//! - Git status is not available on Windows yet: `columns_git` answers `unsupported` ("Git status is not available on Windows
+//!   yet") at once there, without starting a helper or touching the repository. The helper there has a Job Object's memory
+//!   limit and nothing that confines what it reads, so any gap in the checks the parent makes of a repository's pointers would
+//!   let a hostile repository make the system connect to a host of its choosing and hand it the user's credentials (SMB/NTLM).
+//!   Linux and macOS confine the helper, and have the column.
+//! - A repository that is refused for what it names (a link or a reparse point where git's own files are, a pointer to a place
+//!   that is not local, an object folder that holds anything but plain files, a repository of another user, a folder that is too
+//!   broad to read) is `repo: false` with a `note`, a fixed text for the page to show where the column is blank.
 //! - [`Columns::shut_down`] raises the flag all of them watch, as the app exits: a checksum stops between its chunks, a
 //!   batch between its files and a git status at once (its child is killed), and none starts after.
 
@@ -129,6 +137,19 @@ impl Columns {
         .await
     }
 
+    /// [`Self::git`] with the helper the app itself is, or the refusal where the column is not available (`windows`: this is
+    /// Windows; a parameter so that the refusal is tried on every system).
+    async fn git_on(&self, windows: bool, path: String) -> CommandResult<GitStatus> {
+        if windows {
+            return Err(git_unsupported());
+        }
+
+        // The helper is the app itself. Not being able to tell where it is is not a missing file.
+        let program = helper_program().map_err(|error| view_error(&io::Error::other(error)))?;
+
+        self.git(path, Limits::default(), program).await
+    }
+
     /// Like [`Self::git`], with the status read by `read`, which is bounded by its limits and ends by the deadline of its own
     /// (the helper is killed then).
     async fn git_with(
@@ -213,6 +234,14 @@ pub async fn columns_dimensions(
     columns.dimensions(path, names).await
 }
 
+/// The text of the answer that there is no git status on this system (see the module docs).
+const GIT_UNSUPPORTED: &str = "Git status is not available on Windows yet";
+
+/// What `columns_git` answers where the git status column is not available: `unsupported`, at once, whatever the path is.
+fn git_unsupported() -> CommandError {
+    CommandError::new(IpcErrorCode::Unsupported, GIT_UNSUPPORTED)
+}
+
 /// The SHA-256 of the file `name` of the folder `path` as lowercase hex. `invalidInput` ("the file is too big to checksum
 /// here") for a file over 64 MiB, `invalidInput` ("the file is not on this computer") for a cloud placeholder, and
 /// `invalidInput` for anything that is not a regular file, `busy` when two checksums are already being computed.
@@ -230,11 +259,10 @@ pub async fn columns_checksum(columns: State<'_, Columns>, path: String, name: S
 /// file is expected, or is of a format that is not read, is `repo: false`. `invalidInput` ("the repository is too big to
 /// read here") when a step of it walks over 200,000 entries or it has an index over 64 MiB or rules over their size,
 /// `invalidInput` ("the repository took too long to read") when it takes over 5 seconds (the helper is killed then), and
-/// `busy` when two statuses are already being read.
+/// `busy` when two statuses are already being read. A repository that is refused for what it names is `repo: false` with a `note`.
+/// On Windows it is `unsupported` ("Git status is not available on Windows yet") at once, with no helper started and nothing
+/// of the repository touched.
 #[tauri::command]
 pub async fn columns_git(columns: State<'_, Columns>, path: String) -> CommandResult<GitStatus> {
-    // The helper is the app itself. Not being able to tell where it is is not a missing file.
-    let program = helper_program().map_err(|error| view_error(&io::Error::other(error)))?;
-
-    columns.git(path, Limits::default(), program).await
+    columns.git_on(cfg!(windows), path).await
 }

@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn a_folder_that_is_untracked_as_a_whole_keeps_the_ignored_marks_of_its_children() {
-        let folder = tempfile::tempdir().expect("a folder");
+        let folder = crate::gitstatus::testing::tempdir();
         for name in ["new.txt", "debug.log", "staged.txt", "sub"] {
             fs::write(folder.path().join(name), b"x").expect("a file");
         }

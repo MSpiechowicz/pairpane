@@ -26,6 +26,7 @@ use super::inspect::{self, Refusal};
 use super::layout::Layout;
 use super::links::{self, is_local, normalise};
 use super::locality::pointer_target;
+use super::note::Note;
 use crate::listing::platform;
 
 /// The most a `HEAD`, a `commondir`, a `gitdir` or a `.git` file may hold.
@@ -39,41 +40,90 @@ enum Skip {
     Refused,
 }
 
-/// The repository that `real` (a real path) is in, or `None` when there is none, or one that must not be read. `ceiling` is a
-/// real path too. Only a repository whose files all pass [`inspect`] is found.
-pub(super) fn find(real: &Path, ceiling: Option<&Path>) -> Result<Option<Layout>, GitError> {
+/// What the search for a repository found.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Found<T> {
+    /// A repository that may be read.
+    Repository(T),
+    /// None: the folder is in no repository.
+    Nowhere,
+    /// One that must not be read, and why.
+    Refused(Note),
+}
+
+impl<T> Found<T> {
+    /// The repository, or `None` for a folder that is in none or in one that is refused.
+    pub(super) fn repository(self) -> Option<T> {
+        match self {
+            Self::Repository(found) => Some(found),
+            Self::Nowhere | Self::Refused(_) => None,
+        }
+    }
+}
+
+/// The repository that `real` (a real path) is in, or none, or one that must not be read. `ceiling` is a real path too. Only a
+/// repository whose files all pass [`inspect`] is found.
+pub(super) fn find(real: &Path, ceiling: Option<&Path>) -> Result<Found<Layout>, GitError> {
     let mut dir = real.to_path_buf();
     let device = device_of(&dir);
 
     loop {
         // A filesystem boundary ends the search: a mount point's parent is not the same place.
         if device_of(&dir) != device {
-            return Ok(None);
+            return Ok(Found::Nowhere);
         }
 
         match candidate(&dir) {
             Ok(layout) => return found(layout),
-            Err(Skip::Refused) => return Ok(None),
+            Err(Skip::Refused) => return Ok(Found::Refused(Note::Elsewhere)),
             Err(Skip::NotHere) => {}
         }
 
         if ceiling == Some(dir.as_path()) || !dir.pop() {
-            return Ok(None);
+            return Ok(Found::Nowhere);
         }
     }
 }
 
-fn found(mut layout: Layout) -> Result<Option<Layout>, GitError> {
+fn found(mut layout: Layout) -> Result<Found<Layout>, GitError> {
+    if !owned(&layout) {
+        return Ok(Found::Refused(Note::Owner));
+    }
+    if layout.is_too_broad() {
+        return Ok(Found::Refused(Note::Broad));
+    }
+
     match inspect::files(&layout) {
         Ok(sources) => {
             layout.alternates = sources.alternates;
             layout.info_rules = sources.info_rules;
 
-            Ok(Some(layout))
+            Ok(Found::Repository(layout))
         }
-        Err(Refusal::Odd) => Ok(None),
+        Err(Refusal::Odd) => Ok(Found::Refused(Note::Elsewhere)),
+        Err(Refusal::Broad) => Ok(Found::Refused(Note::Broad)),
         Err(Refusal::TooBig) => Err(GitError::TooBig),
     }
+}
+
+/// Whether the repository belongs to the user who reads it, as for git's own check of the owner (`safe.directory`): the `.git`
+/// that was found, the git folder and the common folder are all owned by the user, so that a repository somebody else planted in
+/// a folder above (or in a folder that is shared) is not read. Windows has no such check here (see the module docs of
+/// [`super`]).
+#[cfg(unix)]
+fn owned(layout: &Layout) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let me = rustix::process::geteuid().as_raw();
+
+    [&layout.dot_git, &layout.git_dir, &layout.common_dir]
+        .into_iter()
+        .all(|place| fs::symlink_metadata(place).is_ok_and(|metadata| metadata.uid() == me))
+}
+
+#[cfg(not(unix))]
+fn owned(_layout: &Layout) -> bool {
+    true
 }
 
 fn device_of(dir: &Path) -> Option<u64> {
@@ -292,4 +342,39 @@ fn common_dir(git_dir: &Path, bytes: &[u8]) -> Option<PathBuf> {
     let named = plain_path(bytes)?;
 
     pointer_target(git_dir, &named).map(|target| normalise(&target))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// A layout whose three places are `place`.
+    fn layout_at(place: &Path) -> Layout {
+        Layout {
+            dot_git: place.to_path_buf(),
+            git_dir: place.to_path_buf(),
+            common_dir: place.to_path_buf(),
+            workdir: place.to_path_buf(),
+            alternates: Vec::new(),
+            info_rules: 0,
+        }
+    }
+
+    #[test]
+    fn a_repository_is_owned_when_its_dot_git_git_folder_and_common_folder_are_the_users() {
+        let folder = crate::gitstatus::testing::tempdir();
+
+        assert!(owned(&layout_at(folder.path())));
+
+        // The root folder is owned by root, whoever reads it: not the user's own unless the user is root.
+        if rustix::process::geteuid().is_root() {
+            eprintln!("skipped: the user is root, who owns the root folder");
+
+            return;
+        }
+        assert!(!owned(&layout_at(Path::new("/"))));
+        let mut mixed = layout_at(folder.path());
+        mixed.common_dir = PathBuf::from("/");
+        assert!(!owned(&mixed));
+    }
 }

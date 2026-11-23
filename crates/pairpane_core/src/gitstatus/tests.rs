@@ -273,7 +273,7 @@ fn a_folder_with_a_name_that_is_not_ascii_gets_its_marks() {
 
 #[test]
 fn a_folder_outside_any_repository_is_not_a_repo() {
-    let folder = tempfile::tempdir().expect("a folder");
+    let folder = crate::gitstatus::testing::tempdir();
     fs::write(folder.path().join("a.txt"), b"a").expect("a file");
 
     let answer = read(folder.path());
@@ -282,7 +282,8 @@ fn a_folder_outside_any_repository_is_not_a_repo() {
         answer,
         GitStatus {
             repo: false,
-            marks: vec![]
+            marks: vec![],
+            note: None,
         }
     );
 }
@@ -332,7 +333,7 @@ fn the_search_for_a_repository_stops_at_the_home_folder_and_includes_it() {
 fn a_link_to_a_folder_of_a_repository_is_read_as_the_folder_it_leads_to() {
     let repo = clean(&[("sub/in.txt", b"i")]);
     repo.put("sub/in.txt", b"changed");
-    let elsewhere = tempfile::tempdir().expect("a folder");
+    let elsewhere = crate::gitstatus::testing::tempdir();
     let link = elsewhere.path().join("link");
     std::os::unix::fs::symlink(repo.path("sub"), &link).expect("a link");
 
@@ -351,7 +352,7 @@ fn the_git_folder_itself_is_not_a_place_with_marks_and_is_not_marked() {
 
 #[test]
 fn a_bare_repository_has_no_work_tree() {
-    let folder = tempfile::tempdir().expect("a folder");
+    let folder = crate::gitstatus::testing::tempdir();
     let bare = folder.path().join("project.git");
     gix::init_bare(&bare).expect("a bare repository");
 
@@ -372,7 +373,7 @@ fn a_git_file_that_points_to_a_worktree_of_another_repository_works() {
 
 #[test]
 fn a_git_file_that_points_nowhere_is_no_repository() {
-    let folder = tempfile::tempdir().expect("a folder");
+    let folder = crate::gitstatus::testing::tempdir();
     fs::write(folder.path().join(".git"), "gitdir: ../does-not-exist\n").expect("the git file");
     fs::write(folder.path().join("a.txt"), b"a").expect("a file");
 

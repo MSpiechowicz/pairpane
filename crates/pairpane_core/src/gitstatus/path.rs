@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn the_folder_of_a_real_work_tree_is_its_path_below_it() {
-        let work = tempfile::tempdir().expect("a folder");
+        let work = crate::gitstatus::testing::tempdir();
         let root = gix::path::realpath(work.path()).expect("a real path");
         let sub = root.join("sub").join("deep");
         std::fs::create_dir_all(&sub).expect("folders");

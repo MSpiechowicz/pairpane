@@ -11,16 +11,16 @@ use std::io;
 
 use libc::{c_long, sock_filter, sock_fprog};
 
-use super::writes::{WRITES, open_prelude};
+use super::writes::{HIGHEST_REVIEWED, IOCTL_PRELUDE, ioctl_prelude, open_prelude, refused_writes};
 
 /// `AUDIT_ARCH_*` of the architecture this is built for, which the filter requires of every call (a program of another
 /// ABI that the kernel runs, the 32-bit one on x86-64, has other call numbers). `None` where there is no filter.
 #[cfg(target_arch = "x86_64")]
-const AUDIT_ARCH: Option<u32> = Some(0xC000_003E);
+pub(super) const AUDIT_ARCH: Option<u32> = Some(0xC000_003E);
 #[cfg(target_arch = "aarch64")]
-const AUDIT_ARCH: Option<u32> = Some(0xC000_00B7);
+pub(super) const AUDIT_ARCH: Option<u32> = Some(0xC000_00B7);
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-const AUDIT_ARCH: Option<u32> = None;
+pub(super) const AUDIT_ARCH: Option<u32> = None;
 
 /// Which seccomp filter a helper takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,10 +31,11 @@ pub(crate) enum Filter {
     /// Allow only the calls of [`ALLOWED`] and refuse the rest: for the thumbnail helper, which, once it is confined, only
     /// reads its input, allocates, computes and writes its answer.
     AllowList,
-    /// Refuse the calls of [`DENIED`] and of [`WRITES`], and an open of a file to write, create or truncate it (`openat` and
+    /// Refuse the calls of [`DENIED`] and of `WRITES`, and an open of a file to write, create or truncate it (`openat` and
     /// `open` with such flags; `openat2` is answered `ENOSYS`, as its flags are in memory the filter cannot read, and the C
-    /// library goes on with `openat`), and allow the rest: for the helper that reads a repository (`gitstatus`), which reads
-    /// files in many ways and writes none, so that where Landlock is not there the filter is still a read-only file system.
+    /// library goes on with `openat`), an `ioctl` but for a few questions, and every call numbered above the highest that was
+    /// reviewed, and allow the rest: for the helper that reads a repository (`gitstatus`), which reads files in many ways and
+    /// writes none, so that where Landlock is not there the filter is still a read-only file system.
     ReadOnly,
 }
 
@@ -142,8 +143,9 @@ const X32_BIT: u32 = 0x4000_0000;
 
 pub(super) const BPF_LD_W_ABS: u16 = 0x20;
 pub(super) const BPF_JEQ_K: u16 = 0x15;
+pub(super) const BPF_JGT_K: u16 = 0x25;
 pub(super) const BPF_JSET_K: u16 = 0x45;
-const BPF_RET_K: u16 = 0x06;
+pub(super) const BPF_RET_K: u16 = 0x06;
 
 /// The offsets of `seccomp_data`: the call number, then the architecture.
 const NR: u32 = 0;
@@ -168,8 +170,8 @@ pub(super) const ARG2_LOW: u32 = 32;
 const ARG4_LOW: u32 = 48;
 
 const RET_KILL_PROCESS: u32 = 0x8000_0000;
-const RET_ALLOW: u32 = 0x7fff_0000;
-const RET_EPERM: u32 = 0x0005_0000 | libc::EPERM as u32;
+pub(super) const RET_ALLOW: u32 = 0x7fff_0000;
+pub(super) const RET_EPERM: u32 = 0x0005_0000 | libc::EPERM as u32;
 const RET_ENOSYS: u32 = 0x0005_0000 | libc::ENOSYS as u32;
 
 /// One instruction of a classic BPF program.
@@ -207,9 +209,10 @@ pub(super) const TAIL_ENOSYS: usize = 15;
 ///
 /// `None` where [`AUDIT_ARCH`] is `None`.
 ///
-/// With `read_only` ([`Filter::ReadOnly`]) the calls of [`WRITES`] are refused too, and an open that writes, creates or
-/// truncates (see [`open_prelude`]).
-fn program(pid: u32, read_only: bool) -> Option<Vec<sock_filter>> {
+/// With `read_only` ([`Filter::ReadOnly`]) the calls of `WRITES` are refused too, and an open that writes, creates or
+/// truncates (see [`open_prelude`]), an `ioctl` that is not one of a few questions (see [`ioctl_prelude`]), and every call
+/// numbered above [`HIGHEST_REVIEWED`].
+pub(super) fn program(pid: u32, read_only: bool) -> Option<Vec<sock_filter>> {
     let arch = AUDIT_ARCH?;
 
     // The tests that end in `EPERM`, in order; each jumps forward to that refusal when it holds.
@@ -218,12 +221,15 @@ fn program(pid: u32, read_only: bool) -> Option<Vec<sock_filter>> {
     tests.push((BPF_JSET_K, X32_BIT));
     tests.extend(DENIED.iter().map(|&number| (BPF_JEQ_K, number as u32)));
     if read_only {
-        tests.extend(WRITES.iter().map(|&number| (BPF_JEQ_K, number as u32)));
+        // Whatever is numbered above the highest call that was reviewed is refused, and then the calls that write.
+        tests.push((BPF_JGT_K, HIGHEST_REVIEWED));
+        tests.extend(refused_writes().map(|number| (BPF_JEQ_K, number)));
     }
 
     let mut program = header(arch);
     if read_only {
-        program.extend(open_prelude(tests.len())?);
+        program.extend(open_prelude(tests.len() + IOCTL_PRELUDE)?);
+        program.extend(ioctl_prelude(tests.len())?);
     }
 
     // The tail below, numbered; a jump of n lands n instructions after the one that follows the jump. Each test of

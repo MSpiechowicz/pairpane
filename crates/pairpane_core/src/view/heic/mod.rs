@@ -45,7 +45,7 @@ pub(crate) mod job;
 #[cfg(target_os = "linux")]
 mod kernel;
 #[cfg(all(test, target_os = "linux"))]
-mod kernel_probes;
+pub(crate) mod kernel_probes;
 #[cfg(target_os = "linux")]
 pub(crate) mod sandbox;
 #[cfg(target_os = "linux")]
@@ -349,6 +349,8 @@ pub(super) fn map_hresult(hresult: i32) -> io::Error {
 
 #[cfg(test)]
 pub(super) mod items_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod kernel_tests;
 #[cfg(test)]
 mod process_tests;
 #[cfg(all(test, target_os = "linux"))]

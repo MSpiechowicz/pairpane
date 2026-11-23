@@ -3,11 +3,13 @@
 //! reading one cannot ask for more than its length allows.
 //!
 //! - The request is the folder asked for (a real path), the [`Limits`] and the [`Layout`] that the parent looked at: the exact
-//!   folders the helper may read, which it confines itself to and which gix is to open. It is at most [`MAX_REQUEST`] bytes.
+//!   folders the helper may read, which it confines itself to and which gix is to open, each with the device and inode it had
+//!   when it was looked at ([`Grant`]), so that the helper can tell a folder that was swapped since. It is at most
+//!   [`MAX_REQUEST`] bytes.
 //! - The answer is a tag, and for a status the repository flag and the marked names. It holds no path: an error is only its
 //!   kind (see [`GitError`]). The parent reads at most [`MAX_ANSWER`] bytes of it and never trusts it: a name that is not one
-//!   plain name, a name told twice, a mark it does not know, a count that the bytes cannot hold or bytes after the end are an
-//!   answer that cannot be read (`GitError::Repository`).
+//!   plain name, a name told twice, a mark it does not know, more marks than the entries of the status may be (`Limits::entries`),
+//!   a count that the bytes cannot hold or bytes after the end are an answer that cannot be read (`GitError::Repository`).
 
 use std::borrow::Cow;
 use std::io;
@@ -16,7 +18,7 @@ use std::time::Duration;
 
 use gix::bstr::ByteSlice;
 
-use super::layout::Layout;
+use super::layout::{Grant, Layout};
 use super::{GitError, Limits};
 use crate::listing::platform::is_plain_name;
 use crate::model::{GitEntry, GitMark, GitStatus};
@@ -43,6 +45,8 @@ pub(super) struct Request {
     pub(super) folder: PathBuf,
     pub(super) limits: Limits,
     pub(super) layout: Layout,
+    /// The folders of the layout that the helper may read, with what they were when they were looked at.
+    pub(super) grants: Vec<Grant>,
 }
 
 fn invalid(text: &'static str) -> io::Error {
@@ -136,6 +140,16 @@ impl Request {
             put_path(&mut out, path)?;
         }
         out.extend_from_slice(&layout.info_rules.to_le_bytes());
+        out.extend_from_slice(
+            &u32::try_from(self.grants.len())
+                .map_err(|_| invalid("too many"))?
+                .to_le_bytes(),
+        );
+        for grant in &self.grants {
+            put_path(&mut out, &grant.path)?;
+            out.extend_from_slice(&grant.device.to_le_bytes());
+            out.extend_from_slice(&grant.inode.to_le_bytes());
+        }
 
         if out.len() as u64 > MAX_REQUEST {
             return Err(invalid("the request is too long"));
@@ -168,6 +182,14 @@ impl Request {
             alternates.push(input.path()?);
         }
         let info_rules = input.u64()?;
+        let mut grants = Vec::new();
+        for _ in 0..input.u32()? {
+            grants.push(Grant {
+                path: input.path()?,
+                device: input.u64()?,
+                inode: input.u64()?,
+            });
+        }
         if !input.is_empty() {
             return Err(invalid("there is more than the request"));
         }
@@ -187,6 +209,7 @@ impl Request {
                 alternates,
                 info_rules,
             },
+            grants,
         })
     }
 }
@@ -252,14 +275,15 @@ pub(super) fn encode_answer(result: &Result<GitStatus, GitError>) -> Vec<u8> {
     out
 }
 
-/// The result an answer stands for. `Err(GitError::Repository)` for anything that is not exactly an answer (see the module).
-pub(super) fn decode_answer(bytes: &[u8]) -> Result<GitStatus, GitError> {
+/// The result an answer stands for, with at most `marks` marks. `Err(GitError::Repository)` for anything that is not exactly an
+/// answer (see the module).
+pub(super) fn decode_answer(bytes: &[u8], marks: usize) -> Result<GitStatus, GitError> {
     let mut input = Reader(bytes);
     let unreadable = |_: io::Error| GitError::Repository;
 
     let tag = input.u8().map_err(unreadable)?;
     let error = match tag {
-        TAG_STATUS => return decode_status(input),
+        TAG_STATUS => return decode_status(input, marks),
         TAG_TOO_BIG => GitError::TooBig,
         TAG_TIMED_OUT => GitError::TimedOut,
         TAG_CANCELLED => GitError::Cancelled,
@@ -279,7 +303,7 @@ pub(super) fn decode_answer(bytes: &[u8]) -> Result<GitStatus, GitError> {
     }
 }
 
-fn decode_status(mut input: Reader<'_>) -> Result<GitStatus, GitError> {
+fn decode_status(mut input: Reader<'_>, most: usize) -> Result<GitStatus, GitError> {
     let unreadable = |_: io::Error| GitError::Repository;
 
     let repo = match input.u8().map_err(unreadable)? {
@@ -287,7 +311,11 @@ fn decode_status(mut input: Reader<'_>) -> Result<GitStatus, GitError> {
         1 => true,
         _ => return Err(GitError::Repository),
     };
-    let count = input.u32().map_err(unreadable)?;
+    // A status has at most one mark for each entry it walked, and so no more than its cap on entries.
+    let count = usize::try_from(input.u32().map_err(unreadable)?).map_err(|_| GitError::Repository)?;
+    if count > most {
+        return Err(GitError::Repository);
+    }
     let mut marks: Vec<GitEntry> = Vec::new();
 
     for _ in 0..count {
@@ -313,158 +341,13 @@ fn decode_status(mut input: Reader<'_>) -> Result<GitStatus, GitError> {
         return Err(GitError::Repository);
     }
 
-    Ok(GitStatus { repo, marks })
+    Ok(GitStatus {
+        repo,
+        marks,
+        note: None,
+    })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn request() -> Request {
-        let root = if cfg!(windows) { r"C:\work" } else { "/work" };
-        let at = |name: &str| Path::new(root).join(name);
-
-        Request {
-            folder: at("repo/sub"),
-            limits: Limits {
-                time: Duration::from_millis(1500),
-                entries: 77,
-                compare_bytes: 9,
-            },
-            layout: Layout {
-                dot_git: at("repo/.git"),
-                git_dir: at("repo/.git"),
-                common_dir: at("repo/.git"),
-                workdir: at("repo"),
-                alternates: vec![at("other/objects"), at("third/objects")],
-                info_rules: 12,
-            },
-        }
-    }
-
-    fn entry(name: &str, mark: GitMark) -> GitEntry {
-        GitEntry {
-            name: name.to_owned(),
-            mark,
-        }
-    }
-
-    #[test]
-    fn a_request_is_read_back_as_it_was_written() {
-        let bytes = request().encode().expect("encoded");
-
-        assert_eq!(Request::decode(&bytes).expect("decoded"), request());
-    }
-
-    #[test]
-    fn a_request_that_is_cut_or_longer_or_not_absolute_or_too_long_in_time_is_refused() {
-        let bytes = request().encode().expect("encoded");
-
-        for cut in [0, 1, 8, bytes.len() / 2, bytes.len() - 1] {
-            assert!(Request::decode(&bytes[..cut]).is_err(), "cut at {cut}");
-        }
-        let mut longer = bytes.clone();
-        longer.push(0);
-        assert!(Request::decode(&longer).is_err());
-
-        let mut other = bytes.clone();
-        other[0] = 2;
-        assert!(Request::decode(&other).is_err());
-
-        let mut slow = request();
-        slow.limits.time = MAX_TIME + Duration::from_millis(1);
-        assert!(Request::decode(&slow.encode().expect("encoded")).is_err());
-
-        let mut relative = request();
-        relative.layout.workdir = PathBuf::from("repo");
-        assert!(Request::decode(&relative.encode().expect("encoded")).is_err());
-    }
-
-    #[test]
-    fn every_answer_is_read_back_and_an_error_is_only_its_kind() {
-        let status = GitStatus {
-            repo: true,
-            marks: vec![entry("a", GitMark::Modified), entry("b", GitMark::Ignored)],
-        };
-
-        assert_eq!(
-            decode_answer(&encode_answer(&Ok(status.clone()))).expect("a status"),
-            status
-        );
-        for error in [
-            GitError::TooBig,
-            GitError::TimedOut,
-            GitError::Cancelled,
-            GitError::Repository,
-            GitError::Folder(io::ErrorKind::NotFound),
-            GitError::Folder(io::ErrorKind::PermissionDenied),
-            GitError::Folder(io::ErrorKind::NotADirectory),
-            GitError::Folder(io::ErrorKind::Other),
-        ] {
-            let bytes = encode_answer(&Err(match &error {
-                GitError::TooBig => GitError::TooBig,
-                GitError::TimedOut => GitError::TimedOut,
-                GitError::Cancelled => GitError::Cancelled,
-                GitError::Repository => GitError::Repository,
-                GitError::Folder(kind) => GitError::Folder(*kind),
-            }));
-
-            assert_eq!(bytes.len(), 1);
-            assert_eq!(
-                decode_answer(&bytes).expect_err("an error").to_string(),
-                error.to_string()
-            );
-        }
-    }
-
-    #[test]
-    fn an_answer_that_is_not_exactly_an_answer_cannot_be_read() {
-        let good = encode_answer(&Ok(GitStatus {
-            repo: true,
-            marks: vec![entry("a", GitMark::Staged)],
-        }));
-        let name_at = good.len() - 1;
-
-        let mut longer = good.clone();
-        longer.push(0);
-        let mut another_mark = good.clone();
-        another_mark[6] = 9;
-        let mut separator = good.clone();
-        separator[name_at] = b'/';
-        let mut nul = good.clone();
-        nul[name_at] = 0;
-        let dots = encode_answer(&Ok(GitStatus {
-            repo: true,
-            marks: vec![entry("..", GitMark::Staged)],
-        }));
-        let twice = encode_answer(&Ok(GitStatus {
-            repo: true,
-            marks: vec![entry("a", GitMark::Staged), entry("a", GitMark::Modified)],
-        }));
-        let mut many = good.clone();
-        many[2..6].copy_from_slice(&u32::MAX.to_le_bytes());
-        let marks_without_repo = {
-            let mut bytes = good.clone();
-            bytes[1] = 0;
-            bytes
-        };
-        let error_with_more = vec![TAG_TOO_BIG, 0];
-
-        for (what, bytes) in [
-            ("empty", Vec::new()),
-            ("cut", good[..good.len() - 1].to_vec()),
-            ("longer", longer),
-            ("another mark", another_mark),
-            ("a separator in a name", separator),
-            ("a NUL in a name", nul),
-            ("dots", dots),
-            ("the same name twice", twice),
-            ("a count the bytes cannot hold", many),
-            ("marks of no repository", marks_without_repo),
-            ("an unknown tag", vec![99]),
-            ("an error with more", error_with_more),
-        ] {
-            assert!(matches!(decode_answer(&bytes), Err(GitError::Repository)), "{what}");
-        }
-    }
-}
+#[path = "request_tests.rs"]
+mod tests;

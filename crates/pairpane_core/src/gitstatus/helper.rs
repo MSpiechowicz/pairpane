@@ -11,8 +11,15 @@
 //!    the status reads is bounded by that whatever gix does (a read of a pipe, a chain of deltas that spends the processor, a
 //!    mount that does not answer). The app's exit flag ends the wait and kills the child as well, and a child never outlives
 //!    the app (`PR_SET_PDEATHSIG` on Linux, the kill-on-close limit of the job on Windows). A child that ends without an
-//!    answer, or with an error, is [`GitError::Repository`], except one that the processor-time limit ended, which is a
-//!    time out.
+//!    answer, or with an error, is [`GitError::Repository`], except one that the processor-time limit ended (`SIGXCPU`, which is
+//!    delivered because the hard limit is a second above the soft one), which is a time out.
+//!
+//! A helper outlives the app only on macOS, which has no signal for the death of a parent: the helper has read its whole request
+//! by then and the parent's end of its standard input was closed when the request was written, so a closed standard input says
+//! nothing of the parent, and the helper ends when it writes its answer to a pipe that nobody reads (`EPIPE`) or at its limit on
+//! processor time. One that is blocked in a read that does not return (a mount that does not answer) uses no processor time and
+//! stays until the read does: the deadline, which kills it, is the parent's, so a parent that has gone leaves it. Known, and not
+//! done: nothing watches for the parent there.
 
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -22,9 +29,11 @@ use std::thread;
 use std::time::Duration;
 
 use super::child::CHILD_ARG;
+use super::layout::home;
+use super::locate::{self, Found};
 use super::request::{MAX_ANSWER, Request, decode_answer};
 use super::scan::not_a_repository;
-use super::{GitError, Limits, locate};
+use super::{GitError, Limits};
 use crate::model::GitStatus;
 use crate::process::{self, GRACE as REAP, Started, Wait};
 
@@ -50,23 +59,21 @@ pub(super) fn status(
     program: &Path,
 ) -> Result<GitStatus, GitError> {
     // The user's home folder is where the search for a repository ends (it is the last folder looked in).
-    let home = std::env::home_dir().and_then(|home| gix::path::realpath(home).ok());
-
-    let Some(request) = prepare(folder, home, limits, cancel)? else {
-        return Ok(not_a_repository());
-    };
-
-    run(program, &request, cancel)
+    match prepare(folder, home(), limits, cancel)? {
+        Found::Repository(request) => run(program, &request, cancel),
+        Found::Nowhere => Ok(not_a_repository()),
+        Found::Refused(note) => Ok(note.status()),
+    }
 }
 
-/// Finds and looks at the repository the folder `folder` is in: the request for the helper, or `None` when the folder is in
-/// none, or in one that must not be read. `ceiling` is the folder the search must not go above (`None`: the filesystem root).
+/// Finds and looks at the repository the folder `folder` is in: the request for the helper, or that the folder is in none, or in
+/// one that must not be read (and why). `ceiling` is the folder the search must not go above (`None`: the filesystem root).
 pub(super) fn prepare(
     folder: &Path,
     ceiling: Option<PathBuf>,
     limits: Limits,
     cancel: &AtomicBool,
-) -> Result<Option<Request>, GitError> {
+) -> Result<Found<Request>, GitError> {
     if cancel.load(Ordering::Relaxed) {
         return Err(GitError::Cancelled);
     }
@@ -77,6 +84,8 @@ pub(super) fn prepare(
 
         GitError::Folder(if error.is_not_found() {
             io::ErrorKind::NotFound
+        } else if error.is_permission_denied() {
+            io::ErrorKind::PermissionDenied
         } else {
             io::ErrorKind::Other
         })
@@ -88,14 +97,23 @@ pub(super) fn prepare(
     }
 
     // The files of the repository are looked at, and what they point to, before anything reads one.
-    let Some(layout) = locate::find(&real, ceiling.as_deref())? else {
-        return Ok(None);
+    let layout = match locate::find(&real, ceiling.as_deref())? {
+        Found::Repository(layout) => layout,
+        Found::Nowhere => return Ok(Found::Nowhere),
+        Found::Refused(note) => return Ok(Found::Refused(note)),
     };
 
-    Ok(Some(Request {
+    // Which folders the helper is allowed to read, and which they are: a folder that is swapped for another after this is not the
+    // one that was looked at, and the helper does not go on (see `Grant`).
+    let Ok(grants) = layout.grants() else {
+        return Ok(Found::Nowhere);
+    };
+
+    Ok(Found::Repository(Request {
         folder: real,
         limits,
         layout,
+        grants,
     }))
 }
 
@@ -148,7 +166,15 @@ pub(super) fn run(program: &Path, request: &Request, cancel: &AtomicBool) -> Res
         return Err(GitError::Repository);
     };
 
-    let answer = supervise(&mut child, stdin, stdout, bytes, cancel, request.limits.time + GRACE);
+    let answer = supervise(
+        &mut child,
+        stdin,
+        stdout,
+        bytes,
+        cancel,
+        request.limits.time + GRACE,
+        request.limits.entries,
+    );
 
     // Whatever happened above, the child is stopped and reaped here; harmless for one that has ended.
     process::stop(&mut child);
@@ -156,7 +182,8 @@ pub(super) fn run(program: &Path, request: &Request, cancel: &AtomicBool) -> Res
     answer
 }
 
-/// Feeds the child, waits for its answer until `deadline`, and decodes it.
+/// Feeds the child, waits for its answer until `deadline`, and decodes it (at most `marks` marks: the cap on the entries of the
+/// status).
 fn supervise<C: Started>(
     child: &mut C,
     mut stdin: impl Write + Send + 'static,
@@ -164,6 +191,7 @@ fn supervise<C: Started>(
     request: Vec<u8>,
     cancel: &AtomicBool,
     deadline: Duration,
+    marks: usize,
 ) -> Result<GitStatus, GitError> {
     // The writer ends when everything is written (the pipe is closed with it) or when the child is gone. It is never
     // waited for: a child that does not read is killed, which ends the writer too.
@@ -198,13 +226,15 @@ fn supervise<C: Started>(
     }
 
     match answer {
-        Some(Ok(bytes)) => decode_answer(&bytes),
+        Some(Ok(bytes)) => decode_answer(&bytes, marks),
         _ => Err(GitError::Repository),
     }
 }
 
 /// What a helper that ended with an error and no answer of its own is: a time out when the processor-time limit ended it
-/// (`SIGXCPU`, 24 on Linux and on macOS), and an unreadable repository otherwise (a crash, or the memory limit).
+/// (`SIGXCPU`, 24 on Linux and on macOS: the helper's hard limit is a second above its soft one, so that the soft limit's
+/// signal, which nothing catches, is what ends it before the kernel's `SIGKILL` of the hard one, see `process::lower_limit`),
+/// and an unreadable repository otherwise (a crash, or the memory limit).
 fn after_a_signal(status: &std::process::ExitStatus) -> GitError {
     #[cfg(unix)]
     {
@@ -254,7 +284,7 @@ mod tests {
     ) -> (Result<GitStatus, GitError>, Child) {
         let mut child = start(program, args);
         let (stdin, stdout) = (child.stdin.take().expect("stdin"), child.stdout.take().expect("stdout"));
-        let answer = supervise(&mut child, stdin, stdout, Vec::new(), cancel, deadline);
+        let answer = supervise(&mut child, stdin, stdout, Vec::new(), cancel, deadline, 100);
 
         (answer, child)
     }
@@ -287,6 +317,38 @@ mod tests {
         process::stop(&mut child);
 
         assert!(matches!(answer, Err(GitError::Cancelled)), "{answer:?}");
+    }
+
+    #[test]
+    fn a_child_that_the_limit_on_processor_time_ended_is_a_time_out() {
+        use rustix::process::{Pid, Signal, kill_process};
+
+        let flag = AtomicBool::new(false);
+        let (answer, _) = std::thread::scope(|scope| {
+            let mut child = start("sleep", &["30"]);
+            let pid = Pid::from_raw(i32::try_from(child.id()).expect("a process number")).expect("a process");
+            let (stdin, stdout) = (child.stdin.take().expect("stdin"), child.stdout.take().expect("stdout"));
+            scope.spawn(move || {
+                std::thread::sleep(Duration::from_millis(100));
+                // What the kernel sends at the soft limit; nothing in the child catches it.
+                kill_process(pid, Signal::XCPU).expect("signalled");
+            });
+
+            (
+                supervise(
+                    &mut child,
+                    stdin,
+                    stdout,
+                    Vec::new(),
+                    &flag,
+                    Duration::from_secs(20),
+                    10,
+                ),
+                child,
+            )
+        });
+
+        assert!(matches!(answer, Err(GitError::TimedOut)), "{answer:?}");
     }
 
     #[test]

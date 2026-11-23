@@ -9,7 +9,7 @@ const RULES_CAP: u64 = 100;
 
 #[test]
 fn a_regular_file_within_the_cap_is_plain_and_one_over_it_is_large() {
-    let folder = tempfile::tempdir().expect("a folder");
+    let folder = crate::gitstatus::testing::tempdir();
     fs::write(folder.path().join("small"), b"12345").expect("a file");
 
     assert_eq!(seen(&folder.path().join("small"), 5), Seen::Plain(()));
@@ -22,7 +22,7 @@ fn a_regular_file_within_the_cap_is_plain_and_one_over_it_is_large() {
 
 #[test]
 fn a_folder_is_odd_and_a_file_is_read_below_real_folders_only() {
-    let folder = tempfile::tempdir().expect("a folder");
+    let folder = crate::gitstatus::testing::tempdir();
     fs::create_dir(folder.path().join("sub")).expect("a folder");
     fs::write(folder.path().join("sub/file"), b"x").expect("a file");
 
@@ -36,7 +36,7 @@ fn a_folder_is_odd_and_a_file_is_read_below_real_folders_only() {
 #[cfg(unix)]
 #[test]
 fn pipes_devices_and_links_are_odd_and_nothing_waits_for_them() {
-    let folder = tempfile::tempdir().expect("a folder");
+    let folder = crate::gitstatus::testing::tempdir();
     crate::view::testing::fifo(folder.path(), "pipe");
     std::os::unix::fs::symlink("/dev/zero", folder.path().join("zero")).expect("a link");
     fs::create_dir(folder.path().join("real")).expect("a folder");
@@ -76,7 +76,7 @@ fn a_file_of_a_pseudo_file_system_is_odd_whatever_size_it_says() {
 
 #[test]
 fn a_real_folder_is_plain_and_a_file_or_nothing_is_missing() {
-    let folder = tempfile::tempdir().expect("a folder");
+    let folder = crate::gitstatus::testing::tempdir();
     fs::create_dir(folder.path().join("sub")).expect("a folder");
     fs::write(folder.path().join("file"), b"x").expect("a file");
 
@@ -93,7 +93,7 @@ fn folder_of(path: &Path) -> Seen<()> {
 #[cfg(unix)]
 #[test]
 fn a_link_for_a_folder_is_odd() {
-    let folder = tempfile::tempdir().expect("a folder");
+    let folder = crate::gitstatus::testing::tempdir();
     let root = gix::path::realpath(folder.path()).expect("its real path");
     fs::create_dir(root.join("sub")).expect("a folder");
     std::os::unix::fs::symlink(root.join("sub"), root.join("to-folder")).expect("a link");
@@ -105,7 +105,7 @@ fn a_link_for_a_folder_is_odd() {
 
 #[test]
 fn a_rules_file_is_its_size_unless_it_is_a_pipe_a_device_or_too_big() {
-    let folder = tempfile::tempdir().expect("a folder");
+    let folder = crate::gitstatus::testing::tempdir();
     fs::write(folder.path().join("small"), b"*.log\n").expect("rules");
     fs::write(folder.path().join("big"), vec![b'#'; RULES_CAP as usize + 1]).expect("rules");
     fs::create_dir(folder.path().join("folder")).expect("a folder");

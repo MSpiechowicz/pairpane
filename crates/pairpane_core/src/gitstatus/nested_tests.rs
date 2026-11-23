@@ -90,7 +90,7 @@ mod hostile {
     #[test]
     fn a_nested_git_file_that_points_at_a_folder_whose_head_is_a_named_pipe_is_not_followed() {
         let repo = clean(&[("a.txt", b"a")]);
-        let outside = tempfile::tempdir().expect("a folder");
+        let outside = crate::gitstatus::testing::tempdir();
         fs::create_dir_all(outside.path().join("objects")).expect("objects");
         fs::create_dir_all(outside.path().join("refs")).expect("refs");
         fifo(outside.path(), "HEAD");
@@ -191,10 +191,10 @@ fn the_rules_files_of_the_folders_entered_add_up_and_past_the_total_the_reposito
         }
     };
 
-    // 12 files are 3 MiB: fine. 20 are 5 MiB.
+    // 12 files are 3 MiB: fine. 36 are 9 MiB.
     make(12);
     assert!(answer(repo.root(), Limits::default()).is_ok());
-    make(20);
+    make(36);
     let too_big = answer(repo.root(), Limits::default());
     assert!(matches!(too_big, Err(GitError::TooBig)), "{too_big:?}");
 }
@@ -204,7 +204,7 @@ fn the_rules_files_of_the_folder_its_parents_and_the_folders_below_it_add_up_too
     let repo = clean(&[("a.txt", b"a")]);
     let rules = rules(250 * 1024);
     let mut folder = String::new();
-    for level in 0..17 {
+    for level in 0..34 {
         if !folder.is_empty() {
             folder.push('/');
         }
@@ -213,7 +213,7 @@ fn the_rules_files_of_the_folder_its_parents_and_the_folders_below_it_add_up_too
         fs::write(repo.path(&format!("{folder}/.gitignore")), &rules).expect("rules");
     }
 
-    // 17 files of 250 KiB are over 4 MiB.
+    // 34 files of 250 KiB are over 8 MiB.
     let too_big = answer(&repo.path(&folder), Limits::default());
     assert!(matches!(too_big, Err(GitError::TooBig)), "{too_big:?}");
 }

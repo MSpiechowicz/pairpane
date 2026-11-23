@@ -119,7 +119,8 @@ fn a_sha256_repository_or_one_of_a_format_that_is_not_read_is_not_a_repo_and_not
             answer.as_ref().ok(),
             Some(&GitStatus {
                 repo: false,
-                marks: vec![]
+                marks: vec![],
+                note: None,
             }),
             "{config:?}: {answer:?}"
         );
@@ -170,7 +171,7 @@ mod pointers {
     fn a_git_file_that_points_to_a_network_path_is_not_followed() {
         let main = clean(&[("a.txt", b"a")]);
         main.put("a.txt", b"changed");
-        let folder = tempfile::tempdir().expect("a folder");
+        let folder = crate::gitstatus::testing::tempdir();
         fs::write(folder.path().join("b.txt"), b"b").expect("a file");
 
         for (pointer, repo) in [
@@ -242,6 +243,7 @@ mod pointers {
 /// Named pipes and devices where gix reads a file (Unix): each answer must come, and it is `repo: false`.
 #[cfg(unix)]
 mod pipes {
+    use super::note::Note;
     use super::*;
     use crate::view::testing::fifo;
 
@@ -252,6 +254,7 @@ mod pipes {
         within(10, move || read(&root, Limits::default()))
     }
 
+    /// The answer is `repo: false`, with the reason the page is told: the repository's files lead elsewhere.
     fn assert_not_a_repository(repo: &Repo, what: &str) {
         let answer = answer(repo);
 
@@ -259,7 +262,8 @@ mod pipes {
             answer.as_ref().ok(),
             Some(&GitStatus {
                 repo: false,
-                marks: vec![]
+                marks: vec![],
+                note: Some(Note::Elsewhere.text().to_owned()),
             }),
             "{what}: {answer:?}"
         );
@@ -327,7 +331,7 @@ mod pipes {
     #[test]
     fn a_link_for_a_folder_of_the_refs_is_no_repository() {
         let repo = clean(&[("a.txt", b"a")]);
-        let elsewhere = tempfile::tempdir().expect("a folder");
+        let elsewhere = crate::gitstatus::testing::tempdir();
         fifo(elsewhere.path(), "main");
         fs::remove_dir_all(repo.git_dir().join("refs/heads")).expect("removed");
         std::os::unix::fs::symlink(elsewhere.path(), repo.git_dir().join("refs/heads")).expect("a link");
@@ -349,7 +353,7 @@ mod pipes {
     fn a_status_still_answers_for_a_repository_with_a_symbolic_link_for_the_dot_git_folder() {
         let repo = clean(&[("a.txt", b"a")]);
         repo.put("b.txt", b"untracked");
-        let elsewhere = tempfile::tempdir().expect("a folder");
+        let elsewhere = crate::gitstatus::testing::tempdir();
         let moved = elsewhere.path().join("moved.git");
         fs::rename(repo.git_dir(), &moved).expect("moved");
         std::os::unix::fs::symlink(&moved, repo.path(".git")).expect("a link");

@@ -127,6 +127,31 @@ mod unix {
     }
 
     #[test]
+    fn a_folder_that_cannot_be_looked_at_for_want_of_permission_says_so() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if rustix::process::geteuid().is_root() {
+            eprintln!("skipped: the user is root, who is let into every folder");
+
+            return;
+        }
+        let folder = crate::gitstatus::testing::tempdir();
+        let locked = folder.path().join("locked");
+        fs::create_dir_all(locked.join("inside")).expect("folders");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("locked");
+
+        let answer = status(&locked.join("inside"), Limits::default(), &AtomicBool::new(false));
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).expect("unlocked");
+
+        let error = answer.expect_err("no permission");
+        assert!(
+            matches!(error, GitError::Folder(std::io::ErrorKind::PermissionDenied)),
+            "{error:?}"
+        );
+        assert_eq!(error.to_string(), "the folder cannot be read: no permission");
+    }
+
+    #[test]
     fn a_git_folder_that_names_another_work_tree_with_commondir_and_gitdir_is_no_repository() {
         let outer = clean(&[("a.txt", b"a")]);
         let evil = outer.path("evil");
@@ -160,7 +185,7 @@ mod unix {
 
     #[test]
     fn a_gitdir_pointer_is_the_text_gix_reads_with_its_leading_spaces_and_its_lines() {
-        let folder = tempfile::tempdir().expect("a folder");
+        let folder = crate::gitstatus::testing::tempdir();
         let work = folder.path().join("w");
         git_folder(&work.join("evil"));
         let hostile = work.join(" evil");
@@ -187,7 +212,7 @@ mod unix {
     #[test]
     fn a_commondir_is_read_with_the_white_space_at_its_end_cut_off_and_nothing_else() {
         let main = clean(&[("a.txt", b"a")]);
-        let outside = tempfile::tempdir().expect("a folder");
+        let outside = crate::gitstatus::testing::tempdir();
         let (linked, admin) = linked(&main, outside.path());
 
         for (text, repo) in [
@@ -273,7 +298,7 @@ mod unix {
     /// `info/exclude` is one has no status here) is a repository that is not read, whatever it leads to.
     #[test]
     fn a_link_for_info_exclude_or_attributes_or_head_is_no_repository_whatever_it_leads_to() {
-        let elsewhere = tempfile::tempdir().expect("a folder");
+        let elsewhere = crate::gitstatus::testing::tempdir();
         fs::write(elsewhere.path().join("rules"), "*.tmp\n").expect("rules");
         fs::write(elsewhere.path().join("head"), "ref: refs/heads/main\n").expect("HEAD");
         fifo(elsewhere.path(), "pipe");
@@ -327,7 +352,7 @@ mod unix {
     /// at is not what is opened. A link before a `..` is a repository that is not read, and nothing waits.
     #[test]
     fn a_gitdir_that_climbs_out_of_a_link_is_no_repository_and_nothing_waits_for_the_pipe_it_hides() {
-        let folder = tempfile::tempdir().expect("a folder");
+        let folder = crate::gitstatus::testing::tempdir();
         let root = gix::path::realpath(folder.path()).expect("its real path");
         let work = root.join("w");
         fs::create_dir_all(work.join("x/y")).expect("folders");
@@ -370,7 +395,7 @@ mod unix {
             } else {
                 name.to_owned()
             };
-            let elsewhere = tempfile::tempdir().expect("a folder");
+            let elsewhere = crate::gitstatus::testing::tempdir();
             fs::create_dir_all(repo.git_dir().join(&name)).expect("a folder");
             fs::rename(repo.git_dir().join(&name), elsewhere.path().join("moved")).expect("moved");
             symlink(elsewhere.path().join("moved"), repo.git_dir().join(&name)).expect("a link");

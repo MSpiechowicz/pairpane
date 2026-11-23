@@ -6,9 +6,11 @@
 //! itself follows a link there, and a `HEAD` that is a link to a branch, or an `info/exclude` that is shared between
 //! repositories by a link, is a repository without a status here). The folders gix goes through to those files are looked at
 //! too: `refs`, `info`, `objects`, `objects/info`, `objects/pack` and each `objects/xx` of every object folder must be real
-//! folders and no link (or reparse point), as a link there would lead to files that were not looked at. Everything that is not
-//! here (the content of a loose object, the blobs of the index) is read by gix inside the process that the status runs in,
-//! which is held to a memory and a time limit, and may read nothing but the folders of the repository.
+//! folders and no link (or reparse point), as a link there would lead to files that were not looked at, and so must every
+//! entry of the folders of loose objects, of `objects/pack` and of the commit graph folders be a regular file (see
+//! [`super::objects`]). Everything that is not here (the content of a loose object, the blobs of the index) is read by gix inside
+//! the process that the status runs in, which is held to a memory and a time limit, and may read nothing but the folders of the
+//! repository.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,9 +18,8 @@ use std::path::{Path, PathBuf};
 use super::budget::SOURCE_BYTES;
 use super::files::{self, Seen};
 use super::layout::Layout;
-use super::links::normalise;
-use super::locality::pointer_target;
 use super::locate::POINTER_BYTES;
+use super::objects;
 
 /// The most a repository's `config` may hold.
 const CONFIG_BYTES: u64 = 1024 * 1024;
@@ -29,36 +30,33 @@ pub(super) const INDEX_BYTES: u64 = 64 * 1024 * 1024;
 /// The most a `packed-refs` may hold.
 const PACKED_REFS_BYTES: u64 = 64 * 1024 * 1024;
 
-/// The most the list of alternate object folders may hold, and how many lines and how deep a chain of them is followed.
-const ALTERNATES_BYTES: u64 = 64 * 1024;
-const ALTERNATES_LINES: usize = 32;
-const ALTERNATES_DEPTH: usize = 5;
-
 /// The most a ref may lead through with symbolic refs (gix's own limit is the same).
 const REF_HOPS: usize = 5;
 
 /// The most entries of one folder that is listed to be looked at (the pack folder, `.git`).
-const LISTED: usize = 4_096;
+const LISTED: usize = 16_384;
 
 /// Why a repository must not be read.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Refusal {
     /// A file is not a plain one, a pointer leads to a place that is not local, or a file is over its cap.
     Odd,
+    /// A folder the repository names is too broad to give the helper to read (see [`super::layout::is_too_broad`]).
+    Broad,
     /// The index is over its cap.
     TooBig,
 }
 
 /// What the files of a repository add up to for the rules budget, and where its alternates are.
 pub(super) struct Sources {
-    /// The object folders of the alternates (not the repository's own).
+    /// The folders of the alternates' object stores that the helper may read (see `Layout::alternates`).
     pub(super) alternates: Vec<PathBuf>,
     /// The bytes of `info/exclude` and `info/attributes` of the git folder and of the common folder.
     pub(super) info_rules: u64,
 }
 
 /// A file that is not there or is plain is fine; anything else is a repository not to read.
-fn fine<T>(seen: Seen<T>) -> Result<(), Refusal> {
+pub(super) fn fine<T>(seen: Seen<T>) -> Result<(), Refusal> {
     match seen {
         Seen::Missing | Seen::Plain(_) => Ok(()),
         Seen::Odd | Seen::Large => Err(Refusal::Odd),
@@ -96,14 +94,8 @@ pub(super) fn files(layout: &Layout) -> Result<Sources, Refusal> {
     fine(files::seen(&layout.common_dir.join("packed-refs"), PACKED_REFS_BYTES))?;
     refs(layout)?;
 
-    let mut objects = object_folders(&layout.common_dir)?;
-    for folder in &objects {
-        object_folder(folder)?;
-    }
-    objects.remove(0);
-
     Ok(Sources {
-        alternates: objects,
+        alternates: objects::alternates(&layout.common_dir)?,
         info_rules,
     })
 }
@@ -122,7 +114,7 @@ fn index(git_dir: &Path) -> Result<(), Refusal> {
 }
 
 /// Goes through the entries of `folder` (not there: none), at most [`LISTED`] of them, with `each`.
-fn listed(folder: &Path, mut each: impl FnMut(&fs::DirEntry) -> Result<(), Refusal>) -> Result<(), Refusal> {
+pub(super) fn listed(folder: &Path, mut each: impl FnMut(&fs::DirEntry) -> Result<(), Refusal>) -> Result<(), Refusal> {
     let Ok(listing) = fs::read_dir(folder) else {
         return Ok(());
     };
@@ -213,59 +205,6 @@ fn loose_ref(layout: &Layout, name: &str) -> Result<Option<Vec<u8>>, Refusal> {
     Ok(found)
 }
 
-/// The object folders: the repository's own and the alternates it names, which gix opens too, each with its own
-/// `info/alternates` (up to a depth). The lists are parsed by gix's own parser (`gix::odb::alternate::parse`: comments, quoted
-/// entries, and `\r` is kept as part of the name), and every relative entry of every list, at any depth, is joined to the
-/// objects folder of the repository itself, as gix joins it (`gix_odb::alternate::resolve`), and not to the folder of the list
-/// it was read from. One that is not a local place, or a list that is too long, is a repository not to read.
-fn object_folders(common_dir: &Path) -> Result<Vec<PathBuf>, Refusal> {
-    let own = common_dir.join("objects");
-    let mut folders = vec![own.clone()];
-    let mut pending = vec![(own.clone(), 0)];
-
-    while let Some((folder, depth)) = pending.pop() {
-        let bytes = match files::read_below(&folder, "info/alternates", ALTERNATES_BYTES) {
-            Seen::Missing => continue,
-            Seen::Plain(bytes) => bytes,
-            Seen::Odd | Seen::Large => return Err(Refusal::Odd),
-        };
-        let entries = gix::odb::alternate::parse(&bytes).map_err(|_| Refusal::Odd)?;
-
-        for entry in entries {
-            if depth + 1 > ALTERNATES_DEPTH || folders.len() >= ALTERNATES_LINES {
-                return Err(Refusal::Odd);
-            }
-
-            // Not a local place: the repository is not read, and nothing at the other end is touched.
-            let target = normalise(&pointer_target(&own, &entry).ok_or(Refusal::Odd)?);
-            folders.push(target.clone());
-            pending.push((target, depth + 1));
-        }
-    }
-
-    Ok(folders)
-}
-
-/// The structure of one object folder, which gix goes through to read an object: the folder itself, `info`, `pack` and each
-/// of the 256 folders of loose objects that is there must be a real folder, and no link or reparse point (one would lead to
-/// files that were not looked at), and the files of `pack` must be plain ones: gix opens the pack and its index when an object
-/// is in it.
-fn object_folder(objects: &Path) -> Result<(), Refusal> {
-    let fanned_out = (0..=u8::MAX).map(|byte| objects.join(format!("{byte:02x}")));
-    let folders = [objects.to_path_buf(), objects.join("info"), objects.join("pack")];
-
-    for folder in folders.into_iter().chain(fanned_out) {
-        match files::folder(&folder) {
-            Seen::Plain(()) | Seen::Missing => {}
-            Seen::Odd | Seen::Large => return Err(Refusal::Odd),
-        }
-    }
-
-    listed(&objects.join("pack"), |entry| {
-        fine(files::seen(&entry.path(), u64::MAX))
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,40 +229,5 @@ mod tests {
         ] {
             assert_eq!(symbolic_target(bad.as_bytes()), Err(Refusal::Odd), "{bad}");
         }
-    }
-
-    #[test]
-    fn a_pointer_of_the_list_of_alternates_that_is_not_local_is_refused() {
-        let folder = tempfile::tempdir().expect("a folder");
-        let common = folder.path().join("repo.git");
-        fs::create_dir_all(common.join("objects/info")).expect("folders");
-        let alternates = common.join("objects/info/alternates");
-
-        fs::write(&alternates, "# comment\n\n../../other/objects\n").expect("a list");
-        assert_eq!(object_folders(&common).expect("local").len(), 2);
-
-        for line in [
-            r"\\host\share\objects",
-            "//host/share/objects",
-            r"\\?\UNC\host\share\objects",
-        ] {
-            fs::write(&alternates, format!("../../fine/objects\n{line}\n")).expect("a list");
-
-            assert_eq!(object_folders(&common), Err(Refusal::Odd), "{line}");
-        }
-    }
-
-    #[test]
-    fn a_chain_of_alternates_is_followed_and_a_loop_ends() {
-        let folder = tempfile::tempdir().expect("a folder");
-        let (one, two) = (folder.path().join("one/objects"), folder.path().join("two/objects"));
-        for objects in [&one, &two] {
-            fs::create_dir_all(objects.join("info")).expect("folders");
-        }
-        fs::write(one.join("info/alternates"), format!("{}\n", two.display())).expect("a list");
-        fs::write(two.join("info/alternates"), format!("{}\n", one.display())).expect("a list");
-
-        // Each step names the other: more steps than the depth allows.
-        assert_eq!(object_folders(&folder.path().join("one")), Err(Refusal::Odd));
     }
 }

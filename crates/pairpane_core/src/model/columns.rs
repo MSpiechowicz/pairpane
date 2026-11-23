@@ -50,4 +50,9 @@ pub struct GitStatus {
     pub repo: bool,
     /// The marked entries, sorted by name.
     pub marks: Vec<GitEntry>,
+    /// Why a repository is not read, when `repo` is `false` for that reason and not because the folder is in none: a fixed text
+    /// that holds no path, for the page to show where the column is blank. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub note: Option<String>,
 }

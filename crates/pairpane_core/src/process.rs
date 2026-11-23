@@ -44,8 +44,8 @@ pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// The command that starts `program` with `args`: the environment is cleared but for [`SYSTEM_ENV`] and the variables in
 /// `kept` that the app has, so nothing of the app's own (tokens, proxy settings, a session) reaches the child; the standard
 /// input is closed and the standard error goes nowhere; the standard output is a pipe. The caller may change the streams,
-/// add variables and set the working directory (the default is the root, so a relative or empty entry of a kept search path
-/// does not resolve against wherever the app happens to be).
+/// add variables and set the working directory (the default is the root, or the system folder on Windows, so a relative or empty
+/// entry of a kept search path does not resolve against wherever the app happens to be).
 pub fn command<I, S>(program: &Path, args: I, kept: &[&str]) -> Command
 where
     I: IntoIterator<Item = S>,
@@ -72,6 +72,11 @@ where
         use std::os::windows::process::CommandExt;
 
         command.creation_flags(CREATE_NO_WINDOW);
+        // The system folder, which every child is given the name of (`SystemRoot`): not the app's own, where a library or a
+        // relative entry of a search path could be found by the name that a user's folder gave it.
+        if let Some(root) = std::env::var_os("SystemRoot") {
+            command.current_dir(root);
+        }
     }
 
     command
@@ -124,15 +129,29 @@ impl Started for Child {
 }
 
 /// Sets the soft and the hard limit of `resource` for the calling process to `value`: what the helper processes do to
-/// themselves before they read a byte (`view::heic::sandbox`, `view::thumb::macos`).
+/// themselves before they read a byte (`view::heic::sandbox`, `view::thumb::macos`). The processor time is the exception: its hard
+/// limit is a second above the soft one, because the kernel sends `SIGXCPU` at the soft limit and `SIGKILL` at the hard one, and
+/// with the two equal the kill comes first: the helper then ends with a signal that is no sign of the time it took. As it is, the
+/// signal (which nothing in a helper catches) ends it, and the parent reads it as a time out (`gitstatus`), a second before the
+/// kernel would kill a process that survives it.
 #[cfg(unix)]
 pub(crate) fn lower_limit(resource: rustix::process::Resource, value: u64) -> io::Result<()> {
-    let limit = rustix::process::Rlimit {
-        current: Some(value),
-        maximum: Some(value),
+    Ok(rustix::process::setrlimit(resource, limit_for(resource, value))?)
+}
+
+/// The soft and the hard limit that [`lower_limit`] sets for `resource` to `value`.
+#[cfg(unix)]
+fn limit_for(resource: rustix::process::Resource, value: u64) -> rustix::process::Rlimit {
+    let maximum = if resource == rustix::process::Resource::Cpu {
+        value.saturating_add(1)
+    } else {
+        value
     };
 
-    Ok(rustix::process::setrlimit(resource, limit)?)
+    rustix::process::Rlimit {
+        current: Some(value),
+        maximum: Some(maximum),
+    }
 }
 
 /// Why [`wait_for`] gave up.

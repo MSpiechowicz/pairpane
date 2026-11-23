@@ -74,6 +74,56 @@ fn a_folder_that_is_in_no_repository_is_not_an_error() {
 }
 
 #[test]
+fn a_repository_that_is_refused_for_what_it_names_is_no_repo_with_a_note_and_the_note_has_no_path() {
+    let (folder, path) = repository();
+    // A pointer to a place that is not a local one, where the alternates of the objects are.
+    std::fs::create_dir_all(folder.path().join(".git/objects/info")).expect("a folder");
+    std::fs::write(
+        folder.path().join(".git/objects/info/alternates"),
+        "//host/share/objects\n",
+    )
+    .expect("a list");
+
+    let answer = git(&Columns::default(), &path).expect("a status");
+
+    let value = serde_json::to_value(&answer).expect("json");
+    assert_eq!(value["repo"], json!(false));
+    assert_eq!(value["marks"], json!([]));
+    let note = value["note"].as_str().expect("a note");
+    assert_eq!(
+        note,
+        "This repository links git's own files elsewhere, which the app does not follow"
+    );
+    assert!(!note.contains(&path) && !note.contains("host"), "{note}");
+}
+
+#[test]
+fn where_the_column_is_not_available_the_answer_is_unsupported_at_once_and_nothing_is_touched() {
+    let columns = Columns::default();
+    let (_folder, path) = repository();
+    let gone = tempfile::tempdir()
+        .expect("a folder")
+        .path()
+        .join("gone")
+        .to_string_lossy()
+        .into_owned();
+
+    // Whatever the path is, a repository, a folder that is not there or one the page should not have sent: the same answer,
+    // and no place of the cap is taken for it.
+    for path in [path.as_str(), gone.as_str(), "", "relative/path"] {
+        let (code, message) = shown(block_on(columns.git_on(true, path.to_owned())));
+
+        assert_eq!(code, IpcErrorCode::Unsupported, "{path:?}");
+        assert_eq!(message, "Git status is not available on Windows yet", "{path:?}");
+    }
+    assert_eq!(
+        fill(&columns.statuses, GIT_THREADS).len(),
+        GIT_THREADS,
+        "every place is free"
+    );
+}
+
+#[test]
 fn what_the_page_sent_is_checked_before_a_thread_is_taken_and_a_full_cap_is_busy() {
     let (_folder, path) = repository();
     let columns = Columns::default();
@@ -210,6 +260,7 @@ fn a_place_is_held_while_a_status_runs_and_given_back_when_it_ends() {
                 Ok(GitStatus {
                     repo: false,
                     marks: Vec::new(),
+                    note: None,
                 })
             }))
         });

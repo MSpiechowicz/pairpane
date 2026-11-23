@@ -12,4 +12,9 @@ repo: boolean,
 /**
  * The marked entries, sorted by name.
  */
-marks: Array<GitEntry>, };
+marks: Array<GitEntry>, 
+/**
+ * Why a repository is not read, when `repo` is `false` for that reason and not because the folder is in none: a fixed text
+ * that holds no path, for the page to show where the column is blank. Absent otherwise.
+ */
+note?: string, };

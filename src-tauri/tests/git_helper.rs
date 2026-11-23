@@ -25,7 +25,13 @@ fn idle() -> AtomicBool {
 /// A folder that is the work tree of a repository with no commit: the few files and folders git needs to see one.
 fn repository() -> tempfile::TempDir {
     let folder = tempfile::tempdir().expect("a folder");
-    let git = folder.path().join(".git");
+    write_git_folder(&folder.path().join(".git"));
+
+    folder
+}
+
+/// The few files and folders of a git folder with no commit.
+fn write_git_folder(git: &Path) {
     fs::create_dir_all(git.join("objects")).expect("objects");
     fs::create_dir_all(git.join("refs")).expect("refs");
     fs::write(git.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD");
@@ -34,8 +40,6 @@ fn repository() -> tempfile::TempDir {
         "[core]\n\trepositoryformatversion = 0\n\tbare = false\n",
     )
     .expect("config");
-
-    folder
 }
 
 fn status(folder: &Path, limits: Limits) -> Result<pairpane_core::model::GitStatus, GitError> {
@@ -257,7 +261,15 @@ fn the_helper_confines_itself_before_it_opens_the_repository() {
     assert!(limited(&text), "the helper limits its memory: {text}");
     assert!(filtered(), "every thread of the helper has the seccomp filter");
 
-    // The processor time is the time limit of the status rounded up, and a second.
+    // The processor time is the time limit of the status rounded up, and a second, and the hard limit is a second more: the
+    // signal of the soft limit (`SIGXCPU`) is what ends the helper, and not a kill that the parent could not tell from a crash.
+    let cpu: Vec<&str> = text
+        .lines()
+        .find(|line| line.starts_with("Max cpu time"))
+        .expect("a limit on processor time")
+        .split_whitespace()
+        .collect();
+    assert_eq!(&cpu[3..5], ["6", "7"], "{text}");
     for line in [
         "Max cpu time              6 ",
         "Max core file size        0 ",
@@ -267,6 +279,17 @@ fn the_helper_confines_itself_before_it_opens_the_repository() {
     }
     let status = fs::read_to_string(format!("{proc}/status")).expect("status");
     assert!(status.contains("NoNewPrivs:\t1"), "{status}");
+
+    // It leads a session of its own, so it has no controlling terminal (the field after the group is the session).
+    let stat = fs::read_to_string(format!("{proc}/stat")).expect("stat");
+    let after_the_name = stat.rsplit_once(')').expect("the name ends").1;
+    let session: u32 = after_the_name
+        .split_whitespace()
+        .nth(3)
+        .expect("a session")
+        .parse()
+        .expect("a number");
+    assert_eq!(session, child.id(), "{stat}");
 
     // Nothing of the app reaches it: its streams, and no more.
     let mut open: Vec<u32> = fs::read_dir(format!("{proc}/fd"))
@@ -307,4 +330,28 @@ fn what_the_helper_writes_is_an_answer_the_parent_reads_and_nothing_follows_it()
     assert!(answer.repo);
     assert_eq!(answer.marks.len(), 1);
     assert!(!String::from_utf8_lossy(&bytes).contains(&folder.path().to_string_lossy().into_owned()));
+}
+
+/// A folder that was swapped for another with the same path after the parent looked at it (a link, or a folder that someone else
+/// made) is not the one the helper is allowed to read: it ends without reading, and the parent answers as for a repository that
+/// cannot be read. With the same request and the folder as it was, the status is read.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_folder_that_is_swapped_after_it_was_looked_at_is_not_read_by_the_helper() {
+    let folder = repository();
+    let request = gitstatus::helper_request(folder.path(), Limits::default())
+        .expect("a request")
+        .expect("a repository");
+
+    let control = gitstatus::status_for_request(&request, &idle(), program()).expect("a status");
+    assert!(control.repo);
+
+    // The same files, in another folder of the same name.
+    let git = folder.path().join(".git");
+    fs::rename(&git, folder.path().join(".git-before")).expect("moved");
+    write_git_folder(&git);
+
+    let answer = gitstatus::status_for_request(&request, &idle(), program());
+
+    assert!(matches!(answer, Err(GitError::Repository)), "{answer:?}");
 }

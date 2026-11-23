@@ -5,6 +5,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::net::UdpSocket;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
@@ -12,10 +13,11 @@ use std::sync::atomic::AtomicBool;
 use super::fixture::pairs;
 use super::tests::clean;
 use super::{Limits, child, helper, scan};
+use crate::view::heic::kernel_probes::read_only_errnos;
 use crate::view::testing::run_probe_with;
 
-/// Set, to the folder of the repository and the secret file it must not read (`|` between), in the test program that plays the
-/// helper.
+/// Set, to the folder of the repository, the secret file it must not read and the secret file in the folder of the alternate
+/// object store (`|` between), in the test program that plays the helper.
 const PROBE: &str = "PAIRPANE_GIT_SANDBOX_PROBE";
 
 /// The name of the test that is the probe when [`PROBE`] is set.
@@ -27,10 +29,11 @@ fn errno<T>(result: std::io::Result<T>) -> i32 {
 }
 
 /// What the confined process reports, one line.
-fn probe(root: &Path, secret: &Path) -> String {
+fn probe(root: &Path, secret: &Path, store_secret: &Path) -> String {
     let cancel = AtomicBool::new(false);
     let request = helper::prepare(root, None, Limits::default(), &cancel)
         .expect("prepared")
+        .repository()
         .expect("a repository");
     child::apply(&request).expect("the helper confines itself");
 
@@ -43,9 +46,18 @@ fn probe(root: &Path, secret: &Path) -> String {
     let listed = fs::read_dir(root).is_ok_and(|listing| listing.count() > 1);
     let git_dir = fs::read(root.join(".git/HEAD")).is_ok();
     let outside = errno(fs::read(secret));
+    // The alternate store's own folder is not the helper's, only its `info`, `pack` and loose folders are.
+    let store = store_secret.parent().expect("a folder");
+    let store_secret = errno(fs::read(store_secret));
+    let store_listing = errno(fs::read_dir(store));
+    let store_info = errno(fs::read_dir(store.join("info")));
+    let store_pack = errno(fs::read_dir(store.join("pack")));
     let outside_listing = errno(fs::read_dir(secret.parent().expect("a folder")));
     let procfs = errno(File::open("/proc/self/status"));
     let parent = errno(fs::read_dir(root.parent().expect("a parent")));
+
+    let own = File::open(root.join("a.txt")).expect("a file of the repository");
+    let [tiocsti, flock, xattr, unknown, fionread] = read_only_errnos(own.as_raw_fd());
 
     let overwrite = errno(OpenOptions::new().write(true).open(root.join("a.txt")));
     let create = errno(File::create(root.join("created.txt")));
@@ -63,7 +75,9 @@ fn probe(root: &Path, secret: &Path) -> String {
 
     format!(
         "PROBE status={status:?} inside={inside} listed={listed} git_dir={git_dir} outside={outside} \
-         outside_listing={outside_listing} procfs={procfs} parent={parent} overwrite={overwrite} create={create} \
+         outside_listing={outside_listing} procfs={procfs} parent={parent} store_secret={store_secret} \
+         store_listing={store_listing} store_info={store_info} store_pack={store_pack} tiocsti={tiocsti} flock={flock} \
+         xattr={xattr} unknown={unknown} fionread={fionread} overwrite={overwrite} create={create} \
          truncate={truncate} remove={remove} rename={rename} folder={folder} link={link} socket={socket} exec={exec} \
          hog={hog} small={small} threads={threads} unchanged={unchanged}"
     )
@@ -73,8 +87,16 @@ fn probe(root: &Path, secret: &Path) -> String {
 fn the_helper_reads_its_repository_and_nothing_else() {
     if let Some(paths) = std::env::var_os(PROBE).filter(|value| value != "1") {
         let paths = paths.to_string_lossy().into_owned();
-        let (root, secret) = paths.split_once('|').expect("two paths");
-        println!("{}", probe(Path::new(root), Path::new(secret)));
+        let mut paths = paths.split('|');
+        let (root, secret, store_secret) = (paths.next(), paths.next(), paths.next());
+        println!(
+            "{}",
+            probe(
+                Path::new(root.expect("a repository")),
+                Path::new(secret.expect("a secret")),
+                Path::new(store_secret.expect("a secret of the store")),
+            )
+        );
 
         // The test harness would make calls the filter refuses on its way out.
         std::process::exit(0);
@@ -82,11 +104,21 @@ fn the_helper_reads_its_repository_and_nothing_else() {
 
     let repo = clean(&[("a.txt", b"a"), ("sub/b.txt", b"b")]);
     repo.put("new.txt", b"n");
-    let secret_folder = tempfile::tempdir().expect("a folder");
+    let secret_folder = crate::gitstatus::testing::tempdir();
     let secret: PathBuf = secret_folder.path().join("secret.txt");
     fs::write(&secret, b"the user's secret").expect("a file");
 
-    let paths = format!("{}|{}", repo.root().display(), secret.display());
+    // The objects are in an alternate store, which has a file of its own beside what the helper is to read.
+    let store = repo.move_objects_to_an_alternate(secret_folder.path(), |store| store.display().to_string());
+    let store_secret = store.join("secret.txt");
+    fs::write(&store_secret, b"the store's secret").expect("a file");
+
+    let paths = format!(
+        "{}|{}|{}",
+        repo.root().display(),
+        secret.display(),
+        store_secret.display()
+    );
     let probe = run_probe_with(PROBE, &paths, TEST);
     let report = probe.report.as_str();
     let eperm = libc::EPERM;
@@ -126,13 +158,36 @@ fn the_helper_reads_its_repository_and_nothing_else() {
     }
     assert!(report.contains(" hog=false"), "the memory is limited: {report}");
 
+    // What a filter that writes nothing refuses beyond the file calls: a terminal's input, a lock, an attribute by a call that
+    // is new, a call no list knows. A question about the descriptor is let through.
+    for what in ["tiocsti", "flock", "xattr", "unknown"] {
+        assert!(
+            report.contains(&format!(" {what}={eperm}")),
+            "{what} is refused by the filter: {report}"
+        );
+    }
+    assert!(
+        !report.contains(&format!(" fionread={eperm}")),
+        "FIONREAD is let through: {report}"
+    );
+
+    // The alternate store that the status was read from is read through its `info`, `pack` and loose folders, and no other.
+    assert!(report.contains(" store_info=0 store_pack=0"), "{report}");
+
     // Landlock (Linux 5.13 and a kernel that has it switched on): what is outside the folders of the repository cannot be read.
     if report.contains(" outside=0 ") {
         eprintln!("no Landlock on this kernel, the file system was not closed: {report}");
 
         return;
     }
-    for what in ["outside", "outside_listing", "procfs", "parent"] {
+    for what in [
+        "outside",
+        "outside_listing",
+        "procfs",
+        "parent",
+        "store_secret",
+        "store_listing",
+    ] {
         assert!(
             report.contains(&format!(" {what}={}", libc::EACCES)),
             "{what} is out of reach: {report}"

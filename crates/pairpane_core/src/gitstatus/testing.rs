@@ -21,3 +21,12 @@ pub(super) fn status_below(
 ) -> Result<GitStatus, GitError> {
     in_process(folder, ceiling, limits, cancel)
 }
+
+/// A temporary folder whose path has no link on it: the system's temporary folder is one on macOS (`/var` is a link to
+/// `/private/var`), and the repository's pointers are refused unless they are physical (see `links::is_physical`), as the ones
+/// git writes are (it writes real paths for a linked work tree and for `--separate-git-dir`).
+pub(super) fn tempdir() -> tempfile::TempDir {
+    let base = gix::path::realpath(std::env::temp_dir()).expect("the temporary folder has a real path");
+
+    tempfile::Builder::new().tempdir_in(base).expect("a folder")
+}

@@ -6,7 +6,7 @@ import type { Transport } from '$lib/ipc/transport';
 
 import { refusal } from '../../../tests/thumbs';
 import { MAX_BUSY_IN_A_ROW } from './extrasLane';
-import { GIT_TTL_MS, GitFolders } from './git.svelte';
+import { GIT_TTL_MS, GIT_UNAVAILABLE, GitFolders, UNREADABLE } from './git.svelte';
 
 const place = (name: string, folder = '/repo') => ({ folder, name });
 const repo = (...marks: [string, GitMark][]): GitStatus => ({ repo: true, marks: marks.map(([name, mark]) => ({ name, mark })) });
@@ -281,6 +281,62 @@ describe('GitFolders', () => {
     expect(git.cell(place('a.txt')).text).toBe('M');
   });
 
+  it('shows a dash with the note for a repository that is refused for what it names, and asks again after a minute or when the listing is reloaded', async () => {
+    const note = "This repository links git's own files elsewhere, which the app does not follow";
+    const { git, asked } = world(() => ({ repo: false, marks: [], note }));
+
+    git.want(['/repo'], 0);
+    await settled();
+    expect(git.cell(place('a.txt'))).toEqual({ text: '–', tip: note });
+
+    await vi.advanceTimersByTimeAsync(GIT_TTL_MS * 3);
+    expect(asked).toEqual(['/repo']);
+
+    git.want(['/repo'], 1);
+    await settled();
+    expect(asked).toEqual(['/repo', '/repo']);
+  });
+
+  it('shows a dash with a fixed text for a repository that cannot be read here, and asks about it again once a minute at most, a reload or not', async () => {
+    let fail = true;
+    const { git, asked } = world(() => (fail ? Promise.reject(refusal('io')) : repo(['a.txt', 'modified'])));
+
+    git.want(['/repo'], 0);
+    await settled();
+    expect(git.cell(place('a.txt'))).toEqual({ text: '–', tip: UNREADABLE });
+    expect(UNREADABLE).toBe('The repository cannot be read here');
+
+    // A listing that is reloaded again and again (files that change in it) does not make the helper start each time.
+    for (let reloads = 1; reloads <= 5; reloads += 1) {
+      git.want(['/repo'], reloads);
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    expect(asked).toEqual(['/repo']);
+
+    fail = false;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(asked).toHaveLength(2);
+    expect(git.cell(place('a.txt')).text).toBe('M');
+  });
+
+  it('says there is no git status where the backend has none, for every folder, and never asks again', async () => {
+    const { git, asked } = world(() => Promise.reject({ code: 'unsupported', message: GIT_UNAVAILABLE }));
+
+    git.want(['/repo', '/other'], 0);
+    await settled();
+    expect(asked).toEqual(['/repo']);
+
+    // The one answer is for the whole app: the other folder, a reload and the time that passes ask nothing.
+    expect(git.cell(place('a.txt'))).toEqual({ text: '–', tip: 'Git status is not available on Windows yet' });
+    expect(git.cell(place('b.txt', '/other'))).toEqual({ text: '–', tip: GIT_UNAVAILABLE });
+    git.want(['/repo', '/other', '/third'], 1);
+    await vi.advanceTimersByTimeAsync(GIT_TTL_MS * 10);
+    git.want(['/repo', '/other'], 2);
+    await vi.advanceTimersByTimeAsync(GIT_TTL_MS * 10);
+
+    expect(asked).toEqual(['/repo']);
+  });
+
   it('writes out the characters of a reason that could pass for others', async () => {
     const { git } = world(() => Promise.reject({ code: 'invalidInput', message: 'bad‮name' }));
 
@@ -292,7 +348,7 @@ describe('GitFolders', () => {
 
   it('keeps nothing when the request fails for another reason: the folder waits about 10 seconds and is asked again', async () => {
     let fail = true;
-    const { git, asked } = world(() => (fail ? Promise.reject(refusal('io')) : repo(['a.txt', 'modified'])));
+    const { git, asked } = world(() => (fail ? Promise.reject(refusal('internal')) : repo(['a.txt', 'modified'])));
 
     git.want(['/repo'], 0);
     await settled();
@@ -307,7 +363,7 @@ describe('GitFolders', () => {
     expect(git.cell(place('a.txt')).text).toBe('M');
   });
 
-  it('takes a failure of another kind than invalidInput (not found, io) for a passing one, not for a repository too big', async () => {
+  it('takes a failure of another kind than invalidInput, io and unsupported (not found, internal) for a passing one, not for a repository too big', async () => {
     const { git, asked } = world(() => Promise.reject(refusal('notFound')));
 
     git.want(['/repo'], 0);
