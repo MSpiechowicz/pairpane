@@ -30,6 +30,7 @@ export const ACTIONS = [
   'edit',
   'compareFiles',
   'quickView',
+  'terminal',
   'palette',
 ] as const;
 

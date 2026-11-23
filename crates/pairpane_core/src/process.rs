@@ -39,7 +39,7 @@ const SYSTEM_ENV: &[&str] = &[
 
 /// `CREATE_NO_WINDOW`: the child of a program without a console gets none either.
 #[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// The command that starts `program` with `args`: the environment is cleared but for [`SYSTEM_ENV`] and the variables in
 /// `kept` that the app has, so nothing of the app's own (tokens, proxy settings, a session) reaches the child; the standard
@@ -213,5 +213,7 @@ pub fn join_within<T>(thread: JoinHandle<T>, bound: Duration) -> Option<T> {
     thread.join().ok()
 }
 
+#[cfg(windows)]
+pub(crate) mod job;
 #[cfg(test)]
 mod tests;

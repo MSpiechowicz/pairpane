@@ -78,6 +78,23 @@ describe('installer-shell', () => {
   });
 });
 
+describe('the command line', () => {
+  test('may name a shell in its runner and its tests only', () => {
+    expectClean('crates/pairpane_core/src/shell/mod.rs', `const SHELL: &str = "${SHELL_PATH}";\n`);
+    expectClean('src-tauri/src/commands/shell/tests.rs', `const SHELL: &str = "${SHELL_PATH}";\n`);
+  });
+
+  test('may not spawn a shell by name, even there', () => {
+    expectViolation('crates/pairpane_core/src/shell/mod.rs', 'fn f() { Command::new("bash"); }\n', 'shell-spawn');
+  });
+
+  test('does not reach past those files', () => {
+    expectViolation('crates/pairpane_core/src/shell/terminal.rs', `const SHELL: &str = "${SHELL_PATH}";\n`, 'installer-shell');
+    expectViolation('src-tauri/src/commands/shell.rs', `const SHELL: &str = "${SHELL_PATH}";\n`, 'installer-shell');
+    expectViolation('crates/pairpane_core/src/shells.rs', `const SHELL: &str = "${SHELL_PATH}";\n`, 'installer-shell');
+  });
+});
+
 describe('html-injection', () => {
   const html = ['{', '@html body}'].join('');
 

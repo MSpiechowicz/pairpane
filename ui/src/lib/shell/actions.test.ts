@@ -17,6 +17,7 @@ function context() {
     compareFiles: vi.fn(),
     quickView: vi.fn(),
     find: vi.fn(),
+    terminal: vi.fn(),
     palette: vi.fn(),
   };
   return { tabs, actions };

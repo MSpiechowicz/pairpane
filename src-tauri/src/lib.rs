@@ -53,6 +53,7 @@ pub fn run() -> ExitCode {
             app.manage(commands::archives::Archives::default());
             app.manage(commands::find::Finder::default());
             app.manage(commands::compare::Comparer::default());
+            app.manage(commands::shell::Shells::default());
             // Files an earlier run left in the temporary folder (an entry opened in the viewer is deleted at once).
             tauri::async_runtime::spawn_blocking(commands::view::archive_entry::sweep);
             // The same for the staging folders of an unpacking that a crash left (a RAR unpacked by `unrar`).
@@ -94,6 +95,9 @@ pub fn run() -> ExitCode {
             commands::panes::archive::archive_open,
             commands::archives::archive_password,
             commands::sizes::pane_folder_size,
+            commands::shell::shell_run,
+            commands::shell::shell_stop,
+            commands::shell::terminal_open,
             commands::find::find_start,
             commands::find::find_cancel,
             commands::find::find_forget,
@@ -159,6 +163,10 @@ pub fn run() -> ExitCode {
                     }
                     if let Some(comparer) = app.try_state::<commands::compare::Comparer>() {
                         comparer.shut_down();
+                    }
+                    // A command of the command line ends with what it started: none outlives the app.
+                    if let Some(shells) = app.try_state::<commands::shell::Shells>() {
+                        shells.shut_down();
                     }
                     // An archive read that nobody cancels (a file opened in the viewer, a password check, the
                     // checks before an extraction) stops, so none starts `unrar` again while the staging folders go.

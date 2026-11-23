@@ -46,6 +46,14 @@ export function displayName(name: string): string {
   return name.replace(MISLEADING, (char) => `⟨U+${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}⟩`);
 }
 
+/**
+ * Text of several lines as it is shown (the output of a command): like {@link displayName}, but its line breaks and tabs
+ * stay what they are.
+ */
+export function displayText(text: string): string {
+  return text.split('\n').map((line) => line.split('\t').map(displayName).join('\t')).join('\n');
+}
+
 /** Name and extension as the columns show them. Folders and dot files (`.bashrc`) have no extension. */
 export function splitName(entry: Entry): { base: string; ext: string } {
   const dot = entry.name.lastIndexOf('.');

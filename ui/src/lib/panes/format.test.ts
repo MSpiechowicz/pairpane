@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { displayName } from './format';
+import { displayName, displayText } from './format';
 
 describe('displayName', () => {
   it('leaves an ordinary name, with spaces, accents and right-to-left letters, as it is', () => {
@@ -40,5 +40,11 @@ describe('displayName', () => {
 
   it('writes out C0 and C1 controls, newlines and DEL included, each as its own code', () => {
     expect(displayName('a\nb\u0000c\u007Fd\u0085e')).toBe('a⟨U+000A⟩b⟨U+0000⟩c⟨U+007F⟩d⟨U+0085⟩e');
+  });
+});
+
+describe('displayText', () => {
+  it('keeps line breaks and tabs, and writes out the other controls and the reordering characters', () => {
+    expect(displayText('a\tb\nc\u202Ed\u0007')).toBe('a\tb\nc⟨U+202E⟩d⟨U+0007⟩');
   });
 });

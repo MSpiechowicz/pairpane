@@ -30,6 +30,8 @@ import type { RenamePreview } from './bindings/RenamePreview';
 import type { RenameRule } from './bindings/RenameRule';
 import type { SavedState } from './bindings/SavedState';
 import type { SearchHit } from './bindings/SearchHit';
+import type { ShellEvent } from './bindings/ShellEvent';
+import type { ShellId } from './bindings/ShellId';
 import type { SearchQuery } from './bindings/SearchQuery';
 import type { SizeEvent } from './bindings/SizeEvent';
 import type { SyncItem } from './bindings/SyncItem';
@@ -73,6 +75,9 @@ export const commands = {
   >(),
   archive_password: cmd<{ archive: string; password: string }, boolean>(),
   pane_folder_size: cmd<{ pane: PaneId; path: string; name: string; onEvent: EventSink<SizeEvent> }, null>(),
+  shell_run: cmd<{ path: string; command: string; onEvent: EventSink<ShellEvent> }, ShellId>(),
+  shell_stop: cmd<{ id: ShellId }, null>(),
+  terminal_open: cmd<{ path: string }, null>(),
   find_start: cmd<{ query: FindQuery; onEvent: EventSink<FindEvent> }, FindId>(),
   find_cancel: cmd<{ id: FindId }, null>(),
   find_forget: cmd<{ id: FindId }, null>(),

@@ -44,6 +44,16 @@ const SHELL_COMMAND = new RegExp(
   'i',
 );
 
+// The one place a shell is named: the dock's command line, whose purpose is to run what the user types in their own
+// shell (issue #52); the user allows it in a native dialog. Its runner falls back to the system's shell when the user's
+// is not set, and its tests run one. Only these files are exempt, and only from naming a shell: it is started from the
+// user's `$SHELL` / `%ComSpec%`, so `shell-spawn` holds there too. Everywhere else no marker can waive either rule.
+const COMMAND_LINE = [
+  'crates/pairpane_core/src/shell/mod.rs',
+  'crates/pairpane_core/src/shell/tests.rs',
+  'src-tauri/src/commands/shell/tests.rs',
+] as const;
+
 const RULES: readonly Rule[] = [
   {
     id: 'shell-spawn',
@@ -58,6 +68,7 @@ const RULES: readonly Rule[] = [
       'never name a shell interpreter in Rust source; use a fixed binary with explicit argv',
     pattern: SHELL_PROGRAM,
     extensions: ['.rs'],
+    skip: COMMAND_LINE,
     optOut: false,
   },
   {

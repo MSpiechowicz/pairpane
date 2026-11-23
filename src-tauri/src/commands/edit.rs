@@ -32,7 +32,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use pairpane_core::edit;
 use pairpane_core::model::{EditOpened, EditSaveOptions, EditSaved, ExternalEdit, IpcErrorCode};
@@ -426,7 +426,12 @@ fn external_error(error: &io::Error) -> CommandError {
 
 /// Asks the user, in a native dialog of the shell, whether the external editor `question` names may run. Blocks until
 /// the answer, so it is called on a blocking thread only. The dialog is modal over the main window.
-fn ask_user(app: &AppHandle, question: String) -> bool {
+pub(super) fn ask_user(app: &AppHandle, question: String) -> bool {
+    // One question on the screen at a time, whatever it is about (an editor, the command line, a terminal): one that
+    // comes while another is open waits for it, so the page cannot stack them.
+    static ON_SCREEN: Mutex<()> = Mutex::new(());
+    let _on_screen = ON_SCREEN.lock().unwrap_or_else(PoisonError::into_inner);
+
     let dialog = app
         .dialog()
         .message(dialog_text(&question))
