@@ -4,4 +4,4 @@
  * What a job does with its items. A move deletes a source item only after its copy is committed. The kinds after
  * `move` work in place (the job's `to` is its own folder) or, for `split` and `combine`, write into the target folder.
  */
-export type OpKind = "copy" | "move" | "checksum" | "verifyChecksum" | "split" | "combine" | "attributes" | "extract" | "pack" | "addToArchive" | "rename" | "sync";
+export type OpKind = "copy" | "move" | "checksum" | "verifyChecksum" | "split" | "combine" | "attributes" | "extract" | "pack" | "addToArchive" | "rename" | "sync" | "syncUndo";

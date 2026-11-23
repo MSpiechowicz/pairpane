@@ -9,6 +9,7 @@ use std::sync::Arc;
 use crate::archive::{ArchiveIndex, Child as ArchiveChild, EntryType};
 use crate::listing::{modified_millis, platform};
 use crate::model::{CompareFacts, EntryKind};
+use crate::ops::HOLDING_PREFIX;
 use crate::ops::{Child, Kind, read_children};
 use crate::view::refusal;
 
@@ -108,6 +109,10 @@ fn list_folder(path: &Path, hidden: bool) -> io::Result<Listing> {
             continue;
         };
         if !hidden && platform::is_hidden(name, Some(&child.meta)) {
+            continue;
+        }
+        // What a synchronization keeps for its undo is the app's own, never a difference to synchronize.
+        if name.starts_with(HOLDING_PREFIX) {
             continue;
         }
 

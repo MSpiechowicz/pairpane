@@ -85,6 +85,7 @@ pub(super) fn mirror(
             plans: copies.iter().map(|(_, plan)| *plan).collect(),
             removals: removed.iter().map(|(_, removal)| *removal).collect(),
             permanent,
+            log: super::SyncLog::default(),
         },
     )
 }
@@ -277,6 +278,7 @@ fn a_folder_that_holds_the_archive_compared_is_kept() {
             plans: Vec::new(),
             removals: vec![seen],
             permanent: true,
+            log: super::SyncLog::default(),
         },
     );
 
@@ -310,6 +312,7 @@ fn what_a_mirror_cannot_ask_for_is_refused_when_the_job_is_submitted() {
                 plans: Vec::new(),
                 removals,
                 permanent: true,
+                log: super::SyncLog::default(),
             },
         ))
     };

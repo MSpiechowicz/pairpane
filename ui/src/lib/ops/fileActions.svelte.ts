@@ -9,6 +9,7 @@ import { focusActiveList } from '$lib/panes/focus';
 import { InlineRename } from '$lib/panes/inlineRename.svelte';
 import type { PaneTabs } from '$lib/panes/tabs.svelte';
 import type { PaneView } from '$lib/panes/view.svelte';
+import { SyncReports } from '$lib/compare/undo';
 import { RenameReports } from '$lib/rename/undo';
 
 import { type FileAction, type Notice, trashName, what } from './dialogs';
@@ -38,7 +39,7 @@ export interface Removal {
 const NO_UNDO_NOTICE = 'Undo is only offered when one folder is affected.';
 
 /** What the Undo of a card takes back: a move to the Trash (by its token) or a rename (by its job). */
-export type ToastUndo = { kind: 'trash'; token: number } | { kind: 'rename'; job: JobId };
+export type ToastUndo = { kind: 'trash'; token: number } | { kind: 'rename'; job: JobId } | { kind: 'sync'; job: JobId };
 
 /** The card that says what happened; `undo` is what its Undo button takes back. */
 export interface ToastState extends Notice {
@@ -72,6 +73,7 @@ export class FileActions {
   readonly tools: ItemTools;
   /** Tells how a rename and its undo went, in a card. */
   readonly renames = new RenameReports(({ text, error, undo }) => this.say(text, error, undo === null ? null : { kind: 'rename', job: undo }));
+  readonly syncs = new SyncReports(({ text, error, undo }) => this.say(text, error, undo === null ? null : { kind: 'sync', job: undo }));
 
   readonly #ipc: Transport;
   readonly #panes: Record<PaneId, PaneTabs>;
@@ -330,12 +332,14 @@ export class FileActions {
       if (undo.kind === 'trash') {
         const count = await this.#ipc.invoke('ops_untrash', { token: undo.token });
         this.say(`Restored ${count === 1 ? '1 item' : `${count} items`}.`, false);
-      } else {
+      } else if (undo.kind === 'rename') {
         await this.renames.undo(this.#ipc, undo.job);
+      } else {
+        await this.syncs.undo(this.#ipc, undo.job);
       }
     } catch (error) {
       const failure = IpcFailure.from(error);
-      // The backend keeps the record when something is in the way, the restore failed, it was busy or the rename still runs: Undo again.
+      // The backend keeps the record when something is in the way, the restore failed, it was busy or the job still runs: Undo again.
       const again = failure.code === 'invalidInput' || failure.code === 'io' || failure.code === 'busy';
 
       this.say(failure.message, true, again ? undo : null);

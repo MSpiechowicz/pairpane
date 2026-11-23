@@ -1,6 +1,7 @@
 import type { CompareEvent } from '$lib/ipc/bindings/CompareEvent';
 import type { CompareId } from '$lib/ipc/bindings/CompareId';
 import type { CompareRoot } from '$lib/ipc/bindings/CompareRoot';
+import type { JobId } from '$lib/ipc/bindings/JobId';
 import type { CompareStatus } from '$lib/ipc/bindings/CompareStatus';
 import type { SyncItem } from '$lib/ipc/bindings/SyncItem';
 import type { SyncRemoval } from '$lib/ipc/bindings/SyncRemoval';
@@ -84,6 +85,8 @@ export class Syncer {
   notice = $state<string | undefined>();
   /** The copies wait for a yes. */
   confirming = $state(false);
+  /** Told of each job queued, and whether it copies onto a folder (what an undo can take back). */
+  onQueued: ((job: JobId, undoable: boolean) => void) | undefined;
   /** The removals are deleted for good rather than moved to the Trash (asked again before the job is queued). */
   permanent = $state(false);
 
@@ -416,7 +419,10 @@ export class Syncer {
         throw new IpcFailure({ code: 'invalidInput', message: 'The comparison is not ready yet: try again.' });
       }
 
-      await this.#ipc.invoke('ops_sync', { scan, left: roots.left, right: roots.right, items, removals, permanent: this.permanent });
+      const job = await this.#ipc.invoke('ops_sync', { scan, left: roots.left, right: roots.right, items, removals, permanent: this.permanent });
+      // Only what is copied onto a folder is taken back by an undo.
+      const ontoFolder = items.some((item) => !(item.direction === 'toRight' ? this.#archives.right : this.#archives.left));
+      this.onQueued?.(job, ontoFolder);
     }
   }
 

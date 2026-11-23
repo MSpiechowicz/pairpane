@@ -43,6 +43,7 @@ const COMMANDS: &[&str] = &[
     "ops_link",
     "ops_task",
     "ops_rename_undo",
+    "ops_sync_undo",
     "ops_sync",
     "rename_preview",
     "ops_properties",

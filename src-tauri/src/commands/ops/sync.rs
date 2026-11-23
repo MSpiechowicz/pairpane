@@ -15,7 +15,7 @@
 
 use pairpane_core::archive::{self, Fingerprint};
 use pairpane_core::model::{CompareRoot, IpcErrorCode, JobId, PaneId, SyncDirection, SyncItem, SyncRemoval};
-use pairpane_core::ops::{ArchiveJob, Request, SyncPlan, SyncRemove, SyncRoot, Task};
+use pairpane_core::ops::{ArchiveJob, Request, SyncLog, SyncPlan, SyncRemove, SyncRoot, Task};
 
 use super::add::{check_writable, prepare_rewrite};
 use super::extract::{check_folders, prepare};
@@ -109,16 +109,17 @@ impl Ops {
             plans,
             removals,
             permanent,
+            log: SyncLog::default(),
         };
         let request = Request::task(from, names, to, task);
 
         let Some(target) = held else {
-            return self.engine.submit(request).map_err(failed);
+            return self.sync_undo.submit(&self.engine, request);
         };
 
         // A password the job finds wrong while it decrypts is forgotten when the job ends (see `extractions`).
         let password = archive_password(&request);
-        let submit = || self.engine.submit(request).map_err(failed);
+        let submit = || self.sync_undo.submit(&self.engine, request);
         if rewrites {
             self.extractions.submit_rewrite(archives, target.path, password, submit)
         } else {
@@ -201,3 +202,5 @@ fn archive_password(request: &Request) -> Option<std::sync::Arc<archive::Passwor
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod undo_tests;

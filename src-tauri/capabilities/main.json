@@ -39,6 +39,7 @@
     "allow-ops-link",
     "allow-ops-task",
     "allow-ops-rename-undo",
+    "allow-ops-sync-undo",
     "allow-ops-sync",
     "allow-rename-preview",
     "allow-ops-properties",

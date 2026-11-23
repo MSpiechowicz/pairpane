@@ -11,11 +11,15 @@ use crate::model::{
     SyncFacts,
 };
 
-use super::{ArchiveJob, RenameLog};
+use super::{ArchiveJob, RenameLog, SyncLog};
 
 /// What a job does. [`Task::Transfer`] is the copy or move that [`Request::kind`] names; every other task has
 /// its own [`OpKind`] (see [`Task::kind`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one task per queued job; boxing the synchronization (larger on Windows) would buy nothing"
+)]
 pub enum Task {
     /// A copy or a move.
     Transfer,
@@ -71,7 +75,12 @@ pub enum Task {
         plans: Vec<SyncPlan>,
         removals: Vec<SyncRemove>,
         permanent: bool,
+        /// Receives what the job did to its folders, for its undo (see `sync_log`).
+        log: SyncLog,
     },
+    /// Puts back what the synchronization `log` describes (see `sync_undo`). The names are the paths it looks at, as
+    /// [`SyncLog::names`] gives them; `from` and `to` are a folder the synchronization wrote to.
+    SyncUndo { log: SyncLog },
 }
 
 /// One side of a synchronization.
@@ -168,6 +177,7 @@ impl Task {
             Self::AddToArchive { .. } => Some(OpKind::AddToArchive),
             Self::Rename { .. } => Some(OpKind::Rename),
             Self::Sync { .. } => Some(OpKind::Sync),
+            Self::SyncUndo { .. } => Some(OpKind::SyncUndo),
         }
     }
 }

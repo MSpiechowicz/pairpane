@@ -53,6 +53,7 @@ fn job(root: &Path, rels: &[&str], plans: Vec<SyncPlan>) -> super::Request {
             plans,
             removals: Vec::new(),
             permanent: false,
+            log: super::SyncLog::default(),
         },
     )
 }
@@ -187,6 +188,7 @@ fn an_entry_never_replaces_the_archive_file_itself() {
             plans: vec![plan(entry(EntryKind::File, 15), Some(target))],
             removals: Vec::new(),
             permanent: false,
+            log: super::SyncLog::default(),
         },
     );
     let ended = Rig::new().run(request);
@@ -213,6 +215,7 @@ fn a_synchronization_the_other_way_takes_the_archive_from_the_right() {
             }],
             removals: Vec::new(),
             permanent: false,
+            log: super::SyncLog::default(),
         },
     );
 

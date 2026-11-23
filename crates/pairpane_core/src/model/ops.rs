@@ -36,6 +36,8 @@ pub enum OpKind {
     Rename,
     /// Copies what differs between two folders, each item the way the synchronization chose.
     Sync,
+    /// Puts back what a synchronization did to its folders.
+    SyncUndo,
 }
 
 /// Where a running job is. Runs in this order; `waiting` and `cancelling` can interrupt the later steps.

@@ -18,7 +18,7 @@ use crate::commands::testing::folder_with;
 /// The `mtime` the archives of the fixtures give their entries, in milliseconds (`14000000000` octal seconds).
 const ENTRY_TIME: i64 = 1_610_612_736_000;
 
-fn facts_of(path: &Path) -> SyncFacts {
+pub(super) fn facts_of(path: &Path) -> SyncFacts {
     let meta = fs::metadata(path).expect("metadata");
     let modified = meta
         .modified()
@@ -42,7 +42,7 @@ fn entry_of(size: u64) -> SyncFacts {
     }
 }
 
-fn to_right(path: &str, source: SyncFacts) -> SyncItem {
+pub(super) fn to_right(path: &str, source: SyncFacts) -> SyncItem {
     SyncItem {
         path: path.to_owned(),
         direction: SyncDirection::ToRight,
@@ -52,7 +52,7 @@ fn to_right(path: &str, source: SyncFacts) -> SyncItem {
 }
 
 /// Asks `ops` to synchronize `items` between the two sides.
-fn between(ops: &Ops, left: CompareRoot, right: CompareRoot, items: Vec<SyncItem>) -> CommandResult<JobId> {
+pub(super) fn between(ops: &Ops, left: CompareRoot, right: CompareRoot, items: Vec<SyncItem>) -> CommandResult<JobId> {
     mirror(ops, (left, right), items, Vec::new())
 }
 

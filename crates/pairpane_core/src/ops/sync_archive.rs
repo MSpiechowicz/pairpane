@@ -23,12 +23,14 @@ use super::sync_terms::Terms;
 use super::transfer::{Run, Stop};
 
 impl Run<'_> {
-    /// Extracts the `rows` (paths below the archive's folder and what the scan saw of each) into the folder `target`.
-    pub(super) fn sync_from_archive(
+    /// Extracts the `rows` (paths below the archive's folder and what the scan saw of each) into the folder `target`; adds to
+    /// `wrote` the rows it wrote: a folder it made, and a file whose entry was written with no skip or failure.
+    pub(super) fn sync_from_archive<'r>(
         &mut self,
         side: &ArchiveSide<'_>,
         target: &Path,
-        rows: &[(&str, &SyncPlan)],
+        rows: &[(&'r str, &'r SyncPlan)],
+        wrote: &mut HashSet<&'r str>,
     ) -> Result<(), Stop> {
         let job = self.job;
         let (found, file, print) = open_archive(&side.folder, &job.request.from, side.name)?;
@@ -59,13 +61,26 @@ impl Run<'_> {
             // row of its own on those of the plan, and what is in a folder that is a row on those of a folder made for it.
             let plans: HashMap<&str, &SyncPlan> = ready.iter().copied().collect();
             let mut stale: HashSet<&str> = HashSet::new();
+            // The file row whose entry is being written, and the job's counts before it: told when the next entry comes.
+            let mut writing: Option<(&str, (u32, usize))> = None;
             let mut gate = |run: &mut Run<'_>, landing: &mut Landing, entry: &archive::IndexEntry, rel: &str| {
+                if let Some((row, counts)) = writing.take()
+                    && counts == (run.skipped, run.failures())
+                {
+                    wrote.insert(row);
+                }
+
                 let Some((row, plan)) = owner(&plans, rel) else {
                     return Ok(true);
                 };
 
                 if plan.source.kind == EntryKind::Dir {
-                    return run.enter_folder_row(landing, row, &mut stale);
+                    let entered = run.enter_folder_row(landing, row, &mut stale)?;
+                    if entered {
+                        wrote.insert(row);
+                    }
+
+                    return Ok(entered);
                 }
                 if entry.kind != EntryType::File {
                     return Ok(true);
@@ -77,17 +92,26 @@ impl Run<'_> {
                     return Ok(false);
                 };
                 run.set_terms(Some(spot.terms));
+                writing = Some((row, (run.skipped, run.failures())));
 
                 Ok(true)
             };
 
-            self.write_all(
+            let written = self.write_all(
                 &mut *reader,
                 &selection.items,
                 &selection.ordinals(),
                 (target.to_owned(), origin),
                 &mut gate,
-            )
+            );
+            if let Some((row, counts)) = writing.take()
+                && counts == (self.skipped, self.failures())
+                && written.is_ok()
+            {
+                wrote.insert(row);
+            }
+
+            written
         })
     }
 
