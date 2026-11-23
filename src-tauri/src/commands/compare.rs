@@ -330,7 +330,9 @@ pub async fn ops_sync(
     removals: Vec<SyncRemoval>,
     permanent: bool,
 ) -> CommandResult<JobId> {
-    let read = comparer.archive_read(scan)?;
+    // A comparison that is no longer kept read nothing the job can rely on: only a job that writes to an archive needs it,
+    // and that one is then refused.
+    let read = comparer.archive_read(scan).unwrap_or(None);
 
     ops.sync(&archives, (left, right), items, (removals, permanent), read)
         .await

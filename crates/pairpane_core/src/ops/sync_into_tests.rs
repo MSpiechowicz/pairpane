@@ -8,8 +8,11 @@ use std::sync::Arc;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
+use std::sync::atomic::AtomicBool;
+
 use crate::archive::rewrite::testing::seen;
 use crate::archive::testing::MOMENT;
+use crate::archive::{Fingerprint, Input, build_index};
 use crate::model::{ArchiveFormat, EntryKind, Outcome, PaneId, SyncDirection, SyncFacts};
 
 use super::extract_tests::{add, fixture, tar_by};
@@ -87,7 +90,7 @@ fn run(root: &Path, inner: &str, (copies, removals): (&[CopyRow], &[RemoveRow]),
             right: SyncRoot::Archive {
                 name: "x.tar".to_owned(),
                 inner: inner.to_owned(),
-                source: ArchiveJob::default(),
+                source: listed(&root.join("arch/x.tar")),
             },
             plans: copies.iter().map(|(_, plan)| *plan).collect(),
             removals: removals.iter().map(|(_, removal)| *removal).collect(),
@@ -96,6 +99,22 @@ fn run(root: &Path, inner: &str, (copies, removals): (&[CopyRow], &[RemoveRow]),
     );
 
     Rig::with(hooks, |_, _| {}).run(request)
+}
+
+/// What the caller brings of the archive at `path`: its index and the state of the file now.
+fn listed(path: &Path) -> ArchiveJob {
+    let file = fs::File::open(path).expect("the archive");
+    let input = Input {
+        file: &file,
+        path: Some(path),
+    };
+    let index = build_index(ArchiveFormat::Tar, &input, &AtomicBool::new(false), None).expect("an index");
+
+    ArchiveJob {
+        index: Some(Arc::new(index)),
+        fingerprint: Some(Fingerprint::of(path, &file.metadata().expect("metadata"))),
+        ..ArchiveJob::default()
+    }
 }
 
 /// The paths of the archive and the contents of its files.
@@ -238,7 +257,7 @@ fn copy_from(root: &Path, disk: &Path, rel: &str) -> super::Request {
             right: SyncRoot::Archive {
                 name: "x.tar".to_owned(),
                 inner: String::new(),
-                source: ArchiveJob::default(),
+                source: listed(&root.join("arch/x.tar")),
             },
             plans: vec![SyncPlan {
                 direction: SyncDirection::ToRight,

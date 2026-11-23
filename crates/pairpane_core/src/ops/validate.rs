@@ -301,11 +301,14 @@ fn sync_acceptable(
 }
 
 /// Whether a synchronization may write to `root`: a folder, or an archive of a format that is written (not a rar or a single
-/// gzip file).
+/// gzip file) whose index and state the caller brings.
 fn writable(root: &SyncRoot) -> bool {
     match root {
         SyncRoot::Folder => true,
-        SyncRoot::Archive { name, .. } => is_writable(archive::by_extension(name)),
+        // Only the archive the caller read is written: its index and the state of the file it was made from come along.
+        SyncRoot::Archive { name, source, .. } => {
+            is_writable(archive::by_extension(name)) && source.index.is_some() && source.fingerprint.is_some()
+        }
     }
 }
 

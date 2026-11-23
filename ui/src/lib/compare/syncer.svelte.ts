@@ -411,7 +411,11 @@ export class Syncer {
     const removals = this.removals;
     // The scan the rows come from: a job that writes to an archive needs it to be the archive that scan read.
     const scan = this.#id;
-    if (roots !== undefined && scan !== undefined && items.length + removals.length > 0) {
+    if (roots !== undefined && items.length + removals.length > 0) {
+      if (scan === undefined) {
+        throw new IpcFailure({ code: 'invalidInput', message: 'The comparison is not ready yet: try again.' });
+      }
+
       await this.#ipc.invoke('ops_sync', { scan, left: roots.left, right: roots.right, items, removals, permanent: this.permanent });
     }
   }

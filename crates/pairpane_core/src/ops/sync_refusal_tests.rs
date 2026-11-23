@@ -112,7 +112,11 @@ fn a_copy_into_an_archive_that_is_not_written_and_two_archives_are_refused_when_
     assert_eq!(submit(&SyncRoot::Folder, &rar, good).unwrap_err(), Refused::InvalidTask);
     assert_eq!(submit(&SyncRoot::Folder, &gz, good).unwrap_err(), Refused::InvalidTask);
     assert_eq!(submit(&archive, &archive, good).unwrap_err(), Refused::InvalidTask);
-    assert!(submit(&SyncRoot::Folder, &archive, good).is_ok());
+    // An archive is written only with the index and the state the caller read it in.
+    assert_eq!(
+        submit(&SyncRoot::Folder, &archive, good).unwrap_err(),
+        Refused::InvalidTask
+    );
     assert!(submit(&rar, &SyncRoot::Folder, good).is_ok(), "a rar is only read");
 }
 
