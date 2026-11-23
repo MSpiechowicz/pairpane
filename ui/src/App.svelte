@@ -38,6 +38,11 @@
   import { Session } from '$lib/shell/session.svelte';
   import { isTyping, reloadsPage, shortcutFor } from '$lib/shell/shortcuts';
   import { switchesPane } from '$lib/shell/switchPane';
+  import { type ActionContext, runAction } from '$lib/shell/actions';
+  import { isAction } from '$lib/palette/commands';
+  import Palette from '$lib/palette/Palette.svelte';
+  import { namesOf, recentFolders } from '$lib/palette/sources';
+  import { Palette as PaletteModel, type PaletteItem } from '$lib/palette/model.svelte';
   import Splash from '$lib/shell/Splash.svelte';
   import { Theme } from '$lib/shell/theme.svelte';
   import Toast from '$lib/shell/Toast.svelte';
@@ -78,6 +83,11 @@
     active: { get: () => active, set: (side) => (active = side) },
   });
   session.watch();
+
+  const palette = new PaletteModel({
+    folders: () => recentFolders([panes[active], panes[active === 'left' ? 'right' : 'left']]),
+    names: () => namesOf(panes[active].view),
+  });
 
   function toggleHidden() {
     showHidden = !showHidden;
@@ -129,7 +139,15 @@
   const question = $derived(transfers.question);
   /** A dialog (or the viewer's or editor's overlay) has the keyboard: the shortcuts and Tab are its own then. */
   const modal = $derived(
-    files.modal || question !== undefined || viewer.modal || editor.modal || diff.modal || passwords.modal || finder.modal || comparison.modal,
+    files.modal ||
+      question !== undefined ||
+      viewer.modal ||
+      editor.modal ||
+      diff.modal ||
+      passwords.modal ||
+      finder.modal ||
+      comparison.modal ||
+      palette.shown,
   );
 
   /** Alt+F7: the Find dialog, on the folder the active pane shows (inside an archive: the folder that holds it). */
@@ -189,10 +207,22 @@
     menu = { side, kind };
   }
 
-  /**
-   * Tab, history and menu shortcuts act on the active pane. Alt+Left is the webview's own "go back", so a handled
-   * shortcut always prevents the default.
-   */
+  /** What the actions of the keymap and the palette act on (see `runAction`). */
+  const actions: ActionContext = {
+    tabs: () => panes[active],
+    active: () => active,
+    showMenu,
+    files: (action) => files.run(action),
+    toggleTransfers: () => (panelOpen = !panelOpen),
+    view: () => viewer.open(),
+    edit: () => edit(),
+    compareFiles: () => diff.open(),
+    quickView: () => viewer.toggleQuick(),
+    find: () => find(),
+    palette: () => palette.show(),
+  };
+
+  /** A shortcut of the keymap. Alt+Left is the webview's own "go back", so a handled shortcut always prevents the default. */
   function runShortcut(event: KeyboardEvent) {
     const action = shortcutFor(event);
     if (action === undefined || isTyping(event.target)) {
@@ -205,70 +235,27 @@
       return;
     }
 
-    const tabs = panes[active];
-    switch (action) {
-      case 'newTab':
-        tabs.add();
-        break;
-      case 'closeTab':
-        tabs.close();
-        break;
-      case 'nextTab':
-        tabs.cycle(1);
-        break;
-      case 'previousTab':
-        tabs.cycle(-1);
-        break;
-      case 'back':
-        tabs.back();
-        break;
-      case 'forward':
-        tabs.forward();
-        break;
-      case 'driveMenuLeft':
-        showMenu('left', 'drives');
-        break;
-      case 'driveMenuRight':
-        showMenu('right', 'drives');
-        break;
-      case 'hotlist':
-        showMenu(active, 'hotlist');
-        break;
-      case 'copy':
-      case 'move':
-      case 'rename':
-      case 'renameInline':
-      case 'multiRename':
-      case 'newFolder':
-      case 'newFile':
-      case 'trash':
-      case 'deletePermanently':
-      case 'properties':
-      case 'extract':
-      case 'pack':
-        files.run(action);
-        break;
-      case 'transfers':
-        panelOpen = !panelOpen;
-        break;
-      case 'view':
-        viewer.open();
-        break;
-      case 'edit':
-        edit();
-        break;
-      case 'compareFiles':
-        diff.open();
-        break;
-      case 'quickView':
-        viewer.toggleQuick();
-        break;
-      case 'find':
-        find();
-        break;
-    }
-
+    runAction(action, actions);
     event.preventDefault();
+  }
+
+  /** Runs what the palette took: a command, a folder opened in the active pane, a name the cursor goes to. */
+  function takePicked(item: PaletteItem) {
+    if (item.kind === 'folder') {
+      void panes[active].view.listing.open(item.path);
+    } else if (item.kind === 'file') {
+      panes[active].view.pointAt(item.name);
+    } else if (item.id === 'toggleHidden') {
+      toggleHidden();
+    } else if (item.id === 'editSettings') {
+      editSettings();
+    } else if (item.id === 'checkUpdates') {
+      void updates.check(true);
+    } else if (isAction(item.id)) {
+      runAction(item.id, actions);
+    } else {
+      chooseFile(item.id);
+    }
   }
 
   function onKeyDown(event: KeyboardEvent) {
@@ -397,6 +384,10 @@
     <TransfersPanel {transfers} onClose={() => (panelOpen = false)} />
   {/if}
 </div>
+
+{#if palette.shown}
+  <Palette {palette} onTake={takePicked} />
+{/if}
 
 {#if files.dialog}
   <OpDialog
