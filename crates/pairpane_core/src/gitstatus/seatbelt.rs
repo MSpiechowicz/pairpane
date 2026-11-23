@@ -63,7 +63,7 @@ fn quoted(path: &Path) -> Option<String> {
 pub(super) fn confine(request: &Request, cpu_seconds: u64) -> io::Result<()> {
     use crate::view::thumb::macos;
 
-    macos::limit_to(cpu_seconds, 256, MEMORY)?;
+    macos::limit_to(cpu_seconds, super::child::MAX_FILES, MEMORY)?;
     let profile = profile(&request.layout.folders())
         .ok_or_else(|| io::Error::other("a folder of the repository cannot be written into the profile"))?;
 

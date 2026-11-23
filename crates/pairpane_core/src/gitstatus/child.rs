@@ -44,7 +44,7 @@ pub const CHILD_ARG: &str = "--pairpane-git-status";
 
 /// The open files the helper may have: gix keeps an index and a pack open at a time, and a few more for a repository of many.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-const MAX_FILES: u64 = 256;
+pub(super) const MAX_FILES: u64 = 256;
 
 /// The memory the helper may have above what it starts with, in bytes: what gix holds for one status (the rules, which are
 /// counted in a budget of 4 MiB, the index, the trees of `HEAD` walked with a cap of 64 MiB, objects of up to 16 MiB) with

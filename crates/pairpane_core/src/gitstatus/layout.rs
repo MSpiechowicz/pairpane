@@ -27,6 +27,7 @@ pub(super) struct Layout {
 impl Layout {
     /// The folders a process that reads the status of this repository may read, and nothing else: the work tree, the git
     /// folder, the common folder and the alternates' object folders, each once.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) fn folders(&self) -> Vec<PathBuf> {
         let mut folders: Vec<PathBuf> = Vec::new();
 
