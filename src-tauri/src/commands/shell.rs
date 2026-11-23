@@ -23,7 +23,7 @@ use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -63,7 +63,9 @@ pub struct Shells {
     /// The user's say on the command line, by shell.
     lines: Consent<PathBuf>,
     /// The user's say on terminal programs, by program and arguments.
-    programs: Consent<(OsString, Vec<OsString>)>,
+    programs: Consent<(OsString, Vec<OsString>, String)>,
+    /// The app is closing: no command or terminal starts any more.
+    closing: AtomicBool,
 }
 
 impl Shells {
@@ -80,6 +82,7 @@ impl Shells {
 
     /// Takes a place for a command and gives it an id and a stop flag; `busy` when [`RUNNING`] run.
     fn register(&self) -> CommandResult<(ShellId, Arc<Stop>, Permit)> {
+        self.open()?;
         let permit = self.running.acquire(RUNNING).ok_or_else(|| {
             CommandError::new(IpcErrorCode::Busy, "four commands are running; stop one or wait for it")
         })?;
@@ -103,6 +106,15 @@ impl Shells {
         Ok(())
     }
 
+    /// Refused once the app is closing (a command that got past its question then would outlive it).
+    fn open(&self) -> CommandResult<()> {
+        if self.closing.load(Ordering::Acquire) {
+            return Err(CommandError::new(IpcErrorCode::Busy, "Pairpane is closing"));
+        }
+
+        Ok(())
+    }
+
     fn forget(&self, id: ShellId) {
         self.lock().remove(&id);
     }
@@ -111,6 +123,7 @@ impl Shells {
     /// [`GRACE`](pairpane_core::process::GRACE) for a
     /// command that ignores it), and waits a moment for them to be killed: each sees it within a poll of its thread.
     pub fn shut_down(&self) {
+        self.closing.store(true, Ordering::Release);
         for stop in self.lock().values() {
             stop.force();
         }
@@ -190,21 +203,26 @@ fn open_terminal(shells: &Shells, folder: &Path, place: Permit, ask: impl FnOnce
         )
     })?;
 
-    // The arguments the user is asked about are the program's own: the folder (macOS) changes with every call.
+    // The arguments the user is asked about are the program's own: the folder (macOS) changes with every call. The
+    // answer is for the program's file as it is: one that is replaced or changed since is asked about again.
     let fixed: Vec<OsString> = args
         .iter()
-        .filter(|arg| arg.as_os_str() != folder.as_os_str())
+        .filter(|arg| !Path::new(arg).starts_with(folder))
         .cloned()
         .collect();
     shells.programs.allows(
-        (program.clone(), fixed.clone()),
+        (program.clone(), fixed.clone(), file_identity(Path::new(&program))),
         || terminal_question(&program, &fixed),
         ask,
         "this terminal was not allowed (until Pairpane is started again)",
     )?;
 
+    shells.open()?;
     let mut command = Command::new(program);
     command.args(args).current_dir(folder);
+    // As for the command line: a program typed in the terminal is looked for on the PATH, not in the folder first.
+    #[cfg(windows)]
+    command.env("NoDefaultCurrentDirectoryInExePath", "1");
     for (name, value) in shell::appimage_env(std::env::vars_os()) {
         match value {
             Some(value) => command.env(name, value),
@@ -244,6 +262,35 @@ fn open_terminal(shells: &Shells, folder: &Path, place: Permit, ask: impl FnOnce
     }
 
     Ok(())
+}
+
+/// What a program file is, to tell when it has been replaced or changed: its device and inode (Unix), size and time of
+/// change. Empty when it cannot be read (it is then not started either).
+fn file_identity(program: &Path) -> String {
+    let Ok(meta) = std::fs::metadata(program) else {
+        return String::new();
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        format!(
+            "{}:{}:{}:{}.{}:{}.{}",
+            meta.dev(),
+            meta.ino(),
+            meta.size(),
+            meta.mtime(),
+            meta.mtime_nsec(),
+            meta.ctime(),
+            meta.ctime_nsec()
+        )
+    }
+
+    #[cfg(not(unix))]
+    {
+        format!("{}:{:?}", meta.len(), meta.modified().ok())
+    }
 }
 
 /// Runs `command` in the user's shell in the folder `path` and answers with its id at once; the events follow on
@@ -290,6 +337,7 @@ pub async fn shell_stop(shells: State<'_, Shells>, id: ShellId) -> CommandResult
 /// [`TERMINALS`] are open.
 #[tauri::command]
 pub async fn terminal_open(app: AppHandle, shells: State<'_, Shells>, path: String) -> CommandResult<()> {
+    shells.open()?;
     let folder = resolve(Some(path), None)?;
     let place = shells
         .terminals

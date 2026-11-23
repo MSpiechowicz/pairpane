@@ -112,6 +112,36 @@ fn at_most_four_commands_run_and_a_stop_of_one_that_ended_is_not_found() {
 }
 
 #[test]
+fn nothing_starts_once_the_app_is_closing() {
+    let shells = Shells::default();
+
+    shells.shut_down();
+
+    assert_eq!(shells.register().expect_err("closing").code(), IpcErrorCode::Busy);
+    let place = shells.terminals.acquire(TERMINALS).expect("a place");
+    let folder = tempfile::tempdir().expect("a folder");
+    let refused = open_terminal(&shells, folder.path(), place, |_| true);
+    // No terminal on the machine running the tests is a refusal of its own, before the start is refused.
+    assert!(matches!(
+        refused.expect_err("not started").code(),
+        IpcErrorCode::Busy | IpcErrorCode::Process
+    ));
+}
+
+#[test]
+fn a_program_file_that_changes_is_another_one_to_be_asked_about() {
+    let folder = tempfile::tempdir().expect("a folder");
+    let program = folder.path().join("term");
+    std::fs::write(&program, "one").expect("written");
+    let before = file_identity(&program);
+
+    std::fs::write(&program, "other contents").expect("rewritten");
+
+    assert_ne!(file_identity(&program), before);
+    assert_eq!(file_identity(&folder.path().join("missing")), "");
+}
+
+#[test]
 fn the_exit_raises_every_stop_flag() {
     let shells = Shells::default();
     let (_, first, _permit) = shells.register().expect("a place");

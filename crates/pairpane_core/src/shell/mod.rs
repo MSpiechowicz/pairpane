@@ -104,9 +104,9 @@ impl Shell {
         {
             use std::os::unix::process::CommandExt;
 
-            // A line that starts with `-` would be read as options of the shell (`bash -c -i`): a space before it is
-            // the same command.
-            let line = if line.starts_with('-') {
+            // A line that starts with `-` or `+` would be read as options of the shell (`bash -c -i`, `bash -c +x`):
+            // a space before it is the same command.
+            let line = if line.starts_with(['-', '+']) {
                 format!(" {line}")
             } else {
                 line.to_owned()

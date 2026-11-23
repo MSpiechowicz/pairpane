@@ -323,6 +323,25 @@ mod on_unix {
     }
 
     #[test]
+    fn a_line_that_starts_with_a_plus_is_a_command_too() {
+        let folder = temp();
+
+        let (result, events) = run_sh("+x 2>/dev/null; echo ok", folder.path(), None);
+
+        result.expect("ran");
+        assert_eq!(output(&events), "ok\n");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_folder_of_the_user_is_not_a_system_folder_of_programs() {
+        let folder = temp();
+
+        assert!(!terminal::is_trusted(folder.path()));
+        assert!(terminal::is_trusted(Path::new("/")));
+    }
+
+    #[test]
     fn an_unfinished_escape_in_the_output_does_not_hide_the_errors() {
         let folder = temp();
 

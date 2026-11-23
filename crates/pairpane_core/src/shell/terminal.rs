@@ -73,7 +73,15 @@ pub(super) fn terminal_from(
             vec![
                 OsString::from("-b"),
                 OsString::from("com.apple.Terminal"),
-                folder.as_os_str().to_owned(),
+                // With a separator at its end: should the folder have been swapped for a file (a `.command` that
+                // Terminal would run) since it was checked, the path is not a folder and nothing is opened.
+                {
+                    let mut path = folder.as_os_str().to_owned();
+                    if !folder.as_os_str().to_string_lossy().ends_with('/') {
+                        path.push("/");
+                    }
+                    path
+                },
             ],
         ))
     }
@@ -95,14 +103,25 @@ fn on_path(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// Whether `path` (a folder of programs, or one of them) is the system's: owned by root and writable by no one else, so
+/// nothing could have been put or changed there but by the administrator.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(super) fn is_trusted(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    std::fs::metadata(path).is_ok_and(|meta| meta.uid() == 0 && meta.mode() & 0o022 == 0)
+}
+
 /// The file `name` is in the system's own folders of programs. Elsewhere than Linux and the BSDs there are none to look in.
 fn in_system(name: &str) -> Option<PathBuf> {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         SYSTEM_FOLDERS
             .iter()
-            .map(|folder| Path::new(folder).join(name))
-            .find(|candidate| candidate.is_file())
+            .map(Path::new)
+            .filter(|folder| is_trusted(folder))
+            .map(|folder| folder.join(name))
+            .find(|candidate| candidate.is_file() && is_trusted(candidate))
     }
 
     #[cfg(not(all(unix, not(target_os = "macos"))))]
