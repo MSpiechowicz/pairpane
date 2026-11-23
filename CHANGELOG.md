@@ -1,3 +1,10 @@
+# [0.29.0](https://github.com/MSpiechowicz/pairpane/compare/v0.28.0...v0.29.0) (2026-11-23)
+
+
+### Features
+
+* **ui:** flat view (Ctrl+B) (#61) ([4b44c8f](https://github.com/MSpiechowicz/pairpane/commit/4b44c8fa5852d1bfc3a722243213ca3b5be4085a)), closes [#58](https://github.com/MSpiechowicz/pairpane/issues/58)
+
 # [0.28.0](https://github.com/MSpiechowicz/pairpane/compare/v0.27.0...v0.28.0) (2026-11-23)
 
 
