@@ -6,8 +6,9 @@
 //! container of a fixed name, `com.mspiechowicz.pairpane.thumbnail`, and no capabilities (`container.rs`). That is a
 //! process with a low-integrity token that can use no file, folder or registry key unless its access list names the
 //! container (or ALL APPLICATION PACKAGES) for it, that cannot connect to the network or to the loopback, and that has
-//! none of the user's other rights. It gets two pipes as its standard input and output and no other handle of the app's
-//! (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), an environment of two variables, and no window.
+//! none of the user's other rights. It gets two pipes as its standard input and output and the null device as its standard
+//! error and no other handle of the app's (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), an environment of a few variables of the
+//! machine and of the user's own folders (see `spawn.rs`), and no window.
 //!
 //! The process is made suspended, put in a Job Object that bounds its memory and allows it no other process
 //! (`heic/job.rs`, 1.5 GiB), and only then resumed, so the job holds it from its first instruction. The framing of the
@@ -47,6 +48,8 @@
 mod container;
 mod spawn;
 mod step;
+#[cfg(test)]
+mod tests;
 
 use std::fs::File;
 use std::io;
@@ -97,6 +100,10 @@ pub(super) fn last_failure() -> Option<String> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone()
 }
+
+/// The memory limit of the job, for the tests of this module.
+#[cfg(test)]
+const MEMORY_FOR_TESTS: usize = super::MEMORY;
 
 /// How long a stopped helper is waited for.
 const STOPPED: Duration = Duration::from_secs(10);

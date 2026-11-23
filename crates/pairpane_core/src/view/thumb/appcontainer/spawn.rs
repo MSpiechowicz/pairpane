@@ -3,9 +3,10 @@
 //!
 //! What the process gets: the container's token (low integrity, no access to the file system but what its access lists
 //! name the container for, no network, none of the user's other rights), a standard input and output that are pipes with
-//! one end each in the helper and none else of the app's handles (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), no standard
-//! error, no window, an environment of two variables, a working folder of the system's and no start: it is made
-//! suspended, so that the caller can put it in its job before it runs its first instruction.
+//! one end each in the helper and none else of the app's handles (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, which names every
+//! handle it inherits: the two pipe ends and the null device as its standard error), no window, an environment of a few
+//! variables of the machine and of the user's own folders (see `ENVIRONMENT`), a working folder of the system's and no
+//! start: it is made suspended, so that the caller can put it in its job before it runs its first instruction.
 #![allow(
     unsafe_code,
     reason = "process creation with an attribute list and pipes; see each `unsafe` block"
@@ -239,11 +240,18 @@ fn environment_block() -> Vec<u16> {
     environment::block(&variables)
 }
 
-/// The system's folder, where the helper starts: the app's own working folder is none that its container can reach.
-fn system_directory() -> Option<Vec<u16>> {
-    let root = std::env::var_os("SystemRoot")?;
+/// The system's folder, where the helper starts: the app's own working folder is none that its container can reach. Where
+/// the system's folder is not known the helper is not started (it would start in the app's own folder): that is an error of
+/// the moment, which is no thumbnail and no unconfined start.
+fn system_directory() -> io::Result<Vec<u16>> {
+    let root = std::env::var_os("SystemRoot").ok_or_else(|| {
+        at(
+            "system folder",
+            io::Error::other("SystemRoot is not in the environment of the app"),
+        )
+    })?;
 
-    Some(wide(PathBuf::from(root).join("System32").as_os_str()))
+    Ok(wide(PathBuf::from(root).join("System32").as_os_str()))
 }
 
 /// Makes the helper `program` with `args` in the container `container`, suspended.
@@ -290,7 +298,7 @@ pub(super) fn create(program: &Path, args: &[&str], container: &Sid) -> io::Resu
     let application = wide(program.as_os_str());
     let mut command = command_line(program, args)?;
     let environment = environment_block();
-    let directory = system_directory();
+    let directory = system_directory()?;
 
     let mut startup = STARTUPINFOEXW::default();
     startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
@@ -312,8 +320,8 @@ pub(super) fn create(program: &Path, args: &[&str], container: &Sid) -> io::Resu
 
     // SAFETY: the program and the command line are NUL-terminated and live through the call (the command line is the
     // mutable buffer the function wants); no security attributes for the process and its thread; the handles are
-    // inherited, which only the two of the attribute list are; the environment is a Unicode block of NUL-ended entries
-    // that ends with an empty one; the folder is NUL-terminated or NULL; `startup` is a `STARTUPINFOEXW` whose size is in
+    // inherited, which only the three of the attribute list are (the two pipe ends and the null device); the environment is a Unicode block of NUL-ended entries
+    // that ends with an empty one; the folder is NUL-terminated; `startup` is a `STARTUPINFOEXW` whose size is in
     // its `cb` and whose list is alive, and a pointer to it as a `STARTUPINFOW` is what the function takes with the
     // extended flag; `info` is a place for the process and thread handles, set on success.
     let created = unsafe {
@@ -325,7 +333,7 @@ pub(super) fn create(program: &Path, args: &[&str], container: &Sid) -> io::Resu
             1,
             EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
             environment.as_ptr().cast(),
-            directory.as_ref().map_or(ptr::null(), |directory| directory.as_ptr()),
+            directory.as_ptr(),
             ptr::from_ref(&startup).cast(),
             &raw mut info,
         )
