@@ -68,6 +68,8 @@ pub(super) struct Hooks {
     pub(super) refuse_group: bool,
     /// Every move to the Trash is refused, as on a disk with no Trash.
     pub(super) refuse_trash: bool,
+    /// Folders of these names are taken for the tops of mounted drives by a mirror's removals.
+    pub(super) mount_names: Vec<String>,
     /// The most entries and the most bytes of names a pack job takes, in place of the limits of the archive readers.
     pub(super) pack_limits: Option<(usize, usize)>,
 }

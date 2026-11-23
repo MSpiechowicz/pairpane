@@ -17,7 +17,7 @@ use super::{ArchiveJob, Refused, Request, SyncPlan, SyncRemove, SyncRoot, Task};
 use SyncDirection::ToRight;
 
 /// The files below `folder` and their bytes, links left out and never followed.
-fn count(folder: &Path) -> (u64, u64) {
+pub(super) fn count(folder: &Path) -> (u64, u64) {
     let (mut files, mut bytes) = (0, 0);
 
     for entry in fs::read_dir(folder).expect("listed") {
@@ -38,7 +38,7 @@ fn count(folder: &Path) -> (u64, u64) {
 }
 
 /// What the scan would have said of `rel` on `side`, held in `root`: the item as it is now.
-fn removal(root: &Path, rel: &str, side: PaneId) -> SyncRemove {
+pub(super) fn removal(root: &Path, rel: &str, side: PaneId) -> SyncRemove {
     let path = root.join(rel);
     let seen = facts(&fs::symlink_metadata(&path).expect("there"));
     let (files, bytes) = if seen.kind == EntryKind::Dir {
@@ -52,17 +52,17 @@ fn removal(root: &Path, rel: &str, side: PaneId) -> SyncRemove {
         seen,
         files,
         bytes,
-        scanned: millis(SystemTime::now()) + 1_000,
+        scanned: millis(SystemTime::now()) + 3_000,
     }
 }
 
 /// `time` in milliseconds since the Unix epoch.
-fn millis(time: SystemTime) -> i64 {
+pub(super) fn millis(time: SystemTime) -> i64 {
     i64::try_from(time.duration_since(UNIX_EPOCH).expect("after the epoch").as_millis()).expect("millis")
 }
 
 /// The job that copies `copies` and then removes `removed` between `left` and `right`, both folders.
-fn mirror(
+pub(super) fn mirror(
     left: &Path,
     right: &Path,
     copies: &[(&str, SyncPlan)],
@@ -89,7 +89,7 @@ fn mirror(
     )
 }
 
-fn run(request: Request) -> Ended {
+pub(super) fn run(request: Request) -> Ended {
     Rig::new().run(request)
 }
 
@@ -174,33 +174,87 @@ fn an_item_that_changed_since_the_scan_or_is_gone_is_kept_and_counted() {
 }
 
 #[test]
-fn a_folder_with_anything_newer_than_the_scan_in_it_is_kept_even_with_the_same_totals() {
+fn a_folder_with_anything_changed_after_the_scan_began_is_kept_even_with_the_same_totals() {
     let pair = Pair::new();
     let right = pair.right();
-    file(&right.join("swapped/a.txt"), b"a", 100);
-    file(&right.join("edited/a.txt"), b"a", 100);
-    file(&right.join("future/a.txt"), b"a", 100);
-    file(&right.join("future/deep/b.txt"), b"b", 100);
-    let removals = ["swapped", "edited", "future"].map(|rel| {
-        let mut seen = removal(&right, rel, PaneId::Right);
-        seen.scanned = millis(moment(200));
-        set_times(&right.join(rel), moment(150));
-        (rel, seen)
-    });
-    set_times(&right.join("future/deep"), moment(150));
-    // A file swapped for another of the same size (the folder's time moves), one edited in place with the same size, and
-    // one that says it is from the future.
+    for rel in ["untouched/a.txt", "swapped/a.txt", "edited/a.txt", "future/deep/a.txt"] {
+        file(&right.join(rel), b"a", 100);
+    }
+    // The scan begins once the setup is older than the slack the times are given.
+    std::thread::sleep(std::time::Duration::from_millis(2_100));
+    let scanned = millis(SystemTime::now());
+    let mut rels = vec!["untouched", "swapped", "future"];
+    if cfg!(unix) {
+        rels.push("edited");
+    }
+    let removals: Vec<(&str, SyncRemove)> = rels
+        .iter()
+        .map(|rel| {
+            let mut seen = removal(&right, rel, PaneId::Right);
+            seen.scanned = scanned;
+            (*rel, seen)
+        })
+        .collect();
+    // A file swapped for another of the same size (the folder's time moves), one that says it is from the future, and
+    // (Unix) one edited in place with the same size and its old time put back (its change time moves).
     fs::remove_file(right.join("swapped/a.txt")).expect("removed");
     file(&right.join("swapped/b.txt"), b"b", 100);
-    file(&right.join("edited/a.txt"), b"b", 300);
-    set_times(&right.join("future/deep/b.txt"), moment(1_000_000_000));
+    set_times(&right.join("future/deep/a.txt"), moment(10_000_000_000));
+    file(&right.join("edited/a.txt"), b"b", 100);
 
     let ended = run(mirror(&pair.left(), &right, &[], &removals, true));
 
-    is_done(&ended, 3);
+    is_done(&ended, u32::try_from(rels.len() - 1).expect("few"));
+    assert!(!right.join("untouched").exists(), "nothing in it changed");
     assert!(right.join("swapped/b.txt").exists());
-    assert_eq!(read(&right.join("edited/a.txt")), b"b");
-    assert!(right.join("future/deep/b.txt").exists());
+    assert!(right.join("future/deep/a.txt").exists());
+    assert!(right.join("edited/a.txt").exists());
+}
+
+#[test]
+fn a_folder_that_is_or_holds_a_mounted_drive_is_never_emptied_to_the_trash_or_for_good() {
+    for permanent in [true, false] {
+        let pair = Pair::new();
+        let right = pair.right();
+        file(&right.join("drive/precious.txt"), b"keep me", 100);
+        file(&right.join("outer/inner/drive/precious.txt"), b"keep me", 100);
+        let removals = [
+            ("drive", removal(&right, "drive", PaneId::Right)),
+            ("outer", removal(&right, "outer", PaneId::Right)),
+        ];
+        let hooks = super::hooks::Hooks {
+            mount_names: vec!["drive".to_owned()],
+            ..Default::default()
+        };
+
+        let ended = Rig::with(hooks, |_, _| {}).run(mirror(&pair.left(), &right, &[], &removals, permanent));
+
+        assert_eq!(ended.outcome, Outcome::Done);
+        assert_eq!(ended.errors.len(), 2, "{:?}", ended.errors);
+        assert!(
+            ended
+                .errors
+                .iter()
+                .all(|error| error.error.message.contains("mounted drive"))
+        );
+        assert_eq!(read(&right.join("drive/precious.txt")), b"keep me");
+        assert_eq!(read(&right.join("outer/inner/drive/precious.txt")), b"keep me");
+    }
+}
+
+#[test]
+fn a_wide_folder_is_walked_and_removed() {
+    let pair = Pair::new();
+    let right = pair.right();
+    for index in 0..600 {
+        file(&right.join(format!("wide/{index}/a.txt")), b"a", 100);
+    }
+    let seen = removal(&right, "wide", PaneId::Right);
+
+    let ended = run(mirror(&pair.left(), &right, &[], &[("wide", seen)], true));
+
+    is_done(&ended, 0);
+    assert!(!right.join("wide").exists());
 }
 
 #[test]
@@ -230,63 +284,6 @@ fn a_folder_that_holds_the_archive_compared_is_kept() {
 
     is_done(&ended, 1);
     assert!(right.join("box/x.zip").exists());
-}
-
-/// `right/dir/a.txt` to be removed, and a lookalike `elsewhere/a.txt` beside the two folders that must survive.
-#[cfg(unix)]
-fn lookalikes() -> (Pair, std::path::PathBuf, SyncRemove) {
-    let pair = Pair::new();
-    let elsewhere = pair.root.path().join("elsewhere");
-    file(&elsewhere.join("a.txt"), b"keep me", 100);
-    file(&pair.right().join("dir/a.txt"), b"keep me", 100);
-    let seen = removal(&pair.right(), "dir/a.txt", PaneId::Right);
-
-    (pair, elsewhere, seen)
-}
-
-#[cfg(unix)]
-#[test]
-fn a_link_on_the_way_is_never_followed() {
-    let (pair, elsewhere, seen) = lookalikes();
-    let right = pair.right();
-    fs::remove_dir_all(right.join("dir")).expect("removed");
-    std::os::unix::fs::symlink(&elsewhere, right.join("dir")).expect("link");
-
-    let ended = run(mirror(&pair.left(), &right, &[], &[("dir/a.txt", seen)], true));
-
-    is_done(&ended, 1);
-    assert_eq!(read(&elsewhere.join("a.txt")), b"keep me");
-}
-
-#[cfg(unix)]
-#[test]
-fn a_link_where_the_scan_saw_a_folder_is_kept_and_not_followed() {
-    let pair = Pair::new();
-    let right = pair.right();
-    let elsewhere = pair.root.path().join("elsewhere");
-    file(&elsewhere.join("a.txt"), b"keep me", 100);
-    std::os::unix::fs::symlink(&elsewhere, right.join("link")).expect("link");
-    // A link is `other` in the facts, which a removal cannot be asked for.
-    let seen = SyncRemove {
-        side: PaneId::Right,
-        seen: SyncFacts {
-            kind: EntryKind::Dir,
-            size: 0,
-            modified: None,
-        },
-        files: 1,
-        bytes: 7,
-        scanned: millis(SystemTime::now()),
-    };
-
-    let ended = run(mirror(&pair.left(), &right, &[], &[("link", seen)], true));
-
-    is_done(&ended, 1);
-    assert!(
-        fs::symlink_metadata(right.join("link")).is_ok(),
-        "the link is not as the scan saw it"
-    );
-    assert_eq!(read(&elsewhere.join("a.txt")), b"keep me");
 }
 
 #[test]
@@ -353,79 +350,6 @@ fn what_a_mirror_cannot_ask_for_is_refused_when_the_job_is_submitted() {
     assert!(submit(&["b.txt"], &SyncRoot::Folder, vec![good]).is_ok());
 }
 
-#[cfg(unix)]
-#[test]
-fn a_folder_that_holds_a_file_it_cannot_read_is_kept_and_reported() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let pair = Pair::new();
-    let right = pair.right();
-    file(&right.join("dir/locked/a.txt"), b"a", 100);
-    let seen = removal(&right, "dir", PaneId::Right);
-    fs::set_permissions(right.join("dir/locked"), fs::Permissions::from_mode(0o000)).expect("locked");
-    // Root reads every folder: there is nothing to show then.
-    let readable = fs::read_dir(right.join("dir/locked")).is_ok();
-
-    let ended = run(mirror(&pair.left(), &right, &[], &[("dir", seen)], true));
-
-    fs::set_permissions(right.join("dir/locked"), fs::Permissions::from_mode(0o755)).expect("unlocked");
-    if readable {
-        return;
-    }
-    assert_eq!(ended.outcome, Outcome::Done);
-    assert_eq!(ended.errors.len(), 1, "{:?}", ended.errors);
-    assert_eq!(read(&right.join("dir/locked/a.txt")), b"a");
-}
-
-/// Removals to the Trash of the user, from a folder under the home folder (a temporary folder may be on a disk with no
-/// Trash); what the test leaves in the Trash is purged.
-#[cfg(target_os = "linux")]
-mod to_the_trash {
-    use std::fs;
-
-    use tempfile::TempDir;
-
-    use super::super::trash::{home_trash, purge_below};
-    use super::{PaneId, file, is_done, mirror, removal, run};
-
-    struct Place(TempDir);
-
-    impl Drop for Place {
-        fn drop(&mut self) {
-            if let Some(trash) = home_trash() {
-                purge_below(&trash, self.0.path());
-            }
-        }
-    }
-
-    #[test]
-    fn a_removal_goes_to_the_trash_unless_it_is_for_good() {
-        let home = std::env::home_dir().expect("a home directory");
-        let place = Place(
-            tempfile::Builder::new()
-                .prefix("pairpane-mirror-test-")
-                .tempdir_in(home)
-                .expect("temp dir under the home directory"),
-        );
-        let (left, right) = (place.0.path().join("left"), place.0.path().join("right"));
-        fs::create_dir_all(&left).expect("left");
-        file(&right.join("dir/a.txt"), b"a", 100);
-        let seen = removal(&right, "dir", PaneId::Right);
-
-        let ended = run(mirror(&left, &right, &[], &[("dir", seen)], false));
-
-        is_done(&ended, 0);
-        assert!(!right.join("dir").exists());
-        let trash = home_trash().expect("a home Trash");
-        let found = fs::read_dir(trash.join("info"))
-            .expect("the Trash has records")
-            .filter_map(Result::ok)
-            .filter_map(|entry| fs::read_to_string(entry.path()).ok())
-            .any(|record| record.contains(&right.join("dir").to_string_lossy().into_owned()));
-        assert!(found, "the folder is in the Trash");
-    }
-}
-
 #[test]
 fn a_trash_that_refuses_fails_the_item_and_never_deletes_it_for_good() {
     let pair = Pair::new();
@@ -456,35 +380,4 @@ fn an_item_whose_name_the_source_has_by_now_is_kept() {
 
     is_done(&ended, 1);
     assert_eq!(read(&right.join("a.txt")), b"right");
-}
-
-/// A folder on the way swapped for a link to another folder after it was looked at, before it is entered: nothing in the
-/// other folder is removed, for good or to the Trash.
-#[cfg(unix)]
-#[test]
-fn a_folder_on_the_way_swapped_for_a_link_mid_job_leads_nowhere() {
-    use std::sync::Arc;
-
-    for permanent in [true, false] {
-        let (pair, elsewhere, seen) = lookalikes();
-        let right = pair.right();
-        let (dir, target) = (right.join("dir"), elsewhere.clone());
-        let hooks = super::hooks::Hooks {
-            before_open: Some(Arc::new(move |walked: &str| {
-                if walked == "dir" {
-                    fs::rename(&dir, dir.with_extension("old")).expect("moved aside");
-                    std::os::unix::fs::symlink(&target, &dir).expect("link");
-                }
-            })),
-            ..Default::default()
-        };
-
-        let ended =
-            Rig::with(hooks, |_, _| {}).run(mirror(&pair.left(), &right, &[], &[("dir/a.txt", seen)], permanent));
-
-        assert_eq!(ended.outcome, Outcome::Done);
-        assert_eq!(ended.errors.len(), 1, "{:?}", ended.errors);
-        assert_eq!(read(&elsewhere.join("a.txt")), b"keep me");
-        assert_eq!(read(&right.join("dir.old/a.txt")), b"keep me");
-    }
 }

@@ -251,6 +251,8 @@ mod sync_race_tests;
 #[cfg(test)]
 mod sync_refusal_tests;
 #[cfg(test)]
+mod sync_remove_link_tests;
+#[cfg(test)]
 mod sync_remove_tests;
 #[cfg(test)]
 mod sync_tests;
