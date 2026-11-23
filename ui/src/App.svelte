@@ -28,7 +28,8 @@
   import TransfersPanel from '$lib/ops/TransfersPanel.svelte';
   import ToolDialogs from '$lib/ops/ToolDialogs.svelte';
   import { focusActiveList } from '$lib/panes/focus';
-  import { sameArchivePath } from '$lib/panes/archive';
+  import { reloadShowing } from '$lib/panes/archive';
+  import { FlatView } from '$lib/panes/flat.svelte';
   import { followPreferences } from '$lib/panes/hidden.svelte';
   import { Hotlist } from '$lib/panes/hotlist.svelte';
   import { PaneTabs } from '$lib/panes/tabs.svelte';
@@ -102,19 +103,9 @@
 
   const toggleHidden = () => preferences.set({ showHidden: !preferences.value.showHidden });
 
-  /** An add to an archive ended (or stopped): the panes that show that archive list it again, from the file. */
-  function archiveChanged(archive: string) {
-    for (const tabs of [panes.left, panes.right]) {
-      const { listing } = tabs.view;
-      if (listing.archive !== undefined && sameArchivePath(listing.archive.archive, archive)) {
-        void listing.reload();
-      }
-    }
-  }
-
   const transfers = new Transfers(ipc, (job, result) => {
     if (job.kind === 'addToArchive') {
-      archiveChanged(job.to);
+      reloadShowing([panes.left, panes.right], job.to);
     }
 
     files.renames.ended(job, result);
@@ -122,6 +113,8 @@
   });
   let panelOpen = $state(false);
   const files = new FileActions(ipc, panes, () => active);
+  const flat = new FlatView(ipc, panes, (text, error) => files.say(text, error), () => preferences.value.showHidden);
+  flat.watch();
   const comparison = new Comparison(ipc, panes, (text, error) => files.say(text, error), () => preferences.value.showHidden);
   comparison.syncer.onQueued = (job, undoable) => files.syncs.expect(job, undoable);
   const viewer = new Viewer(ipc, panes, () => active);
@@ -219,6 +212,7 @@
     compareFiles: () => diff.open(),
     quickView: () => viewer.toggleQuick(),
     find: () => find(),
+    flatView: () => flat[active].toggle(),
     terminal: () => commandLine.terminal(),
     palette: () => palette.show(),
   };
@@ -270,6 +264,7 @@
     }
 
     if (!claimed) {
+      flat.onKey(event, active);
       switchPane(event);
       runShortcut(event);
     }
@@ -359,6 +354,7 @@
           menu={menu?.side === side ? menu.kind : undefined}
           active={active === side}
           rename={files.rename}
+          flat={flat[side]}
           onActivate={() => (active = side)}
           onMenu={(kind) => (menu = kind === undefined ? undefined : { side, kind })}
         />

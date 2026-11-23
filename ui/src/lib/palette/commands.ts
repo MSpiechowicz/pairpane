@@ -38,6 +38,7 @@ export const COMMANDS: readonly { id: CommandId; label: string }[] = [
   { id: 'pack', label: 'Pack…' },
   { id: 'extract', label: 'Extract…' },
   { id: 'find', label: 'Find files…' },
+  { id: 'flatView', label: 'Flat view (all files in subfolders)' },
   { id: 'compareFiles', label: 'Compare files…' },
   { id: 'compare', label: 'Compare folders' },
   { id: 'synchronize', label: 'Synchronize folders…' },

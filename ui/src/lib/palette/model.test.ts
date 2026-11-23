@@ -19,6 +19,15 @@ describe('Palette', () => {
     expect(shown.items.length).toBeLessThanOrEqual(MOST_SHOWN);
   });
 
+  it('finds the flat view by its name, with its keys', () => {
+    const shown = palette();
+    shown.show();
+
+    shown.type('flat view');
+
+    expect(shown.items[0]).toMatchObject({ kind: 'command', id: 'flatView', label: 'Flat view (all files in subfolders)', keys: 'Ctrl+B' });
+  });
+
   it('finds a command, a folder or a name by what is typed, the best first, and chooses the first', () => {
     const shown = palette();
     shown.show();

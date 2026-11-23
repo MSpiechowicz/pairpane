@@ -17,6 +17,7 @@ function context() {
     compareFiles: vi.fn(),
     quickView: vi.fn(),
     find: vi.fn(),
+    flatView: vi.fn(),
     terminal: vi.fn(),
     palette: vi.fn(),
   };
@@ -47,10 +48,13 @@ describe('runAction', () => {
     runAction('deletePermanently', actions);
     runAction('palette', actions);
     runAction('quickView', actions);
+    runAction('flatView', actions);
 
     expect(actions.files).toHaveBeenNthCalledWith(1, 'copy');
     expect(actions.files).toHaveBeenNthCalledWith(2, 'deletePermanently');
     expect(actions.palette).toHaveBeenCalledOnce();
     expect(actions.quickView).toHaveBeenCalledOnce();
+    expect(actions.flatView).toHaveBeenCalledOnce();
+    expect(actions.files).toHaveBeenCalledTimes(2); // the flat view is not a file action
   });
 });
