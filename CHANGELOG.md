@@ -1,3 +1,10 @@
+# [0.28.0](https://github.com/MSpiechowicz/pairpane/compare/v0.27.0...v0.28.0) (2026-11-23)
+
+
+### Features
+
+* **ui:** settings page (#57) ([78cb475](https://github.com/MSpiechowicz/pairpane/commit/78cb475666ddccef7203c8dd1de5633146a03e6a)), closes [#53](https://github.com/MSpiechowicz/pairpane/issues/53)
+
 # [0.27.0](https://github.com/MSpiechowicz/pairpane/compare/v0.26.0...v0.27.0) (2026-11-23)
 
 
