@@ -20,14 +20,17 @@
 //! (`%LOCALAPPDATA%\Programs\...`, the default of the installer) or run from a build folder has not, and then
 //! `CreateProcessW` fails with "access denied". This module takes the first of two ways out of that:
 //!
-//! - **(a), chosen:** when the container cannot reach the file (`CreateProcessW` says access denied, or file or path not
-//!   found, depending on where the check fails), it adds one entry to the access list of the executable, for the SID of
-//!   this container (and not for ALL APPLICATION PACKAGES, which every packaged app of the user is in): read and
-//!   execute, on that one file, no inheritance, and starts again; if that is not enough it does the same for the folder
-//!   that holds the file (list and enter, that folder only), and starts again. The entries let no other program read
-//!   anything: the executable is not a secret, and the container is the helper's alone. They are never removed. They
-//!   need the right to change the access list, which the user who installed the app has; the protection of the list from
-//!   inheritance is kept as it was. An update that replaces the file drops its entry, and the next start adds it again.
+//! - **(a), chosen:** when `CreateProcessW` says access denied (and only then: a file or path that is not found stays so
+//!   whatever its access list says), it adds one entry to the access list of the executable, for the SID of this
+//!   container (and not for ALL APPLICATION PACKAGES, which every packaged app of the user is in): read and execute, on
+//!   that one file, no inheritance, and starts again. Nothing is written when the list has the entry already. The list is
+//!   read and written through a handle to the file, so nothing is propagated to other objects (a write by name to a
+//!   folder would make Windows walk its whole tree, and a portable executable in Downloads or one on a drive root would
+//!   change the permissions of everything below it), and the list's protection from inheritance is kept as it was. The
+//!   entry lets no other program read anything: the executable is not a secret, and the container is the helper's alone.
+//!   It is never removed. It needs the right to change the access list, which the user who installed the app has. An
+//!   update that replaces the file drops its entry, and the next start adds it again. This is the rare path: where the
+//!   file's folder already allows the container (an install under `Program Files`, a build folder) nothing is written.
 //!   Where the entry cannot be added, or the start is denied still, the thumbnails of this run are refused as
 //!   `Unsupported` ("thumbnails are not available on this system", which is the state of the system and so not kept for
 //!   the file by the cache): the page shows icons ("fail closed"). A failure of the moment (no memory, no quota) refuses
@@ -66,7 +69,7 @@ use crate::view::{cancelled, passing_refusal};
 
 use self::container::{Sid, allow_read_and_execute, container_sid};
 use self::spawn::{Created, create, resume};
-use self::step::{at, is_resource, is_unreachable};
+use self::step::{at, is_denied, is_resource};
 
 /// Set when the container cannot be used on this system for good (no profile can be made, or the container is refused the
 /// executable still after it has been given the right to run it): the rest of the run refuses at once, and does not try
@@ -216,22 +219,20 @@ pub(super) fn start(program: &Path, args: &[&str], memory: usize) -> io::Result<
     Ok((contained, stdin, stdout))
 }
 
-/// [`create`], and if the container cannot reach the executable, again after the container has been given the right to
-/// read and run it (see the module): first for the file, and then for the folder that holds it (some failures of the
-/// container's start name the folder). The thumbnails are refused for the rest of the run where that does not help.
+/// [`create`], and if the container is denied the executable (and only then), once more after the container has been given
+/// the right to read and run the file (see the module). Where that does not help the thumbnails are refused for the rest
+/// of the run. The start with no grant is the common one: an executable under `Program Files`, which has ALL APPLICATION
+/// PACKAGES in its access list by inheritance, and a build folder that allows it.
 fn create_allowed(program: &Path, args: &[&str], container: &Sid) -> io::Result<Created> {
-    let mut failure = match create(program, args, container) {
+    let failure = match create(program, args, container) {
         Ok(created) => return Ok(created),
         Err(error) => error,
     };
 
-    for target in [Some(program), program.parent()].into_iter().flatten() {
-        if !is_unreachable(&failure) {
-            break;
-        }
-        tracing::debug!("the container cannot reach the helper: it is given the right to");
+    let failure = if is_denied(&failure) {
+        tracing::debug!("the container is denied the helper's file: it is given the right to");
 
-        if let Err(error) = allow_read_and_execute(target, container) {
+        if let Err(error) = allow_read_and_execute(program, container) {
             note(
                 "the container cannot be given the helper's file",
                 &error,
@@ -242,12 +243,14 @@ fn create_allowed(program: &Path, args: &[&str], container: &Sid) -> io::Result<
         }
         match create(program, args, container) {
             Ok(created) => return Ok(created),
-            Err(error) => failure = error,
+            Err(error) => error,
         }
-    }
+    } else {
+        failure
+    };
 
     // What the container is refused for good is one thing; what the system could not do just now is another.
-    let lasting = is_unreachable(&failure);
+    let lasting = is_denied(&failure);
     note("the thumbnail helper did not start in its container", &failure, lasting);
     if lasting || is_resource(&failure) {
         return Err(unavailable());

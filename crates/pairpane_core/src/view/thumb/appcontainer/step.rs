@@ -56,10 +56,10 @@ pub(super) fn code_of(error: &io::Error) -> Option<i32> {
     })
 }
 
-/// `ERROR_FILE_NOT_FOUND`, `ERROR_PATH_NOT_FOUND` and `ERROR_ACCESS_DENIED`: what `CreateProcessW` says when the container
-/// cannot reach the file it is to run, which of them depending on where in the path the check fails.
-pub(super) fn is_unreachable(error: &io::Error) -> bool {
-    matches!(code_of(error), Some(2 | 3 | 5))
+/// `ERROR_ACCESS_DENIED`: what `CreateProcessW` says when the container is refused the file it is to run. (A file or a path
+/// that is not found is not this: a change of the access list does not make a file exist.)
+pub(super) fn is_denied(error: &io::Error) -> bool {
+    code_of(error) == Some(5)
 }
 
 /// A failure that is the state of the machine at the moment (no memory, quota or system resources) and not a verdict on

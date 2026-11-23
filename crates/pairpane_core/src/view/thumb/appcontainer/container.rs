@@ -1,5 +1,5 @@
 //! The AppContainer profile of the thumbnail helper, and the right to read and run the helper's file that its container
-//! has to be given.
+//! may have to be given.
 #![allow(
     unsafe_code,
     reason = "the AppContainer and security descriptor calls; see each `unsafe` block"
@@ -7,8 +7,12 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
 
 use std::ffi::{OsStr, c_void};
+use std::fs::File;
 use std::io;
+use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::ptr;
 
@@ -16,15 +20,19 @@ use super::step::{at, at_code, at_result};
 
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Security::Authorization::{
-    EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, SetEntriesInAclW,
-    SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    EXPLICIT_ACCESS_W, GRANT_ACCESS, GetSecurityInfo, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, SetEntriesInAclW,
+    SetSecurityInfo, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::Isolation::{CreateAppContainerProfile, DeriveAppContainerSidFromAppContainerName};
 use windows_sys::Win32::Security::{
-    ACL, DACL_SECURITY_INFORMATION, FreeSid, GetSecurityDescriptorControl, NO_INHERITANCE,
-    PROTECTED_DACL_SECURITY_INFORMATION, PSID, SE_DACL_PROTECTED, UNPROTECTED_DACL_SECURITY_INFORMATION,
+    ACCESS_ALLOWED_ACE, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, DACL_SECURITY_INFORMATION, EqualSid, FreeSid,
+    GetAce, GetAclInformation, GetSecurityDescriptorControl, NO_INHERITANCE, PROTECTED_DACL_SECURITY_INFORMATION, PSID,
+    SE_DACL_PROTECTED, UNPROTECTED_DACL_SECURITY_INFORMATION,
 };
-use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
+use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, READ_CONTROL, WRITE_DAC};
+
+/// What the container is given on the helper's file: to read it and to run it.
+const WANTED: u32 = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
 
 /// The name of the container: fixed, so every run of the app (and every version) is the same container, with the same
 /// SID, which is a hash of this name.
@@ -107,28 +115,79 @@ impl Drop for Local {
     }
 }
 
-/// Gives the container `sid` the right to read and run the file `path`, or to list and enter it when it is a folder (an
-/// entry that is its own and no one else's, for that one object, not inherited), on top of what its access list says
-/// already. The entry is never removed: it stays as long as the file does (an update that replaces the file drops it).
+/// Whether the access list `acl` has an entry that allows the container `sid` all of `rights`.
+fn allows(acl: *const ACL, sid: &Sid, rights: u32) -> bool {
+    let mut size = ACL_SIZE_INFORMATION::default();
+
+    // SAFETY: `acl` is the live access list of a descriptor the caller holds; `size` is the structure the class
+    // `AclSizeInformation` fills, and its length is given.
+    let known = unsafe {
+        GetAclInformation(
+            acl,
+            (&raw mut size).cast(),
+            size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    };
+    if known == 0 {
+        return false;
+    }
+
+    for index in 0..size.AceCount {
+        let mut entry: *mut c_void = ptr::null_mut();
+
+        // SAFETY: `index` is under the number of entries the list has; `entry` is a place for a pointer into the list.
+        if unsafe { GetAce(acl, index, &raw mut entry) } == 0 || entry.is_null() {
+            continue;
+        }
+        let allowed: *const ACCESS_ALLOWED_ACE = entry.cast();
+
+        // SAFETY: `entry` points into the live list at an entry whose header says what it is; only an "access allowed" entry
+        // (type 0, which has the layout of `ACCESS_ALLOWED_ACE`: header, mask and the SID that starts at `SidStart`) is
+        // read further, and its SID is compared with the container's, both live.
+        let found = unsafe {
+            (*allowed).Header.AceType == 0
+                && (*allowed).Mask & rights == rights
+                && EqualSid(ptr::addr_of!((*allowed).SidStart).cast_mut().cast(), sid.as_ptr()) != 0
+        };
+        if found {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Gives the container `sid` the right to read and run the file `path` (an entry that is its own and no one else's, for
+/// that one file, not inherited), on top of what its access list says already. Nothing is written when the list has the
+/// entry already. The entry is never removed: it stays as long as the file does (an update that replaces the file drops
+/// it).
 ///
-/// Does nothing when the object has no access list at all (everyone may then use it, and a list with one entry would
-/// shut the others out). Whether the list is protected from inheritance is kept as it is (the control bits are read and
-/// passed back deliberately), so the change neither cuts the object off from its folder's list nor ties it to it. Needs the
-/// right to change the access list, which the owner has; without it this fails and the container cannot run the file.
+/// The list is read and written through a handle to the file, opened for reading and changing the access list and for
+/// nothing else, and not by name: nothing is propagated to other objects (a write by name would make Windows walk a
+/// folder's whole tree), and it is that one file's list that changes. Does nothing when the file has no access list at all
+/// (everyone may then use it, and a list with one entry would shut the others out). Whether the list is protected from
+/// inheritance is kept as it is (the control bits are read and passed back deliberately), so the change neither cuts the
+/// file off from its folder's list nor ties it to it. Needs the right to change the access list, which the owner has;
+/// without it this fails and the container cannot run the file.
 ///
 /// The read, the merge and the write are three calls and not one atomic step: a change of the list by someone else in
-/// between is lost. That is acceptable for an object that the app's own installer and updater write.
+/// between is lost. That is acceptable for a file that the app's own installer and updater write.
 pub(super) fn allow_read_and_execute(path: &Path, sid: &Sid) -> io::Result<()> {
-    let name = wide(path.as_os_str());
+    let file = File::options()
+        .access_mode(READ_CONTROL | WRITE_DAC)
+        .open(path)
+        .map_err(|error| at("open the helper's file for its access list", error))?;
+    let handle = file.as_raw_handle();
     let mut old: *mut ACL = ptr::null_mut();
     let mut descriptor: *mut c_void = ptr::null_mut();
 
-    // SAFETY: the name is NUL-terminated and lives through the call; the owner, group and system list are not asked for
-    // (NULL); `old` and `descriptor` are places for the file's access list, which lives inside the descriptor, and for the
-    // descriptor, which is freed below through `Local`.
+    // SAFETY: the handle is the live handle of `file`, opened with the right to read the access list; the owner, group and
+    // system list are not asked for (NULL); `old` and `descriptor` are places for the file's access list, which lives
+    // inside the descriptor, and for the descriptor, which is freed below through `Local`.
     let read = unsafe {
-        GetNamedSecurityInfoW(
-            name.as_ptr(),
+        GetSecurityInfo(
+            handle,
             SE_FILE_OBJECT,
             DACL_SECURITY_INFORMATION,
             ptr::null_mut(),
@@ -140,9 +199,9 @@ pub(super) fn allow_read_and_execute(path: &Path, sid: &Sid) -> io::Result<()> {
     };
     let _descriptor = Local(descriptor);
     if read != 0 {
-        return Err(at_code("GetNamedSecurityInfoW", read));
+        return Err(at_code("GetSecurityInfo", read));
     }
-    if old.is_null() {
+    if old.is_null() || allows(old, sid, WANTED) {
         return Ok(());
     }
 
@@ -162,7 +221,7 @@ pub(super) fn allow_read_and_execute(path: &Path, sid: &Sid) -> io::Result<()> {
     };
 
     let entry = EXPLICIT_ACCESS_W {
-        grfAccessPermissions: FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        grfAccessPermissions: WANTED,
         grfAccessMode: GRANT_ACCESS,
         grfInheritance: NO_INHERITANCE,
         Trustee: TRUSTEE_W {
@@ -184,11 +243,12 @@ pub(super) fn allow_read_and_execute(path: &Path, sid: &Sid) -> io::Result<()> {
         return Err(at_code("SetEntriesInAclW", merged));
     }
 
-    // SAFETY: the name is NUL-terminated and lives through the call; only the access list is set (the owner, group and
-    // system list are NULL), to `new`, which lives until `_new` is dropped, with the protection it had.
+    // SAFETY: the handle is the live handle of `file`, opened with the right to change the access list; only the access
+    // list is set (the owner, group and system list are NULL), to `new`, which lives until `_new` is dropped, with the
+    // protection it had.
     let set = unsafe {
-        SetNamedSecurityInfoW(
-            name.as_ptr(),
+        SetSecurityInfo(
+            handle,
             SE_FILE_OBJECT,
             DACL_SECURITY_INFORMATION | protection,
             ptr::null_mut(),
@@ -198,7 +258,7 @@ pub(super) fn allow_read_and_execute(path: &Path, sid: &Sid) -> io::Result<()> {
         )
     };
     if set != 0 {
-        return Err(at_code("SetNamedSecurityInfoW", set));
+        return Err(at_code("SetSecurityInfo", set));
     }
 
     Ok(())

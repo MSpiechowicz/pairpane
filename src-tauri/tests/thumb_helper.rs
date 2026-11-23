@@ -266,7 +266,9 @@ fn a_heic_picture_is_decoded_by_the_heic_helper_where_the_system_has_a_decoder()
 
 /// The helper, started as the app starts it and waiting for its input.
 fn start(args: &[&str]) -> Child {
-    helper_command(program(), args).spawn().expect("the helper starts")
+    // Through the app's own `spawn`, as every start in the app is, so that tests that run at once on Windows do not race the
+    // pipes of the helper in its container.
+    pairpane_core::process::spawn(&mut helper_command(program(), args)).expect("the helper starts")
 }
 
 #[test]
@@ -406,9 +408,7 @@ fn the_helper_closes_the_descriptors_it_inherits_and_still_decodes_in_its_sandbo
 
     // The control: a program that is not sandboxed, started the same way, holds it. Without this a helper that does not
     // show it would prove nothing.
-    let mut control = std::process::Command::new("/bin/sleep")
-        .arg("30")
-        .spawn()
+    let mut control = pairpane_core::process::spawn(std::process::Command::new("/bin/sleep").arg("30"))
         .expect("a program of the system starts");
     let held = descriptors_of(control.id());
     let _ = control.kill();

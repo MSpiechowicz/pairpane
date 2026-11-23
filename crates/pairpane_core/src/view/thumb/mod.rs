@@ -35,6 +35,8 @@
 #[cfg(windows)]
 mod appcontainer;
 mod child;
+#[cfg(any(windows, test))]
+mod environment;
 mod format;
 mod identity;
 #[cfg(target_os = "macos")]

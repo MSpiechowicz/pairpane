@@ -12,7 +12,7 @@
 )]
 #![deny(clippy::undocumented_unsafe_blocks)]
 
-use std::ffi::{OsString, c_void};
+use std::ffi::c_void;
 use std::fs::File;
 use std::io;
 use std::mem::{size_of, size_of_val};
@@ -34,12 +34,29 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::process::SPAWN_LOCK;
 
+use super::super::environment;
 use super::container::{Sid, wide};
 use super::step::at;
 
-/// The variables the helper is given, which the loader and the C runtime read (a Windows process needs its system
-/// directory); it starts with no others, so nothing of the app's own (tokens, proxy settings) reaches it. Sorted.
-const ENVIRONMENT: &[&str] = &["SystemRoot", "WINDIR"];
+/// The variables the helper is given, which the loader, the C runtime and the system's own start of a process in a
+/// container read. Windows adds to the block of a process in an AppContainer the folders of the container (it replaces the
+/// temporary folder and the application data folders with them), which it can do only with the usual variables of a user
+/// there, so a block of the system directory alone is refused ("the system could not find the environment option", error
+/// 203). They are the paths of the machine and of the user's own folders, which the container cannot open; nothing of the
+/// app's own (tokens, proxy settings, a session) is in the list.
+const ENVIRONMENT: &[&str] = &[
+    "SystemRoot",
+    "WINDIR",
+    "SystemDrive",
+    "TEMP",
+    "TMP",
+    "LOCALAPPDATA",
+    "APPDATA",
+    "USERPROFILE",
+    "ProgramData",
+    "ComSpec",
+    "PATHEXT",
+];
 
 /// A helper that has been made and not yet started: its process, its main thread (suspended) and the ends of its pipes
 /// that the app keeps.
@@ -163,6 +180,31 @@ fn set_inheritable(handle: &OwnedHandle, inherit: bool) -> io::Result<()> {
     Ok(())
 }
 
+/// Handles that are inheritable for as long as this value lives: made so when it is made, and made not so again when it is
+/// dropped, on every path, which is before the lock that is held around it is let go.
+struct Inheriting<'a>(&'a [&'a OwnedHandle]);
+
+impl<'a> Inheriting<'a> {
+    fn new(handles: &'a [&'a OwnedHandle]) -> io::Result<Self> {
+        // The value exists before the first handle is changed, so that one that fails leaves none of them inheritable.
+        let inheriting = Self(handles);
+        for handle in handles {
+            set_inheritable(handle, true)?;
+        }
+
+        Ok(inheriting)
+    }
+}
+
+impl Drop for Inheriting<'_> {
+    fn drop(&mut self) {
+        for handle in self.0 {
+            // A handle that cannot be told so is closed with the call that follows or the owner's drop, which is as good.
+            let _ = set_inheritable(handle, false);
+        }
+    }
+}
+
 /// The command line `"program" arg arg`, as UTF-16 with its NUL. The arguments are the app's own fixed ones (a flag and a
 /// number): one with a space or a quote in it is refused rather than quoted.
 fn command_line(program: &Path, args: &[&str]) -> io::Result<Vec<u16>> {
@@ -186,28 +228,15 @@ fn command_line(program: &Path, args: &[&str]) -> io::Result<Vec<u16>> {
     Ok(line)
 }
 
-/// The environment block of the helper: `NAME=value` and a NUL for each of [`ENVIRONMENT`] the app has, and a NUL more.
+/// The environment block of the helper: the variables of [`ENVIRONMENT`] that the app has, as `CreateProcessW` takes them
+/// (see `environment.rs`). A variable that is not Unicode is left out.
 fn environment_block() -> Vec<u16> {
-    let mut block: Vec<u16> = Vec::new();
+    let variables: Vec<(&str, String)> = ENVIRONMENT
+        .iter()
+        .filter_map(|name| Some((*name, std::env::var(name).ok()?)))
+        .collect();
 
-    for name in ENVIRONMENT {
-        if let Some(value) = std::env::var_os(name) {
-            let mut entry = OsString::from(name);
-            entry.push("=");
-            entry.push(value);
-
-            block.extend(entry.encode_wide());
-            block.push(0);
-        }
-    }
-
-    // The block ends with an empty string; one with no variable is two NULs.
-    block.push(0);
-    if block.len() == 1 {
-        block.push(0);
-    }
-
-    block
+    environment::block(&variables)
 }
 
 /// The system's folder, where the helper starts: the app's own working folder is none that its container can reach.
@@ -221,9 +250,20 @@ fn system_directory() -> Option<Vec<u16>> {
 pub(super) fn create(program: &Path, args: &[&str], container: &Sid) -> io::Result<Created> {
     let (child_in, parent_in) = pipe()?;
     let (parent_out, child_out) = pipe()?;
+    // The standard error is the null device, so the helper has a valid handle for it and writes nothing anywhere.
+    let child_err = OwnedHandle::from(
+        File::options()
+            .write(true)
+            .open("NUL")
+            .map_err(|error| at("open NUL", error))?,
+    );
 
     // What the attribute list points to, which lives until the process is made.
-    let handles = [child_in.as_raw_handle(), child_out.as_raw_handle()];
+    let handles = [
+        child_in.as_raw_handle(),
+        child_out.as_raw_handle(),
+        child_err.as_raw_handle(),
+    ];
     let capabilities = SECURITY_CAPABILITIES {
         AppContainerSid: container.as_ptr(),
         Capabilities: ptr::null_mut(),
@@ -232,7 +272,7 @@ pub(super) fn create(program: &Path, args: &[&str], container: &Sid) -> io::Resu
     };
     let mut attributes = Attributes::new(2)?;
 
-    // SAFETY: `handles` is an array of two live handles and `capabilities` a `SECURITY_CAPABILITIES` that points to the
+    // SAFETY: `handles` is an array of three live handles and `capabilities` a `SECURITY_CAPABILITIES` that points to the
     // container's SID, which `container` keeps alive; both live until `CreateProcessW` has returned below.
     unsafe {
         attributes.set(
@@ -257,16 +297,18 @@ pub(super) fn create(program: &Path, args: &[&str], container: &Sid) -> io::Resu
     startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     startup.StartupInfo.hStdInput = child_in.as_raw_handle();
     startup.StartupInfo.hStdOutput = child_out.as_raw_handle();
-    // No standard error: the helper writes nothing there.
-    startup.StartupInfo.hStdError = ptr::null_mut();
+    startup.StartupInfo.hStdError = child_err.as_raw_handle();
     startup.lpAttributeList = attributes.list();
     let mut info = PROCESS_INFORMATION::default();
 
-    // Nothing else of the app starts a process while the helper's ends of the pipes can be inherited (`SPAWN_LOCK`), and
-    // they can be only from here to the end of the call: the window of a start by a plugin of the shell is that call.
+    // No start of a process by the app (see `process::spawn`) runs while the helper's ends of the pipes can be inherited. A
+    // start by something else (Tauri's restart, the opener and the updater's `ShellExecute`, WebView2) can, for the few
+    // microseconds between here and the end of the call; what it inherits is a pipe end or the null device, and the helper's
+    // own `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` keeps the sandbox safe whatever else holds them. The guard of the handles is
+    // dropped before the lock, whichever way this function leaves.
     let held = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
-    set_inheritable(&child_in, true)?;
-    set_inheritable(&child_out, true)?;
+    let to_inherit = [&child_in, &child_out, &child_err];
+    let inheriting = Inheriting::new(&to_inherit)?;
 
     // SAFETY: the program and the command line are NUL-terminated and live through the call (the command line is the
     // mutable buffer the function wants); no security attributes for the process and its thread; the handles are
@@ -291,8 +333,7 @@ pub(super) fn create(program: &Path, args: &[&str], container: &Sid) -> io::Resu
     let failure = (created == 0).then(io::Error::last_os_error);
 
     // The pipes are the helper's from here: no process that is started later inherits them, whether the call worked or not.
-    let _ = set_inheritable(&child_in, false);
-    let _ = set_inheritable(&child_out, false);
+    drop(inheriting);
     drop(held);
 
     if let Some(error) = failure {

@@ -79,9 +79,12 @@ where
 
 /// Held while a process is started, on Windows: a handle that is inheritable while it is made (the pipes of the thumbnail
 /// helper in its container, see `view::thumb::appcontainer`) is inherited by any process that is started at the same time
-/// by the standard library, which inherits every handle that is inheritable. So every start in the app goes through
-/// [`spawn`], and none runs while that helper's pipes are made inheritable. (A start by a plugin of the shell is not under
-/// the lock; the window it could use is the few microseconds between making the pipes inheritable and `CreateProcessW`.)
+/// by the standard library, which inherits every handle that is inheritable. So every start of a process by this app's own
+/// code goes through [`spawn`] (the HEIC helper, `unrar`, the command line, the external editor, the terminal), and none
+/// runs while that helper's pipes are made inheritable. What is outside the lock: Tauri's restart (`app_relaunch`), the
+/// `ShellExecute` calls of the opener and the updater, and WebView2's own processes. They can start a process in the few
+/// microseconds the pipes are inheritable and inherit them; the helper's `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` keeps the
+/// sandbox safe regardless, as it names the only handles the helper itself gets.
 #[cfg(windows)]
 pub(crate) static SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

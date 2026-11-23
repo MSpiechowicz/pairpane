@@ -31,9 +31,13 @@ const F_SETFD: i32 = 2;
 
 /// The helper, started as the app starts it (`heic_helper_command`) and waiting for its input.
 fn start() -> Child {
-    heic_helper_command(Path::new(env!("CARGO_BIN_EXE_pairpane")), &[HEIC_CHILD_ARG])
-        .spawn()
-        .expect("the helper starts")
+    // Through the app's own `spawn`, as every start in the app is, so that tests that run at once on Windows do not race the
+    // thumbnail helper's pipes.
+    pairpane_core::process::spawn(&mut heic_helper_command(
+        Path::new(env!("CARGO_BIN_EXE_pairpane")),
+        &[HEIC_CHILD_ARG],
+    ))
+    .expect("the helper starts")
 }
 
 /// The answer of a helper to `input`.
