@@ -105,6 +105,14 @@ export class PaneTabs {
     return this.#tabs[this.#active].forward.length > 0;
   }
 
+  /** The folders the tabs have been to and can go back or forward to, the active tab's first and the latest first. */
+  get recent(): string[] {
+    void this.#revision;
+    const tabs = [this.#tabs[this.#active], ...this.#tabs.filter((_, index) => index !== this.#active)];
+
+    return tabs.flatMap((tab) => [...tab.back].reverse().concat([...tab.forward].reverse()));
+  }
+
   /** Every tab's folder and sort, the active one's as shown now. Reactive. */
   get state(): TabState[] {
     return this.tabs.map((tab, index) =>
