@@ -60,6 +60,8 @@
     "allow-view-image-decode",
     "allow-view-media",
     "allow-thumb-get",
+    "allow-columns-dimensions",
+    "allow-columns-checksum",
     "allow-edit-open",
     "allow-edit-save",
     "allow-edit-external",

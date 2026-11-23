@@ -14,6 +14,11 @@ export type Preferences = { theme: ThemeChoice,
  */
 showExt: boolean, showSize: boolean, showModified: boolean, 
 /**
+ * The extra columns of the detailed view, computed for the rows in view: the size of a picture in pixels, and the
+ * SHA-256 of a file. Off until the user turns them on.
+ */
+showDimensions: boolean, showChecksum: boolean, 
+/**
  * The panes list hidden files.
  */
 showHidden: boolean, 

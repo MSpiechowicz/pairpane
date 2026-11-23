@@ -7,6 +7,7 @@ import type { CompareId } from './bindings/CompareId';
 import type { CompareOptions } from './bindings/CompareOptions';
 import type { CompareRoot } from './bindings/CompareRoot';
 import type { ControlAction } from './bindings/ControlAction';
+import type { Dimensions } from './bindings/Dimensions';
 import type { EditOpened } from './bindings/EditOpened';
 import type { EditSaved } from './bindings/EditSaved';
 import type { EditorSetting } from './bindings/EditorSetting';
@@ -128,6 +129,8 @@ export const commands = {
   view_bytes: cmd<{ session: number; offset: number; length: number }, ArrayBuffer>(),
   view_image_decode: cmd<{ session: number }, ArrayBuffer>(),
   thumb_get: cmd<{ path: string; name: string; size: number }, ArrayBuffer>(),
+  columns_dimensions: cmd<{ path: string; names: string[] }, (Dimensions | null)[]>(),
+  columns_checksum: cmd<{ path: string; name: string }, string>(),
   view_text: cmd<{ session: number; query: TextQuery }, TextWindow>(),
   view_search: cmd<{ session: number; query: SearchQuery; onProgress: EventSink<number> }, SearchHit | null>(),
   view_search_cancel: cmd<{ session: number }, null>(),

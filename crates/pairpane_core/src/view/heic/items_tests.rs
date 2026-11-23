@@ -10,7 +10,7 @@ const TINY: &[u8] = include_bytes!("../heic_testdata/tiny.heic");
 const AV1: &[u8] = include_bytes!("../heic_testdata/av1_mif1_heic.heic");
 
 /// A box of `kind` with `content`.
-fn boxed(kind: &[u8; 4], content: &[u8]) -> Vec<u8> {
+pub(in crate::view) fn boxed(kind: &[u8; 4], content: &[u8]) -> Vec<u8> {
     let mut bytes = u32::try_from(8 + content.len()).expect("small").to_be_bytes().to_vec();
     bytes.extend_from_slice(kind);
     bytes.extend_from_slice(content);

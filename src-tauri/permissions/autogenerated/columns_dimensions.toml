@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-columns-dimensions"
+description = "Enables the columns_dimensions command without any pre-configured scope."
+commands.allow = ["columns_dimensions"]
+
+[[permission]]
+identifier = "deny-columns-dimensions"
+description = "Denies the columns_dimensions command without any pre-configured scope."
+commands.deny = ["columns_dimensions"]

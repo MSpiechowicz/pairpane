@@ -53,6 +53,26 @@ describe('followPreferences', () => {
     expect(panes.left.view.column).toBe('name');
   });
 
+  it('does the same for the extra columns, which are off until the settings show them', () => {
+    const backend = fakeBackend();
+    const preferences = new Preferences();
+    const panes = { left: new PaneTabs(backend.ipc, 'left'), right: new PaneTabs(backend.ipc, 'right') };
+    preferences.set({ showDimensions: true, showChecksum: true });
+    panes.left.view.restoreSort('dimensions', true);
+    panes.right.view.restoreSort('checksum', false);
+    render(WatchHost, { start: () => followPreferences(panes, preferences) });
+    flushSync();
+    expect([panes.left.view.column, panes.right.view.column]).toEqual(['dimensions', 'checksum']);
+
+    preferences.set({ showDimensions: false });
+    flushSync();
+    expect([panes.left.view.column, panes.right.view.column]).toEqual(['name', 'checksum']);
+
+    preferences.set({ showDimensions: true });
+    flushSync();
+    expect([panes.left.view.column, panes.left.view.desc]).toEqual(['dimensions', true]);
+  });
+
   it('brings the sort back when its column is shown again, unless the pane was sorted otherwise meanwhile', () => {
     const backend = fakeBackend();
     const preferences = new Preferences();

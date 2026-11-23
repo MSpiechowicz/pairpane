@@ -1,0 +1,114 @@
+import type { Dimensions } from '$lib/ipc/bindings/Dimensions';
+import type { Entry } from '$lib/ipc/bindings/Entry';
+
+import { displayName } from './format';
+import type { Listing } from './listing.svelte';
+import type { ExtraColumn } from './order';
+import { inFetchOrder, type Range } from './scroll';
+import { isPicture, placeOf } from './thumbs';
+import type { PaneView } from './view.svelte';
+
+/** How many hex digits of a checksum the column shows; the tooltip has all of them. */
+export const CHECKSUM_DIGITS = 12;
+
+/** The text shown where a value is known not to exist. */
+const NONE = '–';
+
+/** One file to ask the backend about: where it is, and the key under which what it says is kept. */
+export interface ExtraTarget {
+  /** Names the file and its state (folder, name, size and time), so that a changed file is asked about again. */
+  key: string;
+  /** The real folder that holds the file, and its name in it. */
+  folder: string;
+  name: string;
+  /** Looks like a picture: only those have dimensions to ask for. */
+  picture: boolean;
+}
+
+/** What the pane wants known now, the most wanted first. */
+export interface ExtraWants {
+  dimensions: readonly ExtraTarget[];
+  checksums: readonly ExtraTarget[];
+}
+
+/** What a pane that shows no extra column wants. */
+export const NOTHING: ExtraWants = { dimensions: [], checksums: [] };
+
+/** The SHA-256 of a file, or why there is none (too big, or not readable). */
+export type Checksum = { hex: string } | { problem: string };
+
+/** What a cell shows, and what its tooltip says (the full value). */
+export interface Cell {
+  text: string;
+  tip?: string;
+}
+
+/**
+ * What to ask for to fill the extra columns for `entry` of `listing`, or `undefined` when it has none: a folder, `..`,
+ * a special file, and anything inside an archive (reading it would unpack it). A search result or a flat view has the
+ * real folder worked out from the path of the item.
+ */
+export function extraTargetOf(listing: Listing, entry: Entry | undefined): ExtraTarget | undefined {
+  const place = placeOf(listing, entry);
+  return place && { ...place, picture: isPicture(place.name) };
+}
+
+/**
+ * What the items of `view` in the run `visible`, then those in `near` (which holds them), ask for in the columns that
+ * are `shown`: the order is the order to fetch in.
+ */
+export function wantedExtras(view: PaneView, visible: Range, near: Range, shown: Record<ExtraColumn, boolean>): ExtraWants {
+  if (!shown.dimensions && !shown.checksum) {
+    return NOTHING;
+  }
+
+  const dimensions: ExtraTarget[] = [];
+  const checksums: ExtraTarget[] = [];
+
+  for (const row of inFetchOrder(visible, near)) {
+    const target = extraTargetOf(view.listing, view.entryAt(row));
+    if (target === undefined) {
+      continue;
+    }
+
+    if (shown.dimensions && target.picture) {
+      dimensions.push(target);
+    }
+    if (shown.checksum) {
+      checksums.push(target);
+    }
+  }
+
+  return { dimensions, checksums };
+}
+
+/** The Dimensions cell: empty until the size is known (and for what is no picture), a dash for a picture with none. */
+export function dimensionsCell(target: ExtraTarget | undefined, value: Dimensions | null | undefined): Cell {
+  if (target === undefined || !target.picture || value === undefined) {
+    return { text: '' };
+  }
+
+  if (value === null) {
+    return { text: NONE, tip: 'No dimensions' };
+  }
+
+  return { text: `${value.width}×${value.height}`, tip: `${value.width} × ${value.height} pixels` };
+}
+
+/** The Checksum cell: empty until it is known, the first digits with the whole digest as tooltip, or a dash with the reason. */
+export function checksumCell(target: ExtraTarget | undefined, value: Checksum | undefined): Cell {
+  if (target === undefined || value === undefined) {
+    return { text: '' };
+  }
+
+  if ('problem' in value) {
+    return { text: NONE, tip: displayName(value.problem) };
+  }
+
+  return { text: value.hex.slice(0, CHECKSUM_DIGITS), tip: value.hex };
+}
+
+/** What a pane sorts a file by in the Dimensions column: its pixel count; `undefined` while it is not known. */
+export function pixelsOf(value: Dimensions | null | undefined): number | undefined {
+  return value ? value.width * value.height : undefined;
+}

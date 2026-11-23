@@ -255,6 +255,17 @@ describe('Session saving', () => {
     });
   });
 
+  it('saves a tab sorted by an extra column as sorted by name: what that column goes by is not kept', async () => {
+    const s = setup();
+    await started(s);
+
+    s.panes.left.view.restoreSort('dimensions', true);
+    await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS * 2);
+
+    expect(s.saves().at(-1)?.left.tabs).toEqual([{ path: '/home/me', sort: 'name', desc: false }]);
+    expect(s.panes.left.view.column).toBe('dimensions'); // the pane itself is not changed
+  });
+
   it('brings back the preferences, and every save carries them', async () => {
     const preferences = { ...DEFAULT_PREFERENCES, theme: 'dark' as const, showHidden: true, confirmTrash: false };
     const s = setup({ state_load: () => ({ ...saved, preferences }) });

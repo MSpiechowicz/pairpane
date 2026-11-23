@@ -45,6 +45,8 @@ const CHECKBOXES: [string, string, keyof Saved][] = [
   ['Columns', 'Ext', 'showExt'],
   ['Columns', 'Size', 'showSize'],
   ['Columns', 'Modified', 'showModified'],
+  ['Columns', 'Dimensions', 'showDimensions'],
+  ['Columns', 'Checksum', 'showChecksum'],
   ['Files', 'Show hidden files', 'showHidden'],
   ['Confirmations', 'Ask before moving to the Trash', 'confirmTrash'],
   ['Confirmations', 'Ask for the target folder when copying or moving', 'confirmTransfer'],

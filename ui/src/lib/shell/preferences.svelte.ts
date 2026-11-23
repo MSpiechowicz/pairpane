@@ -9,6 +9,8 @@ export const DEFAULT_PREFERENCES: Readonly<Saved> = {
   showExt: true,
   showSize: true,
   showModified: true,
+  showDimensions: false,
+  showChecksum: false,
   showHidden: false,
   confirmTrash: true,
   confirmTransfer: true,

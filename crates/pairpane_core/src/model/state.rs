@@ -128,6 +128,10 @@ pub struct Preferences {
     pub show_ext: bool,
     pub show_size: bool,
     pub show_modified: bool,
+    /// The extra columns of the detailed view, computed for the rows in view: the size of a picture in pixels, and the
+    /// SHA-256 of a file. Off until the user turns them on.
+    pub show_dimensions: bool,
+    pub show_checksum: bool,
     /// The panes list hidden files.
     pub show_hidden: bool,
     /// Moving to the Trash asks first (deleting for good always does).
@@ -155,6 +159,8 @@ impl<'de> Deserialize<'de> for Preferences {
             show_ext: flag("showExt", defaults.show_ext),
             show_size: flag("showSize", defaults.show_size),
             show_modified: flag("showModified", defaults.show_modified),
+            show_dimensions: flag("showDimensions", defaults.show_dimensions),
+            show_checksum: flag("showChecksum", defaults.show_checksum),
             show_hidden: flag("showHidden", defaults.show_hidden),
             confirm_trash: flag("confirmTrash", defaults.confirm_trash),
             confirm_transfer: flag("confirmTransfer", defaults.confirm_transfer),
@@ -171,6 +177,8 @@ impl Default for Preferences {
             show_ext: true,
             show_size: true,
             show_modified: true,
+            show_dimensions: false,
+            show_checksum: false,
             show_hidden: false,
             confirm_trash: true,
             confirm_transfer: true,

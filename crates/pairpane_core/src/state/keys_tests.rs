@@ -103,6 +103,8 @@ fn the_preferences_come_back_and_an_update_without_them_keeps_the_stored_ones() 
     let preferences = Preferences {
         theme: ThemeChoice::Dark,
         show_ext: false,
+        show_dimensions: true,
+        show_checksum: true,
         confirm_trash: false,
         ..Preferences::default()
     };
@@ -164,6 +166,13 @@ fn preferences_that_cannot_be_read_take_their_defaults_and_never_lose_the_rest_o
         "a field of the wrong kind takes its default, the others are kept"
     );
     assert_eq!(broken.hotlist, state().hotlist);
+
+    let columns = with(serde_json::json!({ "showDimensions": true, "showChecksum": "yes" }));
+    let columns = columns.preferences.expect("read");
+    assert!(
+        columns.show_dimensions && !columns.show_checksum,
+        "the extra columns are off unless the file turns them on"
+    );
 
     let not_an_object = with(serde_json::json!("dark"));
     assert_eq!(not_an_object.preferences, Some(crate::model::Preferences::default()));

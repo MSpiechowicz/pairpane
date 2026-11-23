@@ -19,6 +19,12 @@ export function span(first: number, last: number): number[] {
   return Array.from({ length: Math.max(0, last - first) }, (_, offset) => first + offset);
 }
 
+/** The rows to load things for, in the order to load them: the ones in the run `visible`, then the others of `near` (which holds them). */
+export function inFetchOrder(visible: Range, near: Range): number[] {
+  const outside = span(near.first, near.last).filter((row) => row < visible.first || row >= visible.last);
+  return [...span(visible.first, visible.last), ...outside];
+}
+
 /** A run of items: from `first` up to, not including, `last`. */
 export interface Range {
   first: number;

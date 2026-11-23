@@ -10,23 +10,10 @@ import { type MaskMode, maskedFiles } from './mask';
 import { type SortColumn, viewOrder } from './order';
 import { Selection, summarize } from './selection.svelte';
 import { FolderSizes } from './sizes.svelte';
+import type { ViewHooks } from './viewHooks';
 
 /** The name the `..` row goes by (no real entry can have it). */
 const UP = '..';
-
-/** What the owner of a pane (its tabs) needs to hear about its folders. */
-export interface ViewHooks {
-  /** An open begins (any open, a silent one included), before any of its events. */
-  onOpen?: () => void;
-  /** A folder started listing, the shown one again included: where the pane is now. */
-  onListed?: (path: string) => void;
-  /** An open failed and the pane has nothing to show. */
-  onFail?: () => void;
-  /** An open of another folder failed and the pane stays in the folder it had. */
-  onNotice?: () => void;
-  /** Whether hidden entries are listed (the preference). */
-  showHidden?: () => boolean;
-}
 
 /**
  * What a pane shows and does on top of its {@link Listing}: sort, layout, quick filter, cursor, selection, the mask
@@ -39,6 +26,9 @@ export class PaneView {
   readonly sizes: FolderSizes;
   /** What a comparison with the other pane marked here; cleared when the pane lists anything. */
   readonly marks = new CompareMarks();
+
+  /** Where the values of the extra columns come from, for sorting by them. */
+  readonly #extraOf: ViewHooks['extraOf'];
 
   #column = $state<SortColumn>('name');
   #desc = $state(false);
@@ -67,6 +57,7 @@ export class PaneView {
       desc: this.#desc,
       filter: this.#filter,
       sizeOf: (entry) => this.sizes.sizeOf(entry.name),
+      extraOf: (entry, column) => this.#extraOf?.(entry, column),
     });
   });
 
@@ -84,6 +75,7 @@ export class PaneView {
   });
 
   constructor(ipc: Transport, pane: PaneId, hooks: ViewHooks = {}) {
+    this.#extraOf = hooks.extraOf;
     this.sizes = new FolderSizes(ipc, pane, () => this.listing.path);
     this.listing = new Listing(ipc, pane, {
       onOpen: () => {

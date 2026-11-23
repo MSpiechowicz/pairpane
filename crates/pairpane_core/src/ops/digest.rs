@@ -8,14 +8,14 @@ use crate::listing::platform;
 use crate::model::HashAlgorithm;
 
 /// A hash being computed.
-pub(super) enum Digester {
+pub(crate) enum Digester {
     Sha256(Sha256),
     Blake3(Box<blake3::Hasher>),
     Md5(Md5),
 }
 
 impl Digester {
-    pub(super) fn new(algorithm: HashAlgorithm) -> Self {
+    pub(crate) fn new(algorithm: HashAlgorithm) -> Self {
         match algorithm {
             HashAlgorithm::Sha256 => Self::Sha256(Sha256::new()),
             HashAlgorithm::Blake3 => Self::Blake3(Box::new(blake3::Hasher::new())),
@@ -23,7 +23,7 @@ impl Digester {
         }
     }
 
-    pub(super) fn update(&mut self, bytes: &[u8]) {
+    pub(crate) fn update(&mut self, bytes: &[u8]) {
         match self {
             Self::Sha256(hasher) => hasher.update(bytes),
             Self::Blake3(hasher) => {
@@ -34,7 +34,7 @@ impl Digester {
     }
 
     /// The hash as lowercase hex.
-    pub(super) fn finish(self) -> String {
+    pub(crate) fn finish(self) -> String {
         match self {
             Self::Sha256(hasher) => hex(&hasher.finalize()),
             Self::Blake3(hasher) => hasher.finalize().to_hex().to_string(),
