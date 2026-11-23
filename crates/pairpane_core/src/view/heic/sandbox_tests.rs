@@ -9,7 +9,9 @@ use std::process::Command;
 
 use rustix::process::{Resource, getrlimit};
 
-use super::kernel::{io_uring_setup_errno, mmap_errno, refused_errnos, uname_errno};
+use super::kernel_probes::{
+    file_mmap_errno, io_uring_setup_errno, mmap_errno, mprotect_exec_errno, refused_errnos, uname_errno,
+};
 use crate::view::testing::run_probe;
 
 use super::sandbox::{ADDRESS_SPACE, Filter, THUMBNAIL_ADDRESS_SPACE, confine, limit};
@@ -137,6 +139,8 @@ const ALLOW_TEST: &str = "view::heic::sandbox_tests::the_thumbnail_helper_may_ma
 /// What the process that has the allow-list filter reports, one line.
 fn allow_probe() -> String {
     limit().expect("the limits are set");
+    // A file that is open before the filter, which can be mapped if the filter lets a file be.
+    let zero = File::open("/dev/zero").expect("a file");
     confine(THUMBNAIL_ADDRESS_SPACE, Filter::AllowList).expect("the helper confines itself");
 
     let opens = File::open("/proc/self/status").is_ok();
@@ -148,11 +152,13 @@ fn allow_probe() -> String {
     let uname = uname_errno();
     let memory = mmap_errno(libc::PROT_READ | libc::PROT_WRITE);
     let code = mmap_errno(libc::PROT_READ | libc::PROT_EXEC);
+    let made_executable = mprotect_exec_errno();
+    let file = file_mmap_errno(std::os::fd::AsRawFd::as_raw_fd(&zero));
     let written = std::io::Write::write_all(&mut std::io::stdout(), b"").is_ok();
 
     format!(
         "PROBE opens={opens} starts={starts} socket_errno={} threads={threads} uname_errno={uname} memory_errno={memory} \
-         code_errno={code} written={written}",
+         code_errno={code} exec_errno={made_executable} file_errno={file} written={written}",
         socket.unwrap_or(0)
     )
 }
@@ -190,6 +196,14 @@ fn the_thumbnail_helper_may_make_only_the_calls_it_needs() {
     assert!(report.contains("memory_errno=0 "), "memory can be mapped: {report}");
     assert!(
         report.contains(&format!("code_errno={eperm} ")),
+        "no executable memory can be mapped: {report}"
+    );
+    assert!(
+        report.contains(&format!("exec_errno={eperm} ")),
         "no memory can be made executable: {report}"
+    );
+    assert!(
+        report.contains(&format!("file_errno={eperm} ")),
+        "no file can be mapped: {report}"
     );
 }

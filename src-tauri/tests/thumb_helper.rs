@@ -214,6 +214,21 @@ fn what_is_not_a_picture_is_refused_before_any_helper_is_started() {
     }
 }
 
+/// HEIC is the one picture that has no thumbnail on Windows: its codec there is the Imaging Component, which runs with the
+/// user's whole token, and a thumbnail is made without a click.
+#[cfg(windows)]
+#[test]
+fn a_heic_picture_has_no_thumbnail_on_windows() {
+    let folder = tempfile::tempdir().expect("a folder");
+    std::fs::write(folder.path().join("picture.heic"), TINY_HEIC).expect("a file");
+
+    let error = open(folder.path(), "picture.heic").expect_err("refused at once");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+    assert!(is_refusal(&error));
+}
+
+#[cfg(not(windows))]
 #[test]
 fn a_heic_picture_is_decoded_by_the_heic_helper_where_the_system_has_a_decoder() {
     let (_folder, source) = source(TINY_HEIC);
@@ -333,4 +348,57 @@ fn the_helper_has_no_descriptor_beyond_the_standard_streams_when_it_starts_to_re
     let (_, exited_well) = finish(child, &encode(ImageFormat::Png, 8, 8));
     assert!(exited_well);
     assert_eq!(open, [0, 1, 2], "{open:?}");
+}
+
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code, reason = "`fcntl`, to leak a descriptor to the helper; see the test")]
+unsafe extern "C" {
+    fn fcntl(fd: i32, command: i32, ...) -> i32;
+}
+
+/// The descriptors of the process `pid`, by `lsof` (a tool of the system, started with fixed arguments and no shell).
+#[cfg(target_os = "macos")]
+fn descriptors_of(pid: u32) -> Vec<u32> {
+    let output = std::process::Command::new("/usr/sbin/lsof")
+        .args(["-a", "-p", &pid.to_string(), "-F", "f"])
+        .output()
+        .expect("lsof runs");
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix('f')?.parse().ok())
+        .collect()
+}
+
+/// The helper closes the descriptors it inherits and keeps what is its own: a descriptor of this test program that is
+/// not close-on-exec (as one that a library of the app may leak) is in the helper when it starts, and is gone once the
+/// helper has confined itself, which is before it reads the picture; the picture is still decoded in the sandbox.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code, reason = "`fcntl` makes a descriptor inheritable; see the test")]
+#[test]
+fn the_helper_closes_the_descriptors_it_inherits_and_still_decodes_in_its_sandbox() {
+    use std::os::fd::IntoRawFd;
+
+    // Opened close-on-exec (as the standard library opens everything), then made inheritable and given up by its owner:
+    // the descriptor is open in this program and in every helper it starts, and nothing owns it.
+    let leaked = std::fs::File::open("/dev/null").expect("a file").into_raw_fd();
+    // SAFETY: `fcntl` with `F_SETFD` takes the descriptor and the flags by value; `leaked` is open and owned by nothing.
+    assert_eq!(unsafe { fcntl(leaked, 2, 0) }, 0, "the descriptor is made inheritable");
+
+    let child = start(&[CHILD_ARG, "64"]);
+    let mut open_in_helper = descriptors_of(child.id());
+    let patience = Instant::now();
+    while open_in_helper.iter().any(|&fd| fd > 2) && patience.elapsed() < Duration::from_secs(20) {
+        std::thread::sleep(Duration::from_millis(100));
+        open_in_helper = descriptors_of(child.id());
+    }
+
+    let (answer, exited_well) = finish(child, &encode(ImageFormat::Png, 200, 100));
+
+    assert!(
+        open_in_helper.iter().all(|&fd| fd <= 2),
+        "the helper holds only its standard streams: {open_in_helper:?}"
+    );
+    assert!(exited_well);
+    assert_eq!(size_of(&answer[1..]), (64, 32));
 }

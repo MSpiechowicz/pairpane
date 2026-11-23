@@ -8,7 +8,7 @@
 //! helper's kind of process and shares its machinery (`heic/process.rs`: the framing of the answer, the deadline, the
 //! cancel flag, the reaping; `heic/sandbox.rs`, `macos.rs` and `heic/job.rs`: before it reads a byte it closes what it
 //! inherited, limits itself, gives up the file system and the network and, on Linux, may make only the dozen system calls
-//! it needs; on macOS it enters a sandbox that denies everything; on Windows the parent puts it in a Job Object). A crash, a hang or a runaway answer costs that one process
+//! it needs; on macOS it enters a sandbox that denies everything; on Windows the parent starts it in an AppContainer, in a Job Object). A crash, a hang or a runaway answer costs that one process
 //! and is reported as a picture that cannot be decoded. The parent never trusts the answer: it is read as it is framed,
 //! and a picture with a side over the one asked for is refused.
 //!
@@ -32,6 +32,8 @@
 //! asked for with its aspect ratio kept, and is never made bigger than it is. The errors have the fixed texts of the
 //! viewer's (`refusal`, `is_refusal`), with no path in them.
 
+#[cfg(windows)]
+mod appcontainer;
 mod child;
 mod format;
 mod identity;
@@ -62,6 +64,7 @@ const DEADLINE: Duration = Duration::from_secs(20);
 /// The committed memory the thumbnail helper may have on Windows (the Job Object's limit), in bytes: the input (64 MiB),
 /// the decoded picture (at most 256 MiB) and what the decoder keeps beside it (see `child.rs`); 1.5 GiB is more than
 /// that and half of the HEIC helper's. The same room as the address space it is given on Linux.
+#[cfg(windows)]
 const MEMORY: usize = 1536 * 1024 * 1024;
 
 /// What is said when a name is not a regular file.
@@ -158,7 +161,7 @@ pub fn make(source: &Source, bytes: Vec<u8>, size: u32, cancel: &AtomicBool, pro
 
     let side = size.to_string();
 
-    process::run_within(program, &[CHILD_ARG, &side], bytes, cancel, DEADLINE, size, MEMORY).map_err(|error| {
+    run_helper(program, &[CHILD_ARG, &side], bytes, cancel, size).map_err(|error| {
         // The helper's "no decoder" is the HEIC helper's text, which is not what is wrong with this file.
         if error.kind() == io::ErrorKind::Unsupported {
             return not_a_picture();
@@ -166,6 +169,18 @@ pub fn make(source: &Source, bytes: Vec<u8>, size: u32, cancel: &AtomicBool, pro
 
         error
     })
+}
+
+/// The helper `program` with `args` on `bytes`: a process of its own with the sandbox of the system (see the module).
+#[cfg(not(windows))]
+fn run_helper(program: &Path, args: &[&str], bytes: Vec<u8>, cancel: &AtomicBool, size: u32) -> io::Result<Vec<u8>> {
+    process::run_within(program, args, bytes, cancel, DEADLINE, size)
+}
+
+/// The helper `program` with `args` on `bytes`: a process in an AppContainer and a job (see the module).
+#[cfg(windows)]
+fn run_helper(program: &Path, args: &[&str], bytes: Vec<u8>, cancel: &AtomicBool, size: u32) -> io::Result<Vec<u8>> {
+    appcontainer::run(program, args, bytes, cancel, DEADLINE, size, MEMORY)
 }
 
 /// The command that starts the thumbnail helper `program` with `args` (the pipes, the cleared environment): for the tests
@@ -184,6 +199,8 @@ fn not_a_picture() -> io::Error {
     )
 }
 
+#[cfg(all(test, windows))]
+mod appcontainer_tests;
 #[cfg(test)]
 mod child_tests;
 #[cfg(test)]

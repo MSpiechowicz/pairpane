@@ -25,14 +25,17 @@
 
 use std::io::{self, Read, Write};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crate::process::{self, GRACE, Wait};
+use crate::process::{self, GRACE, Started, Wait};
 
-use super::{HEADER, MAX_IMAGE_BYTES, MAX_IMAGE_SIDE, cancelled, check_size, no_decoder, too_big, undecodable};
+use super::{
+    HEADER, MAX_IMAGE_BYTES, MAX_IMAGE_SIDE, cancelled, check_size, no_decoder, passing_undecodable, too_big,
+    undecodable,
+};
 
 const STATUS_OK: u8 = 0;
 const STATUS_NO_DECODER: u8 = 1;
@@ -46,7 +49,8 @@ pub(in crate::view) const DEADLINE: Duration = Duration::from_secs(60);
 /// The committed memory a HEIC helper may have on Windows (the Job Object's limit; Linux limits the address space in
 /// `sandbox.rs`), in bytes: what a picture of the pixel cap needs (the input, the decoder's planes, the converted pixels
 /// and the answer, together well under 2 GiB) and room to spare.
-pub(super) const MEMORY: usize = 3 * 1024 * 1024 * 1024;
+#[cfg(windows)]
+const MEMORY: usize = 3 * 1024 * 1024 * 1024;
 
 /// The environment variables the helper is given on top of the ones every child gets ([`process::command`]: a Windows
 /// process needs its system directory and its temporary folder, the Imaging Component reads them); it starts with no
@@ -244,11 +248,10 @@ pub(super) fn run(
     cancel: &AtomicBool,
     deadline: Duration,
 ) -> io::Result<Vec<u8>> {
-    run_within(program, args, bytes, cancel, deadline, MAX_IMAGE_SIDE, MEMORY)
+    run_within(program, args, bytes, cancel, deadline, MAX_IMAGE_SIDE)
 }
 
-/// [`run`] for a helper whose picture has no side over `max_side` (see [`read_picture`]) and which, on Windows, may
-/// commit `memory` bytes (the Job Object's limit; unused elsewhere).
+/// [`run`] for a helper whose picture has no side over `max_side` (see [`read_picture`]).
 pub(in crate::view) fn run_within(
     program: &Path,
     args: &[&str],
@@ -256,11 +259,7 @@ pub(in crate::view) fn run_within(
     cancel: &AtomicBool,
     deadline: Duration,
     max_side: u32,
-    memory: usize,
 ) -> io::Result<Vec<u8>> {
-    #[cfg(not(windows))]
-    let _ = memory;
-
     if cancel.load(Ordering::Relaxed) {
         return Err(cancelled());
     }
@@ -278,7 +277,7 @@ pub(in crate::view) fn run_within(
     // The job is made before a byte is sent, so the helper has nothing to run that is not in it. It is kept until the
     // child is reaped below; closing it ends whatever is still in it.
     #[cfg(windows)]
-    let _job = match super::job::contain(&child, memory) {
+    let _job = match super::job::contain(&child, MEMORY) {
         Ok(job) => job,
         Err(error) => {
             tracing::debug!(%error, "the helper cannot be contained");
@@ -288,7 +287,27 @@ pub(in crate::view) fn run_within(
         }
     };
 
-    let answer = supervise(&mut child, bytes, cancel, deadline, max_side);
+    let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        process::stop(&mut child);
+
+        return Err(io::Error::other("the helper has no pipes"));
+    };
+
+    run_started(child, stdin, stdout, bytes, cancel, deadline, max_side)
+}
+
+/// Gives a helper that has been started (by [`run_within`], or by `view::thumb::windows` in its container) the `bytes` on
+/// its standard input `stdin`, reads its answer from `stdout` and stops and reaps it on every path.
+pub(in crate::view) fn run_started<C: Started>(
+    mut child: C,
+    stdin: impl Write + Send + 'static,
+    stdout: impl Read + Send + 'static,
+    bytes: Vec<u8>,
+    cancel: &AtomicBool,
+    deadline: Duration,
+    max_side: u32,
+) -> io::Result<Vec<u8>> {
+    let answer = supervise(&mut child, stdin, stdout, bytes, cancel, deadline, max_side);
 
     // Whatever happened above, the child is stopped and reaped here; harmless for one that has ended.
     process::stop(&mut child);
@@ -298,17 +317,19 @@ pub(in crate::view) fn run_within(
 
 /// Feeds the child, collects its answer and stops the child (it is reaped by the caller). The answer is the result of
 /// the reading thread, taken only when the child has ended well too.
-fn supervise(
-    child: &mut Child,
+///
+/// What is the state of the moment and no verdict on the file (the threads that feed and read the child could not be
+/// started, the child ran past its deadline, one end of the answer did not come after the other) is a transient failure
+/// ([`passing_undecodable`]), which a cache must not keep; a child that crashes or answers wrongly is the file's.
+fn supervise<C: Started>(
+    child: &mut C,
+    mut stdin: impl Write + Send + 'static,
+    stdout: impl Read + Send + 'static,
     bytes: Vec<u8>,
     cancel: &AtomicBool,
     deadline: Duration,
     max_side: u32,
 ) -> io::Result<Vec<u8>> {
-    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
-        return Err(undecodable());
-    };
-
     // The writer ends when everything is written (the pipe is closed with it) or when the child is gone. It is never
     // waited for: a child that does not read is killed, which ends the writer too.
     thread::Builder::new()
@@ -316,12 +337,12 @@ fn supervise(
         .spawn(move || {
             let _ = stdin.write_all(&bytes);
         })
-        .map_err(|_| undecodable())?;
+        .map_err(|_| io::Error::other("the helper's threads did not start"))?;
 
     let reader = thread::Builder::new()
         .name("helper-stdout".to_owned())
         .spawn(move || read_picture(stdout, max_side))
-        .map_err(|_| undecodable())?;
+        .map_err(|_| io::Error::other("the helper's threads did not start"))?;
 
     let waited = wait_for_answer(child, &reader, cancel, deadline);
 
@@ -332,14 +353,14 @@ fn supervise(
 
     waited?;
 
-    answer.unwrap_or_else(|| Err(undecodable()))
+    answer.unwrap_or_else(|| Err(passing_undecodable()))
 }
 
 /// Waits until the reader has the whole answer and the child has ended with success. `Err` for a raised `cancel`, a child
 /// that ends with an error, one that runs `deadline` and one that does not end (or whose output does not) within
 /// [`GRACE`] of the other.
 fn wait_for_answer(
-    child: &mut Child,
+    child: &mut impl Started,
     reader: &JoinHandle<io::Result<Vec<u8>>>,
     cancel: &AtomicBool,
     deadline: Duration,
@@ -350,8 +371,10 @@ fn wait_for_answer(
         Err(Wait::Deadline) => {
             tracing::debug!("the helper took too long");
 
-            Err(undecodable())
+            Err(passing_undecodable())
         }
-        Ok(_) | Err(Wait::Stalled | Wait::Lost) => Err(undecodable()),
+        Err(Wait::Stalled | Wait::Lost) => Err(passing_undecodable()),
+        // It ended with an error: it crashed on the file.
+        Ok(_) => Err(undecodable()),
     }
 }

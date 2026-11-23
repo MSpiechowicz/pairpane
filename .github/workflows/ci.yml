@@ -201,6 +201,17 @@ jobs:
             sudo apt-get install -y libheif-plugin-libde265
           fi
           echo "PAIRPANE_REQUIRE_HEIC_DECODER=1" >> "$GITHUB_ENV"
+      # The thumbnail helper with the real executable, where its sandbox is not Linux's. The same tests run again in the
+      # step after this one; this one comes first so that a failure of the sandbox is the first thing the log shows. What it
+      # proves: on macOS, the helper starts under `sandbox_init` and still decodes every format, and it closes the
+      # descriptors it inherits (tests/thumb_helper.rs); on Windows, the helper decodes in its AppContainer and job (the
+      # first start of a run also gives the container the right to run the executable, which the build folder does not
+      # have), and HEIC is refused at `open`. The unit tests that tell that the sandbox is in force (a file, the network
+      # and a new program are refused) are `view::thumb::macos_tests` and `view::thumb::appcontainer_tests` of the
+      # `Rust tests` job.
+      - name: Thumbnail helper, real executable
+        if: runner.os != 'Linux'
+        run: cargo test -p pairpane_app --test thumb_helper -- --test-threads=2
       - run: cargo test -p pairpane_app
       # Always build through `tauri build` so the custom-protocol feature is on; a plain cargo build would load
       # the dev server URL.

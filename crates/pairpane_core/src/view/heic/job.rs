@@ -46,6 +46,15 @@ const UI_LIMITS: u32 = JOB_OBJECT_UILIMIT_HANDLES
 /// HEIC helper, and `view::thumb` for the thumbnail helper's), and puts `child` in it. The job must be kept until the
 /// child is reaped; dropping it ends every process still in it (the kill-on-close limit).
 pub(super) fn contain(child: &Child, memory: usize) -> io::Result<Job> {
+    let job = limited(memory)?;
+    job.assign(child)?;
+
+    Ok(job)
+}
+
+/// Creates the job with its limits and nothing in it: the thumbnail helper's, whose process is made suspended in its
+/// container and put in the job before it runs its first instruction (`view::thumb::appcontainer`).
+pub(in crate::view) fn limited(memory: usize) -> io::Result<Job> {
     let job = Job::new()?;
 
     // SAFETY: the structure holds only integers and has no invalid bit pattern, so all-zero is a valid value.
@@ -86,8 +95,6 @@ pub(super) fn contain(child: &Child, memory: usize) -> io::Result<Job> {
     if restricted == 0 {
         return Err(io::Error::last_os_error());
     }
-
-    job.assign(child)?;
 
     Ok(job)
 }

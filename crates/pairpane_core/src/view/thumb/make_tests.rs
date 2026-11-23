@@ -65,7 +65,16 @@ fn a_heic_file_is_known_by_its_brands() {
     let folder = temp();
     put(folder.path(), "a.jpg", b"\0\0\0\x18ftypheic\0\0\0\0mif1heic\0\0\0\0");
 
-    assert!(open(folder.path(), "a.jpg").expect("a picture").is_heic());
+    let opened = open(folder.path(), "a.jpg");
+
+    if cfg!(windows) {
+        // No HEIC thumbnails on Windows (see `has_thumbnail`): it is not a picture that has one.
+        let error = opened.expect_err("refused at once");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(is_refusal(&error));
+    } else {
+        assert!(opened.expect("a picture").is_heic());
+    }
 }
 
 #[test]

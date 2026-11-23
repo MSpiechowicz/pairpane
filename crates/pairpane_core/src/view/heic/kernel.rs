@@ -103,7 +103,8 @@ const DENIED: &[c_long] = &[
 /// without `PROT_EXEC`, `munmap`, `mremap`, `madvise`), a lock that is not free (`futex`) and a yield, the random keys of
 /// a hash map, the clock, the process and thread number (the C library's `abort` and exit ask), the alternate stack of
 /// the signal handlers that the runtime removes when it ends, the return from one, and the end of the process or of its
-/// one thread. Nothing opens, creates, signals, maps a file or starts anything.
+/// one thread. Nothing opens, creates, signals, maps a file (`mmap` is allowed for an anonymous mapping only) or starts
+/// anything.
 const ALLOWED: &[c_long] = &[
     libc::SYS_read,
     libc::SYS_readv,
@@ -148,6 +149,9 @@ const ARG0_HIGH: u32 = 20;
 
 /// The offset of the low half of the third argument of the call: the protection of `mmap` and `mprotect`.
 const ARG2_LOW: u32 = 32;
+
+/// The offset of the low half of the fifth argument of the call: the descriptor of `mmap`.
+const ARG4_LOW: u32 = 48;
 
 const RET_KILL_PROCESS: u32 = 0x8000_0000;
 const RET_ALLOW: u32 = 0x7fff_0000;
@@ -243,8 +247,9 @@ fn program(pid: u32) -> Option<Vec<sock_filter>> {
 /// The classic BPF program of [`Filter::AllowList`]:
 ///
 /// - the wrong architecture kills the process;
-/// - a call of [`ALLOWED`] is allowed, and `mmap` and `mprotect` are allowed unless they ask for `PROT_EXEC`, so the
-///   process can map no code (a call of the x32 ABI has a number that is none of these);
+/// - a call of [`ALLOWED`] is allowed, and `mmap` only for an anonymous mapping (the descriptor is -1: no file is
+///   mapped) and `mmap` and `mprotect` only unless they ask for `PROT_EXEC`, so the process can map no code (a call of
+///   the x32 ABI has a number that is none of these);
 /// - every other call is refused with `EPERM`.
 ///
 /// `None` where [`AUDIT_ARCH`] is `None`.
@@ -254,24 +259,28 @@ fn allow_program() -> Option<Vec<sock_filter>> {
 
     // The tail below, numbered; each test of the list jumps over the tests left after it and the tail up to its allow
     // (the last instruction, `TAIL_ALLOW`).
-    const TAIL_ALLOW: usize = 5;
+    const TAIL_ALLOW: usize = 7;
     for (at, &number) in ALLOWED.iter().enumerate() {
         let to_allow = u8::try_from(ALLOWED.len() - at - 1 + TAIL_ALLOW).ok()?;
         program.push(instruction(BPF_JEQ_K, to_allow, 0, number as u32));
     }
 
     program.extend([
-        // 0: `mmap` → its protection (2); else on to 1.
+        // 0: `mmap` → its descriptor (2); else on to 1.
         instruction(BPF_JEQ_K, 1, 0, libc::SYS_mmap as u32),
-        // 1: `mprotect` → its protection (2); else `EPERM` (4).
-        instruction(BPF_JEQ_K, 0, 2, libc::SYS_mprotect as u32),
+        // 1: `mprotect` → its protection (4); else `EPERM` (6).
+        instruction(BPF_JEQ_K, 2, 4, libc::SYS_mprotect as u32),
         // 2.
-        instruction(BPF_LD_W_ABS, 0, 0, ARG2_LOW),
-        // 3: asks for `PROT_EXEC` → `EPERM` (4), else allow (5).
-        instruction(BPF_JSET_K, 0, 1, libc::PROT_EXEC as u32),
+        instruction(BPF_LD_W_ABS, 0, 0, ARG4_LOW),
+        // 3: no file (the descriptor is -1: an anonymous mapping) → its protection (4), else `EPERM` (6).
+        instruction(BPF_JEQ_K, 0, 2, u32::MAX),
         // 4.
+        instruction(BPF_LD_W_ABS, 0, 0, ARG2_LOW),
+        // 5: asks for `PROT_EXEC` → `EPERM` (6), else allow (7).
+        instruction(BPF_JSET_K, 0, 1, libc::PROT_EXEC as u32),
+        // 6.
         instruction(BPF_RET_K, 0, 0, RET_EPERM),
-        // 5.
+        // 7.
         instruction(BPF_RET_K, 0, 0, RET_ALLOW),
     ]);
 
@@ -375,116 +384,4 @@ pub(super) fn landlock_abi() -> Option<u32> {
     };
 
     u32::try_from(version).ok().filter(|&version| version >= 1)
-}
-
-/// The error number of an `io_uring_setup` call, for the tests that check the filter refuses it (`0` if it worked; the
-/// ring it then made is closed at once).
-#[cfg(test)]
-pub(super) fn io_uring_setup_errno() -> i32 {
-    // `struct io_uring_params` is 120 bytes; zeroed it asks for nothing special.
-    let mut params = [0_u8; 120];
-
-    // SAFETY: `io_uring_setup(entries, params)` reads and writes the 120 bytes of `params`, which live through the call.
-    let fd = unsafe { libc::syscall(libc::SYS_io_uring_setup, 4_u32, params.as_mut_ptr()) };
-    if fd < 0 {
-        return io::Error::last_os_error().raw_os_error().unwrap_or(-1);
-    }
-
-    // SAFETY: `fd` is the ring just made and owned by nothing else.
-    unsafe { libc::close(fd as libc::c_int) };
-
-    0
-}
-
-/// The error numbers of calls the filter must refuse, for the tests: a new process by `fork` (that is `clone` without
-/// `CLONE_THREAD`), `clone3`, System V shared memory, a signal to the parent, and a look at the parent's limits (`0`
-/// for one that worked; a child that `fork` made exits at once).
-#[cfg(test)]
-pub(super) fn refused_errnos() -> [i32; 5] {
-    let errno = |result: i64| {
-        if result < 0 {
-            io::Error::last_os_error().raw_os_error().unwrap_or(-1)
-        } else {
-            0
-        }
-    };
-
-    // SAFETY: `fork` takes nothing; a child it makes runs only `_exit`, which is safe after a fork.
-    let forked = unsafe { libc::fork() };
-    if forked == 0 {
-        // SAFETY: ends the child at once, without running anything of the parent's state.
-        unsafe { libc::_exit(0) };
-    }
-    let fork = errno(i64::from(forked));
-    if forked > 0 {
-        // SAFETY: waits for the child just made; the status is not read.
-        unsafe { libc::waitpid(forked, std::ptr::null_mut(), 0) };
-    }
-
-    // SAFETY: `clone3` with NULL arguments and size 0 would only fail in the kernel (`EINVAL`); the filter answers first.
-    let clone3 = errno(unsafe { libc::syscall(libc::SYS_clone3, std::ptr::null::<libc::c_void>(), 0_usize) });
-
-    // SAFETY: `shmget` takes its arguments by value and only makes (or refuses) a private segment.
-    let segment = unsafe { libc::shmget(libc::IPC_PRIVATE, 4096, libc::IPC_CREAT | 0o600) };
-    let shm = errno(i64::from(segment));
-    if segment >= 0 {
-        // SAFETY: removes the segment just made.
-        unsafe { libc::shmctl(segment, libc::IPC_RMID, std::ptr::null_mut()) };
-    }
-
-    // SAFETY: signal 0 to the parent only checks the permission; nothing is sent.
-    let parent = unsafe { libc::getppid() };
-    // SAFETY: as above.
-    let signal = errno(i64::from(unsafe { libc::kill(parent, 0) }));
-
-    let mut limit = libc::rlimit64 {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    // SAFETY: reads the parent's limit on open files into `limit`, which lives through the call; sets nothing.
-    let prlimit = errno(i64::from(unsafe {
-        libc::prlimit64(parent, libc::RLIMIT_NOFILE, std::ptr::null(), &raw mut limit)
-    }));
-
-    [fork, clone3, shm, signal, prlimit]
-}
-
-/// The error number of the `mmap` of a page with `prot`, or `0` when it worked (the page is unmapped at once).
-#[cfg(test)]
-/// The error number of the `mmap` of a page with `prot`, or 0 when it worked.
-pub(super) fn mmap_errno(prot: libc::c_int) -> i32 {
-    // SAFETY: an anonymous private mapping of one page, no address asked for: it only makes (or refuses) a mapping of its
-    // own; the page is unmapped again below.
-    let page = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            4096,
-            prot,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-            -1,
-            0,
-        )
-    };
-    if page == libc::MAP_FAILED {
-        return std::io::Error::last_os_error().raw_os_error().unwrap_or(-1);
-    }
-
-    // SAFETY: `page` is the mapping just made and nothing uses it.
-    unsafe { libc::munmap(page, 4096) };
-
-    0
-}
-
-/// The error number of a `uname` call, or `0` when it worked: a call that the allow-list filter does not list.
-#[cfg(test)]
-pub(super) fn uname_errno() -> i32 {
-    // SAFETY: `uname` writes a `utsname` into the structure it is given, which lives through the call.
-    unsafe {
-        let mut name: libc::utsname = std::mem::zeroed();
-        if libc::uname(&raw mut name) == 0 {
-            0
-        } else {
-            io::Error::last_os_error().raw_os_error().unwrap_or(-1)
-        }
-    }
 }

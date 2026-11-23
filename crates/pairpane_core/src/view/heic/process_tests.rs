@@ -222,6 +222,7 @@ mod isolation {
     use super::{HEADER, TINY, is_refusal};
     use crate::view::heic::decode_isolated;
     use crate::view::heic::process::run;
+    use crate::view::is_transient;
     use crate::view::testing::{file_of, idle};
 
     /// The answer `[0, 1, 0, 0, 0, 1, 0, 0, 0, a, b, c, d]` as the argument of `printf`: a picture of one pixel.
@@ -243,6 +244,10 @@ mod isolation {
             assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{program}");
             assert_eq!(error.to_string(), "the image cannot be decoded");
             assert!(is_refusal(&error));
+            assert!(
+                !is_transient(&error),
+                "a helper that crashes on the file is the file's verdict: {program}"
+            );
         }
     }
 
@@ -325,6 +330,10 @@ mod isolation {
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(is_refusal(&error));
+        assert!(
+            is_transient(&error),
+            "a missed deadline is the state of the moment, not the file's"
+        );
         assert!(started.elapsed() < Duration::from_secs(10), "killed, not waited for");
     }
 

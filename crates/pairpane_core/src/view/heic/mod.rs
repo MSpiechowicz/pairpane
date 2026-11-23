@@ -41,9 +41,11 @@ mod items;
 pub(super) mod process;
 
 #[cfg(windows)]
-mod job;
+pub(super) mod job;
 #[cfg(target_os = "linux")]
 mod kernel;
+#[cfg(all(test, target_os = "linux"))]
+mod kernel_probes;
 #[cfg(target_os = "linux")]
 pub(super) mod sandbox;
 
@@ -196,6 +198,12 @@ pub(super) fn no_decoder() -> io::Error {
 /// The error for a file the decoder cannot read.
 pub(super) fn undecodable() -> io::Error {
     refusal(io::ErrorKind::InvalidData, "the image cannot be decoded")
+}
+
+/// [`undecodable`] for a failure that is the state of the moment (a helper that was too slow on a loaded system) and
+/// no verdict on the file: the page is told the same, and a cache must not keep it (`is_transient`).
+pub(super) fn passing_undecodable() -> io::Error {
+    super::passing_refusal(io::ErrorKind::InvalidData, "the image cannot be decoded")
 }
 
 /// The error for a file or a picture over a cap.

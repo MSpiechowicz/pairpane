@@ -37,9 +37,15 @@ impl Job {
 
     /// Puts `child` in the job.
     pub(crate) fn assign(&self, child: &Child) -> io::Result<()> {
-        // SAFETY: `self.0` is a live job handle and `child` holds the live handle of a process it started, which stays
-        // open as long as `child` is; the call only reads both.
-        let assigned = unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle()) };
+        self.assign_handle(child.as_raw_handle())
+    }
+
+    /// Puts the process whose handle `process` is in the job. The handle must be live (and have the right to set quota
+    /// and terminate, as the one `CreateProcessW` returns has).
+    pub(crate) fn assign_handle(&self, process: HANDLE) -> io::Result<()> {
+        // SAFETY: `self.0` is a live job handle and the caller gives a live process handle, which stays open through the
+        // call; the call only reads both.
+        let assigned = unsafe { AssignProcessToJobObject(self.0, process) };
         if assigned == 0 {
             return Err(io::Error::last_os_error());
         }

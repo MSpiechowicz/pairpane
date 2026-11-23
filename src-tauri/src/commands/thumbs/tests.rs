@@ -16,25 +16,25 @@ use crate::commands::limit::Permit;
 use crate::commands::testing::folder_with;
 
 /// A PNG header and a few bytes: a picture by its first bytes, which no decoder would take.
-const PNG_HEAD: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x10\0\0\0\x10\x08\x06\0\0\0";
+pub(super) const PNG_HEAD: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x10\0\0\0\x10\x08\x06\0\0\0";
 
 /// A HEIC file by its brands, which no decoder would take.
 const HEIC_HEAD: &[u8] = b"\0\0\0\x18ftypheic\0\0\0\0mif1heic\0\0\0\0";
 
 /// Where a helper would be; what must not start one never reaches it.
-fn nowhere() -> PathBuf {
+pub(super) fn nowhere() -> PathBuf {
     PathBuf::from("/nonexistent/pairpane-helper")
 }
 
-fn fill(cap: &ThreadCap, max: usize) -> Vec<Permit> {
+pub(super) fn fill(cap: &ThreadCap, max: usize) -> Vec<Permit> {
     (0..max).map(|_| cap.acquire(max).expect("a place")).collect()
 }
 
-fn get(thumbs: &Thumbs, path: &str, name: &str, size: u32) -> CommandResult<Arc<[u8]>> {
+pub(super) fn get(thumbs: &Thumbs, path: &str, name: &str, size: u32) -> CommandResult<Arc<[u8]>> {
     block_on(thumbs.get(path.to_owned(), name.to_owned(), size, nowhere()))
 }
 
-fn shown(result: CommandResult<Arc<[u8]>>) -> (IpcErrorCode, String) {
+pub(super) fn shown(result: CommandResult<Arc<[u8]>>) -> (IpcErrorCode, String) {
     let error = result.expect_err("refused");
     let json = serde_json::to_value(&error).expect("json");
 
@@ -42,7 +42,7 @@ fn shown(result: CommandResult<Arc<[u8]>>) -> (IpcErrorCode, String) {
 }
 
 /// What is kept for the file `name` of `folder` as a picture of `size`, as the command would have kept it.
-fn keep(thumbs: &Thumbs, folder: &std::path::Path, name: &str, size: u32, value: Cached) {
+pub(super) fn keep(thumbs: &Thumbs, folder: &std::path::Path, name: &str, size: u32, value: Cached) {
     let source = thumb::open(folder, name).expect("a picture");
     let key = Key {
         path: folder.join(name),
@@ -57,12 +57,12 @@ fn keep(thumbs: &Thumbs, folder: &std::path::Path, name: &str, size: u32, value:
     thumbs.cache().insert(key, stamp, value);
 }
 
-fn picture(bytes: &[u8]) -> Cached {
+pub(super) fn picture(bytes: &[u8]) -> Cached {
     Cached::Picture(bytes.into())
 }
 
 impl Thumbs {
-    fn cache(&self) -> MutexGuard<'_, Cache> {
+    pub(super) fn cache(&self) -> MutexGuard<'_, Cache> {
         self.cache.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -159,7 +159,14 @@ fn a_heic_picture_has_a_place_of_its_own_among_the_helpers() {
     let thumbs = Thumbs::default();
     let _decoder = fill(&thumbs.heic, HEIC_THREADS);
 
-    assert_eq!(shown(get(&thumbs, &path, "b.heic", 128)).0, IpcErrorCode::Busy);
+    // On Windows there is no HEIC thumbnail: the file is refused as not a picture that has one, before any cap. Elsewhere
+    // it is a HEIC picture, whose place is taken (on macOS, which has no decoder, it would be refused later).
+    let expected = if cfg!(windows) {
+        IpcErrorCode::Unsupported
+    } else {
+        IpcErrorCode::Busy
+    };
+    assert_eq!(shown(get(&thumbs, &path, "b.heic", 128)).0, expected);
 
     // The same cap does not hold up a PNG: it gets as far as starting the helper, which is not there.
     let (code, message) = shown(get(&thumbs, &path, "a.png", 128));
@@ -302,7 +309,7 @@ fn what_the_page_is_told_is_fixed_text_that_never_holds_a_path() {
 }
 
 /// A file that is a PNG by its first bytes and over the cap, which is too big to be read.
-fn too_big_file(folder: &std::path::Path, name: &str) {
+pub(super) fn too_big_file(folder: &std::path::Path, name: &str) {
     std::fs::write(folder.join(name), PNG_HEAD).expect("a file");
     std::fs::File::options()
         .write(true)
@@ -310,68 +317,6 @@ fn too_big_file(folder: &std::path::Path, name: &str) {
         .expect("open")
         .set_len(MAX_IMAGE_BYTES + 1)
         .expect("a sparse file");
-}
-
-#[test]
-fn a_file_that_cannot_be_made_into_a_picture_is_remembered_and_not_tried_again() {
-    let (folder, path) = folder_with(&[]);
-    too_big_file(folder.path(), "huge.png");
-    let thumbs = Thumbs::default();
-
-    let first = shown(get(&thumbs, &path, "huge.png", 128));
-    assert_eq!(
-        first,
-        (
-            IpcErrorCode::InvalidInput,
-            "the image is too big to show here".to_owned()
-        )
-    );
-    assert_eq!(thumbs.cache().bytes(), cache::FAILURE_BYTES, "a small fixed cost");
-
-    // Every place for reading and for the helpers is taken: only what is remembered can answer.
-    let _readers = fill(&thumbs.readers, READER_THREADS);
-    let _helpers = fill(&thumbs.helpers, HELPER_THREADS);
-    for _ in 0..3 {
-        assert_eq!(
-            shown(get(&thumbs, &path, "huge.png", 128)),
-            first,
-            "the same code and text"
-        );
-    }
-
-    // Another size is another try, which finds the places taken.
-    assert_eq!(shown(get(&thumbs, &path, "huge.png", 400)).0, IpcErrorCode::Busy);
-}
-
-#[test]
-fn a_remembered_failure_is_forgotten_when_the_file_changes() {
-    let (folder, path) = folder_with(&[]);
-    too_big_file(folder.path(), "huge.png");
-    let thumbs = Thumbs::default();
-    assert_eq!(
-        shown(get(&thumbs, &path, "huge.png", 128)).0,
-        IpcErrorCode::InvalidInput
-    );
-
-    // The file is now a small one: its length differs, so it is tried again (and the helper is not there).
-    std::fs::write(folder.path().join("huge.png"), PNG_HEAD).expect("rewritten");
-
-    assert_eq!(shown(get(&thumbs, &path, "huge.png", 128)).0, IpcErrorCode::Io);
-    assert_eq!(thumbs.cache().bytes(), 0);
-}
-
-#[test]
-fn a_failure_of_the_system_is_not_remembered() {
-    let (_folder, path) = folder_with(&[("a.png", PNG_HEAD)]);
-    let thumbs = Thumbs::default();
-
-    // The helper is not there: not the file's fault, and the next request tries again.
-    assert_eq!(shown(get(&thumbs, &path, "a.png", 128)).0, IpcErrorCode::Io);
-    assert_eq!(thumbs.cache().bytes(), 0);
-
-    thumbs.shut_down();
-    assert_eq!(shown(get(&thumbs, &path, "a.png", 128)).1, "the read was cancelled");
-    assert_eq!(thumbs.cache().bytes(), 0, "a cancelled request is not a bad picture");
 }
 
 #[test]

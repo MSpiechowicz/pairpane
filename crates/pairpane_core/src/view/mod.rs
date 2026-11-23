@@ -145,11 +145,16 @@ fn cancelled() -> io::Error {
 /// The payload of an error with a text of our own (see [`refusal`]); what tells it from an error of the system or of a
 /// library, whose text must never reach the page.
 #[derive(Debug)]
-struct Refusal(std::borrow::Cow<'static, str>);
+struct Refusal {
+    text: std::borrow::Cow<'static, str>,
+    /// Whether it is the state of the moment (a helper that was too slow on a loaded system) and not a verdict on the
+    /// file, so that a cache must not remember it ([`is_transient`]).
+    transient: bool,
+}
 
 impl std::fmt::Display for Refusal {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        out.write_str(&self.0)
+        out.write_str(&self.text)
     }
 }
 
@@ -158,17 +163,49 @@ impl std::error::Error for Refusal {}
 /// An error with a text of its own, for a rule that no system call reports (the text never holds a path). Its
 /// `to_string` is `text`, and [`is_refusal`] knows it.
 pub fn refusal(kind: io::ErrorKind, text: &'static str) -> io::Error {
-    io::Error::new(kind, Refusal(text.into()))
+    io::Error::new(
+        kind,
+        Refusal {
+            text: text.into(),
+            transient: false,
+        },
+    )
+}
+
+/// [`refusal`] for a failure that is the state of the moment and no verdict on the file: it tells the page what it tells
+/// for the same refusal, but [`is_transient`] says it is not to be remembered.
+pub fn passing_refusal(kind: io::ErrorKind, text: &'static str) -> io::Error {
+    io::Error::new(
+        kind,
+        Refusal {
+            text: text.into(),
+            transient: true,
+        },
+    )
 }
 
 /// [`refusal`] with a text that is built at run time. The caller makes sure it holds no path and nothing the user
 /// typed; it is only ever made of fixed words and values the program parsed itself.
 pub fn refusal_text(kind: io::ErrorKind, text: String) -> io::Error {
-    io::Error::new(kind, Refusal(text.into()))
+    io::Error::new(
+        kind,
+        Refusal {
+            text: text.into(),
+            transient: false,
+        },
+    )
 }
 
 /// Whether `error` was made by [`refusal`], so its text is ours and holds no path; any other error (a system call, a
 /// library, an error that someone made with a text of their own) is not.
 pub fn is_refusal(error: &io::Error) -> bool {
     error.get_ref().is_some_and(|inner| inner.is::<Refusal>())
+}
+
+/// Whether `error` was made by [`passing_refusal`]: a failure of the moment, which a cache must not keep.
+pub fn is_transient(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<Refusal>())
+        .is_some_and(|refusal| refusal.transient)
 }

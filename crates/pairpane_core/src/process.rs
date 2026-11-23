@@ -77,6 +77,33 @@ where
     command
 }
 
+/// A process this module can wait for and stop: the standard library's [`Child`], and on Windows the helper that is started
+/// in an AppContainer with `CreateProcessW` (`view::thumb::windows`), which `Command` cannot do on stable Rust.
+pub trait Started {
+    /// The exit status when the process has ended, `None` while it runs.
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>>;
+
+    /// Ends the process.
+    fn kill(&mut self) -> io::Result<()>;
+
+    /// Waits for the process to end (after [`Started::kill`], which makes that quick) and reaps it.
+    fn wait(&mut self) -> io::Result<ExitStatus>;
+}
+
+impl Started for Child {
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        Child::try_wait(self)
+    }
+
+    fn kill(&mut self) -> io::Result<()> {
+        Child::kill(self)
+    }
+
+    fn wait(&mut self) -> io::Result<ExitStatus> {
+        Child::wait(self)
+    }
+}
+
 /// Sets the soft and the hard limit of `resource` for the calling process to `value`: what the helper processes do to
 /// themselves before they read a byte (`view::heic::sandbox`, `view::thumb::macos`).
 #[cfg(unix)]
@@ -119,7 +146,7 @@ pub enum Exit {
 /// not stopped here: the caller does it with [`stop`], on every path. A child whose output nobody reads is waited for
 /// with [`wait_for_exit`].
 pub fn wait_for(
-    child: &mut Child,
+    child: &mut impl Started,
     cancel: &AtomicBool,
     deadline: Duration,
     mut output_done: impl FnMut() -> bool,
@@ -135,7 +162,7 @@ pub fn wait_for(
 /// runs `watch` every half second meanwhile; a check that fails gives up with its error. There is no [`GRACE`]: the child
 /// may run until the deadline. The child is not stopped here either.
 pub fn wait_for_exit(
-    child: &mut Child,
+    child: &mut impl Started,
     cancel: &AtomicBool,
     deadline: Duration,
     mut watch: impl FnMut() -> io::Result<()>,
@@ -145,7 +172,7 @@ pub fn wait_for_exit(
 
 /// The loop of both waits; `output` is the reader's end, when there is a reader.
 fn drive(
-    child: &mut Child,
+    child: &mut impl Started,
     cancel: &AtomicBool,
     deadline: Duration,
     mut output: Option<&mut dyn FnMut() -> bool>,
@@ -204,7 +231,7 @@ fn drive(
 }
 
 /// Kills and reaps the child; harmless for one that has ended.
-pub fn stop(child: &mut Child) {
+pub fn stop(child: &mut impl Started) {
     let _ = child.kill();
     let _ = child.wait();
 }

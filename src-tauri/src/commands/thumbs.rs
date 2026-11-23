@@ -17,7 +17,7 @@
 //! - The cache (`cache.rs`) is bound by [`CACHE_BYTES`] and keyed by the file's path and the size bucket. It is stamped
 //!   with the file's length, modification time and identity (device, file number and time of change), so a changed or
 //!   replaced file is made again. It also remembers the failures that are the file's own (not a picture, too big, cannot
-//!   be decoded) for a small fixed cost each, with the code and text the page was told, so a file that is bad or slow to
+//!   be decoded) for a small fixed cost each (not a helper that was too slow, which a loaded system can cause), with the code and text the page was told, so a file that is bad or slow to
 //!   decode is not tried again until it changes; a failure of the system (a read that failed, a helper that did not
 //!   start, a cancelled request) is never remembered.
 //! - [`Thumbs::shut_down`] raises the flag every helper of this module watches, as the app exits, so none outlives it.
@@ -49,6 +49,8 @@ use crate::error::{CommandError, CommandResult};
 
 mod cache;
 
+#[cfg(test)]
+mod failure_tests;
 #[cfg(test)]
 mod tests;
 
@@ -177,7 +179,7 @@ impl Work {
             Err(Stop::Busy) => Err(busy()),
             Err(Stop::Error(error)) => {
                 // What the file itself decided is remembered, so it is not decoded again until it changes.
-                if let Some(failed) = failure_of(&error) {
+                if let Some(failed) = remembered(&error) {
                     self.cache().insert(key, stamp, Cached::Failed(failed));
                 }
 
@@ -232,6 +234,18 @@ fn failure_of(error: &io::Error) -> Option<Failed> {
         code,
         message: error.to_string(),
     })
+}
+
+/// What is remembered of a failure: [`failure_of`] for the file's own verdicts (a picture that cannot be decoded because
+/// the decoder crashed or answered wrongly, one that is too big, one that is of no format that has a thumbnail), and
+/// nothing for what is the state of the moment: a helper that ran past its deadline or whose answer stalled on a loaded
+/// system, threads that did not start, a helper that did not start (those are not the file's, and ask again).
+fn remembered(error: &io::Error) -> Option<Failed> {
+    if files::is_transient(error) {
+        return None;
+    }
+
+    failure_of(error)
 }
 
 /// What the page is told when a thumbnail cannot be made (see [`failure_of`]); anything else is the viewer's text
