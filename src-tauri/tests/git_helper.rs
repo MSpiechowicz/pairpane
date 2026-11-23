@@ -5,7 +5,10 @@
 
 use std::fs;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+#[cfg(unix)]
+use std::sync::atomic::Ordering;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use pairpane_core::gitstatus::{self, CHILD_ARG, GitError, Limits};

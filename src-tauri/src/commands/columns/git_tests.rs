@@ -3,7 +3,9 @@
 //! (`pairpane_core::gitstatus`), against repositories made with gix; here a repository is the few files and folders git
 //! needs to see one.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 use serde_json::json;
 use tauri::async_runtime::block_on;
