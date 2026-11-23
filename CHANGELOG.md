@@ -1,3 +1,14 @@
+# [0.31.0](https://github.com/MSpiechowicz/pairpane/compare/v0.30.0...v0.31.0) (2026-11-23)
+
+
+### Features
+
+* **view:** thumbnails view, made in the sandboxed helper (#63) ([3fa1420](https://github.com/MSpiechowicz/pairpane/commit/3fa1420a9aed5bcda9d4b95284bb5aeec0da502c)), closes [#59](https://github.com/MSpiechowicz/pairpane/issues/59)
+
+### Bug Fixes
+
+* **view:** make the thumbnail container's profile one thread at a time (#64) ([c42b72c](https://github.com/MSpiechowicz/pairpane/commit/c42b72c0986ef84d7f1cfeab5595aecaddfc742b))
+
 # [0.30.0](https://github.com/MSpiechowicz/pairpane/compare/v0.29.0...v0.30.0) (2026-11-23)
 
 
