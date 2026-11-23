@@ -1,3 +1,10 @@
+# [0.26.0](https://github.com/MSpiechowicz/pairpane/compare/v0.25.0...v0.26.0) (2026-11-23)
+
+
+### Features
+
+* **ui:** rebindable keymap with a Total Commander default (#55) ([30642d3](https://github.com/MSpiechowicz/pairpane/commit/30642d3802f5e1972ed8afe392662d453a597878)), closes [#51](https://github.com/MSpiechowicz/pairpane/issues/51)
+
 # [0.25.0](https://github.com/MSpiechowicz/pairpane/compare/v0.24.0...v0.25.0) (2026-11-23)
 
 
