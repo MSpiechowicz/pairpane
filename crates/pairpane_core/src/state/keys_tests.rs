@@ -84,3 +84,12 @@ fn a_file_from_before_keys_loads_with_none() {
 
     assert_eq!(load(&file).expect("state").keys, Vec::new());
 }
+
+#[test]
+fn an_action_none_of_whose_keys_is_left_keeps_its_defaults_and_one_set_to_none_stays() {
+    let keys = vec![set("copy", vec![chord("", true)]), set("trash", Vec::new())];
+
+    let cleaned = clean(SavedState { keys, ..state() }).keys;
+
+    assert_eq!(cleaned, vec![set("trash", Vec::new())]);
+}

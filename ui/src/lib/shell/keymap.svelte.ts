@@ -61,12 +61,32 @@ export class Keymap {
     return this.#custom.has(action);
   }
 
-  /** Brings back what the user set; what is not an action, or a key an action cannot have, is left out. */
+  /** Whether `action` has other keys than its default ones (it was set, or a key of it was taken). */
+  differs(action: Action): boolean {
+    const defaults = BINDINGS.filter((binding) => binding.action === action).map(written);
+
+    return this.isCustom(action) || this.allKeysOf(action).join() !== defaults.join();
+  }
+
+  /**
+   * Brings back what the user set: what is not an action, a key an action cannot have or one an earlier action has is left
+   * out, and an action none of whose keys is left (while it had some) keeps its defaults.
+   */
   restore(saved: readonly KeyOverride[]) {
     const custom = new Map<Action, readonly Chord[]>();
+    const taken: Chord[] = [];
+
     for (const { action, keys } of saved) {
-      if (isAction(action) && !custom.has(action)) {
-        custom.set(action, keys.filter((chord) => refusalOf(chord) === undefined));
+      if (!isAction(action) || custom.has(action)) {
+        continue;
+      }
+
+      const usable = keys
+        .map((chord) => ({ ...chord, key: chord.key.length === 1 ? chord.key.toLowerCase() : chord.key }))
+        .filter((chord) => !(chord.ctrl && chord.alt) && refusalOf(chord) === undefined && !taken.some((other) => same(other, chord)));
+      if (usable.length > 0 || keys.length === 0) {
+        custom.set(action, usable);
+        taken.push(...usable);
       }
     }
 
@@ -81,6 +101,11 @@ export class Keymap {
     }
 
     const from = this.#bindings.find((binding) => same(binding, chord))?.action;
+    // The palette opens this dialog: its last key is never taken (the top bar opens the dialog too, but a key is kept).
+    if (from === 'palette' && action !== 'palette' && this.allKeysOf('palette').length === 1) {
+      return `${written(chord)} is the only key of the command palette: give it another key first.`;
+    }
+
     const custom = new Map(this.#custom);
     if (from !== undefined && from !== action) {
       const left = this.#bindings.filter((binding) => binding.action === from && !same(binding, chord));

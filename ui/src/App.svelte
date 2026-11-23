@@ -340,6 +340,7 @@
     {showHidden}
     onCheckForUpdates={() => void updates.check(true)}
     onEditSettings={editSettings}
+    onKeyboardShortcuts={() => (keysOpen = true)}
     onToggleHidden={toggleHidden}
     onFiles={chooseFile}
     onFind={find}

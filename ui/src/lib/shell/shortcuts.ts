@@ -142,11 +142,20 @@ export function chordOf(event: KeyboardEvent): Chord | undefined {
 
 /**
  * Why `chord` cannot be an action's key, or `undefined` when it can: one with neither Ctrl nor Alt must be a function key
- * or Delete (any other key alone types, moves the cursor or works the dialogs), and Escape never is one.
+ * or Delete (any other key alone types, moves the cursor or works the dialogs), Escape never is one, and neither is a key
+ * the panes take for themselves first.
  */
-export function refusalOf(chord: Chord): string | undefined {
+export function refusalOf(chord: Chord, mac: boolean = /Mac/.test(navigator.userAgent)): string | undefined {
   if (chord.key === 'Escape') {
     return 'Escape closes dialogs: it cannot be a shortcut.';
+  }
+
+  // What the panes take before any shortcut: Ctrl+A selects all, and Option with a character types it on macOS.
+  if (chord.ctrl && !chord.alt && chord.key.toLowerCase() === 'a') {
+    return 'Ctrl+A selects every item: it cannot be a shortcut.';
+  }
+  if (mac && chord.alt && !chord.ctrl && chord.key.length === 1) {
+    return 'Option with a character types it on macOS: hold Ctrl instead.';
   }
 
   const free = /^F([1-9]|1[0-2])$/.test(chord.key) || chord.key === 'Delete';

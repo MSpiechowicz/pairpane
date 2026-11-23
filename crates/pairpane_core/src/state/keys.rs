@@ -17,23 +17,30 @@ pub const MAX_KEYS_PER_ACTION: usize = 4;
 const MAX_NAME_CHARS: usize = 32;
 
 /// `keys` with what cannot be an action's key removed: an action whose name is not plain letters, one named twice (the
-/// first kept), a key whose name is empty, too long or holds anything but letters, digits and a few signs. At most
-/// [`MAX_KEY_OVERRIDES`] actions and [`MAX_KEYS_PER_ACTION`] keys of each are kept, in their order.
+/// first kept), a key whose name is empty, too long or holds a control character, and an action none of whose keys is
+/// left (it keeps its defaults). At most [`MAX_KEY_OVERRIDES`] actions and [`MAX_KEYS_PER_ACTION`] keys of each are
+/// kept, in their order.
 pub(super) fn clean_keys(keys: Vec<KeyOverride>) -> Vec<KeyOverride> {
     let mut seen = HashSet::new();
 
     keys.into_iter()
         .filter(|entry| is_action(&entry.action) && seen.insert(entry.action.clone()))
-        .take(MAX_KEY_OVERRIDES)
-        .map(|entry| KeyOverride {
-            keys: entry
+        .filter_map(|entry| {
+            let had = !entry.keys.is_empty();
+            let keys: Vec<KeyChord> = entry
                 .keys
                 .into_iter()
                 .filter(is_key)
                 .take(MAX_KEYS_PER_ACTION)
-                .collect(),
-            action: entry.action,
+                .collect();
+
+            // An action none of whose keys is left keeps its defaults; one set to no key stays so.
+            (!had || !keys.is_empty()).then_some(KeyOverride {
+                keys,
+                action: entry.action,
+            })
         })
+        .take(MAX_KEY_OVERRIDES)
         .collect()
 }
 

@@ -31,6 +31,8 @@ describe('KeymapDialog', () => {
 
     expect(keymap.keysOf('copy')).toBe('F6');
     expect(screen.getByRole('status')).toHaveTextContent('Copy: F6, taken from “Move”.');
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Change the keys of Copy' })).toHaveFocus());
+    expect(screen.getByRole('button', { name: 'Reset the keys of Move' })).toBeEnabled();
     expect(row('Move')).toHaveTextContent('No key');
     expect(screen.getByRole('button', { name: 'Reset the keys of Copy' })).toBeEnabled();
   });
@@ -43,6 +45,22 @@ describe('KeymapDialog', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Hold Ctrl or Alt');
 
     await fireEvent.keyDown(screen.getByRole('button', { name: 'Cancel' }), { key: 'Escape' });
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    expect(keymap.keysOf('copy')).toBe('F5');
+  });
+
+  it('stops waiting when the focus leaves, and says Cmd and AltGr are not keys; a held key is not the new one', async () => {
+    const { keymap } = open();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Change the keys of Copy' }));
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    await fireEvent.keyDown(cancel, { key: 'Enter', repeat: true });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    await fireEvent.keyDown(cancel, { key: 'k', metaKey: true });
+    expect(screen.getByRole('status')).toHaveTextContent('Cmd, AltGr and Ctrl+Alt');
+
+    await fireEvent.blur(cancel);
+
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
     expect(keymap.keysOf('copy')).toBe('F5');
   });

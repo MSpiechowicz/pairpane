@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock('$lib/ipc/client', () => ({ ipc: { invoke } }));
 
+import { keymap } from '$lib/shell/keymap.svelte';
+
 import { appShown, key, listbox, pane } from '../tests/app';
 
 const field = () => screen.getByRole('combobox', { name: 'Command, folder or name' });
@@ -18,6 +20,7 @@ async function typed(text: string) {
 beforeEach(() => {
   invoke.mockReset();
   window.localStorage.clear();
+  keymap.resetAll();
 });
 
 describe('the command palette', () => {
@@ -71,5 +74,14 @@ describe('the keyboard shortcuts', () => {
         state: { keys: [{ action: 'copy', keys: [{ key: 'y', ctrl: true }] }] },
       }),
     );
+  });
+
+  it('are reachable from the Settings menu too', async () => {
+    await appShown(invoke);
+
+    await fireEvent.click(screen.getByRole('button', { name: /^Settings/ }));
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Keyboard Shortcuts…' }));
+
+    expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
   });
 });
