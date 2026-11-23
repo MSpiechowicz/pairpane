@@ -155,8 +155,8 @@ describe('PaneTabs tabs', () => {
     tabs.view.sortBy('modified');
     tabs.view.sortBy('modified');
     expect(tabs.state).toEqual([
-      { path: '/a', sort: { column: 'size', desc: false } },
-      { path: '/b', sort: { column: 'modified', desc: true } },
+      { path: '/a', sort: { column: 'size', desc: false }, layout: 'detailed' },
+      { path: '/b', sort: { column: 'modified', desc: true }, layout: 'detailed' },
     ]);
 
     tabs.select(0);
@@ -169,6 +169,43 @@ describe('PaneTabs tabs', () => {
     expect(asked(backend)).toBe('/b');
     expect(tabs.view.column).toBe('modified');
     expect(tabs.view.desc).toBe(true);
+  });
+
+  it('every tab keeps its own layout, and a new tab starts with the one of the tab it was made from', async () => {
+    const { backend, tabs } = await inA();
+    expect(tabs.view.layout).toBe('detailed');
+
+    tabs.view.layout = 'brief';
+    tabs.add();
+    expect(tabs.view.layout).toBe('brief');
+    await go(backend, tabs, '/b');
+    tabs.view.layout = 'detailed';
+    expect(tabs.state.map((tab) => tab.layout)).toEqual(['brief', 'detailed']);
+
+    tabs.select(0);
+    expect(tabs.view.layout).toBe('brief');
+    arrived(backend);
+
+    tabs.select(1);
+    expect(tabs.view.layout).toBe('detailed');
+    expect(tabs.state.map((tab) => tab.layout)).toEqual(['brief', 'detailed']);
+  });
+
+  it('restores the layouts it is given; a tab without one is shown in detail', async () => {
+    const { tabs } = await inA();
+
+    tabs.restore(
+      [
+        { path: '/a', sort: 'name', desc: false, layout: 'brief' },
+        { path: '/b', sort: 'name', desc: false },
+      ],
+      0,
+    );
+    expect(tabs.view.layout).toBe('brief');
+    expect(tabs.state.map((tab) => tab.layout)).toEqual(['brief', 'detailed']);
+
+    tabs.select(1);
+    expect(tabs.view.layout).toBe('detailed');
   });
 
   it('every tab keeps its own history, and switching is not a step', async () => {

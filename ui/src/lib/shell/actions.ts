@@ -77,6 +77,12 @@ export function runAction(action: Action, context: ActionContext) {
     case 'flatView':
       context.flatView();
       break;
+    case 'layoutBrief':
+      tabs.view.layout = 'brief';
+      break;
+    case 'layoutDetailed':
+      tabs.view.layout = 'detailed';
+      break;
     case 'terminal':
       context.terminal();
       break;

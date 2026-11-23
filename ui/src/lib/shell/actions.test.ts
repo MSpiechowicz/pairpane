@@ -5,7 +5,7 @@ import type { PaneTabs } from '$lib/panes/tabs.svelte';
 import { type ActionContext, runAction } from './actions';
 
 function context() {
-  const tabs = { add: vi.fn(), close: vi.fn(), cycle: vi.fn(), back: vi.fn(), forward: vi.fn() };
+  const tabs = { add: vi.fn(), close: vi.fn(), cycle: vi.fn(), back: vi.fn(), forward: vi.fn(), view: { layout: 'detailed' } };
   const actions: ActionContext = {
     tabs: () => tabs as unknown as PaneTabs,
     active: () => 'right',
@@ -39,6 +39,17 @@ describe('runAction', () => {
     expect(tabs.back).toHaveBeenCalledOnce();
     expect(actions.showMenu).toHaveBeenCalledWith('right', 'hotlist');
     expect(actions.showMenu).toHaveBeenCalledWith('left', 'drives');
+  });
+
+  it('the layout actions set the layout of the active pane', () => {
+    const { tabs, actions } = context();
+
+    runAction('layoutBrief', actions);
+    expect(tabs.view.layout).toBe('brief');
+
+    runAction('layoutDetailed', actions);
+    expect(tabs.view.layout).toBe('detailed');
+    expect(actions.files).not.toHaveBeenCalled();
   });
 
   it('hands the file actions to the files, and the rest to their own parts', () => {

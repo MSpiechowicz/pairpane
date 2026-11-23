@@ -20,6 +20,7 @@ fn tab(name: &str) -> SavedTab {
         path: folder(name),
         sort: SortColumn::Name,
         desc: false,
+        layout: None,
     }
 }
 
@@ -40,6 +41,7 @@ pub(super) fn state() -> SavedState {
                     path: folder("b"),
                     sort: SortColumn::Modified,
                     desc: true,
+                    layout: None,
                 },
             ],
             active: 1,

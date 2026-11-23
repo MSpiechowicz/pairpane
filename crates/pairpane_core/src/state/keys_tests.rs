@@ -168,3 +168,34 @@ fn preferences_that_cannot_be_read_take_their_defaults_and_never_lose_the_rest_o
     let not_an_object = with(serde_json::json!("dark"));
     assert_eq!(not_an_object.preferences, Some(crate::model::Preferences::default()));
 }
+
+#[test]
+fn a_tab_keeps_its_layout_and_one_from_before_layouts_has_none() {
+    use crate::model::PaneLayout;
+
+    let folder = tempfile::tempdir().expect("a folder");
+    let file = folder.path().join("state.json");
+    let mut saved = state();
+    saved.left.tabs[0].layout = Some(PaneLayout::Brief);
+    save(&file, saved).expect("saved");
+
+    let loaded = load(&file).expect("loaded");
+    assert_eq!(loaded.left.tabs[0].layout, Some(PaneLayout::Brief));
+    assert_eq!(loaded.left.tabs[1].layout, None);
+    assert!(!std::fs::read_to_string(&file).expect("read").contains("null"));
+}
+
+#[test]
+fn a_layout_this_version_does_not_know_is_the_detailed_one_and_the_state_is_kept() {
+    use crate::model::PaneLayout;
+
+    let mut value = serde_json::to_value(state()).expect("json");
+    value["left"]["tabs"][0]["layout"] = serde_json::json!("icons");
+    value["left"]["tabs"][1]["layout"] = serde_json::json!(7);
+
+    let read: SavedState = serde_json::from_value(value).expect("read");
+
+    assert_eq!(read.left.tabs[0].layout, Some(PaneLayout::Detailed));
+    assert_eq!(read.left.tabs[1].layout, Some(PaneLayout::Detailed));
+    assert_eq!(read.hotlist, state().hotlist);
+}

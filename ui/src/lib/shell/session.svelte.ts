@@ -36,7 +36,7 @@ export interface SessionParts {
 }
 
 /**
- * What survives a restart: both panes' tabs (folder and sort), their active tabs, the active pane and the
+ * What survives a restart: both panes' tabs (folder, sort and layout), their active tabs, the active pane and the
  * hotlist, the saved searches, the saved rename rules, the keys the user set and the preferences. {@link restore} runs once at startup, before any folder is opened; {@link watch} then saves every change
  * a moment after it, and once more when the page goes away.
  */
@@ -156,12 +156,13 @@ export class Session {
 
   #pane(tabs: PaneTabs): SavedPane | undefined {
     const saved = [];
-    for (const { path, sort } of tabs.state) {
+    for (const { path, sort, layout } of tabs.state) {
       if (path === null) {
         return undefined;
       }
 
-      saved.push({ path, sort: sort.column, desc: sort.desc });
+      // The detailed layout is the one a tab has when none is saved.
+      saved.push({ path, sort: sort.column, desc: sort.desc, ...(layout === 'detailed' ? {} : { layout }) });
     }
 
     return { tabs: saved, active: tabs.active };

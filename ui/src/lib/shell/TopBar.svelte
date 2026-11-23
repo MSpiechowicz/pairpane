@@ -1,12 +1,14 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
 
+  import type { PaneLayout } from '$lib/ipc/bindings/PaneLayout';
   import { displayName } from '$lib/panes/format';
 
   import FilesMenu from './FilesMenu.svelte';
   import type { FilesChoice } from './menu';
   import { keymap } from './keymap.svelte';
   import type { Theme } from './theme.svelte';
+  import ViewMenu from './ViewMenu.svelte';
 
   let {
     version,
@@ -14,6 +16,8 @@
     theme,
     nativeMenu,
     showHidden,
+    layout,
+    onLayout,
     onCheckForUpdates,
     onSettings,
     onEditSettings,
@@ -31,6 +35,10 @@
     nativeMenu: boolean;
     /** Whether the panes list hidden files. */
     showHidden: boolean;
+    /** How the active pane shows its folder. */
+    layout: PaneLayout;
+    /** An item of the View menu was chosen; it does what its key does. */
+    onLayout: (layout: PaneLayout) => void;
     onCheckForUpdates: () => void;
     /** "Settings…": the settings dialog (the palette opens it too). */
     onSettings: () => void;
@@ -50,10 +58,10 @@
   } = $props();
 
   /** The menus that hold nothing yet. */
-  const MENUS = ['Mark', 'Commands', 'Net', 'View'] as const;
+  const MENUS = ['Mark', 'Commands', 'Net'] as const;
   const THEME_LABEL = { system: 'System', light: 'Light', dark: 'Dark' } as const;
 
-  type Popup = 'files' | 'settings';
+  type Popup = 'files' | 'view' | 'settings';
 
   /** The popup that is open; opening one closes the other. */
   let open = $state<Popup | undefined>();
@@ -73,6 +81,11 @@
   function chooseFile(action: FilesChoice) {
     open = undefined;
     onFiles(action);
+  }
+
+  function chooseLayout(choice: PaneLayout) {
+    open = undefined;
+    onLayout(choice);
   }
 
   function closeOnOutside(event: MouseEvent) {
@@ -108,6 +121,10 @@
   <FilesMenu onChoose={chooseFile} />
 {/snippet}
 
+{#snippet viewMenu()}
+  <ViewMenu {layout} onChoose={chooseLayout} />
+{/snippet}
+
 {#snippet settings()}
   <div class="popup" role="menu">
     <button class="popup-item" type="button" role="menuitem" onclick={() => ((open = undefined), onSettings())}>Settings…</button>
@@ -135,6 +152,7 @@
     {#each MENUS as name (name)}
       <button class="placeholder" type="button">{name}</button>
     {/each}
+    {@render popup('view', 'View', viewMenu)}
     {@render popup('settings', 'Settings', settings)}
   </nav>
 
@@ -259,7 +277,7 @@
     text-overflow: ellipsis;
   }
 
-  /* The menus that hold nothing yet give way first; Files and Settings stay at every width. */
+  /* The menus that hold nothing yet give way first; Files, View and Settings stay at every width. */
   @media (max-width: 1100px) {
     .placeholder {
       display: none;

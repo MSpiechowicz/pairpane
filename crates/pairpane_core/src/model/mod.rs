@@ -44,7 +44,9 @@ pub use rename::{
     SavedRename,
 };
 pub use shell::{ShellEvent, ShellId};
-pub use state::{KeyChord, KeyOverride, Preferences, SavedPane, SavedState, SavedTab, SortColumn, ThemeChoice};
+pub use state::{
+    KeyChord, KeyOverride, PaneLayout, Preferences, SavedPane, SavedState, SavedTab, SortColumn, ThemeChoice,
+};
 pub use tasks::{AttributeChange, HashAlgorithm, ItemProperties, JobTask, ModeChange, WindowsAttributes};
 pub use update::{MAX_UPDATE_NOTES_BYTES, MenuCommand, UpdateInfo, UpdatePhase, UpdateProgress};
 pub use view::{

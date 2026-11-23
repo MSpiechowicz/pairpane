@@ -12,6 +12,7 @@
   import PaneRow from '$lib/panes/PaneRow.svelte';
   import type { PaneTabs } from '$lib/panes/tabs.svelte';
   import type { Volumes } from '$lib/panes/volumes.svelte';
+  import VirtualColumns from '$lib/panes/VirtualColumns.svelte';
   import VirtualRows from '$lib/panes/VirtualRows.svelte';
 
   import DriveMenu from './DriveMenu.svelte';
@@ -50,6 +51,7 @@
 
   const tracks = $derived(columnTracks(preferences.value));
   const view = $derived(tabs.view);
+  const brief = $derived(view.layout === 'brief');
   const listing = $derived(view.listing);
   const uid = $props.id();
   let list = $state<HTMLElement>();
@@ -166,7 +168,9 @@
     <HotlistMenu {tabs} {hotlist} onClose={closeMenu} />
   {/if}
 
-  <ColumnHeader {view} />
+  {#if !brief}
+    <ColumnHeader {view} />
+  {/if}
 
   <div class="rows">
     {#if listing.status === 'error'}
@@ -184,24 +188,29 @@
         {onclick}
         {ondblclick}
       >
+        {#snippet row(index: number)}
+          {@const entry = view.entryAt(index)}
+          <PaneRow
+            id="{uid}-{index}"
+            {index}
+            {entry}
+            {brief}
+            up={view.isUp(index)}
+            cursor={index === view.cursor}
+            selected={entry !== undefined && view.isSelected(entry.name)}
+            size={entry && view.sizes.text(entry)}
+            mark={entry && view.marks.get(entry.name)}
+            edit={editing !== undefined && entry?.name === editing.name ? rename : undefined}
+          />
+        {/snippet}
+
         <!-- A new folder starts at the top; a reload of the same folder keeps the scroll position. -->
         {#key listing.location}
-          <VirtualRows count={view.count} active={view.cursor} bind:pageSize>
-            {#snippet row(index)}
-              {@const entry = view.entryAt(index)}
-              <PaneRow
-                id="{uid}-{index}"
-                {index}
-                {entry}
-                up={view.isUp(index)}
-                cursor={index === view.cursor}
-                selected={entry !== undefined && view.isSelected(entry.name)}
-                size={entry && view.sizes.text(entry)}
-                mark={entry && view.marks.get(entry.name)}
-                edit={editing !== undefined && entry?.name === editing.name ? rename : undefined}
-              />
-            {/snippet}
-          </VirtualRows>
+          {#if brief}
+            <VirtualColumns count={view.count} active={view.cursor} bind:pageSize {row} />
+          {:else}
+            <VirtualRows count={view.count} active={view.cursor} bind:pageSize {row} />
+          {/if}
         {/key}
       </div>
       {#if listing.notice}

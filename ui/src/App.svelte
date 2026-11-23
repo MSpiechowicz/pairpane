@@ -330,6 +330,8 @@
     {theme}
     {nativeMenu}
     showHidden={preferences.value.showHidden}
+    layout={panes[active].view.layout}
+    onLayout={(layout) => (panes[active].view.layout = layout)}
     onCheckForUpdates={() => void updates.check(true)}
     onSettings={() => (dialog = 'settings')}
     onEditSettings={editSettings}

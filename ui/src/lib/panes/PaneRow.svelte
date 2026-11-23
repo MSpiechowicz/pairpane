@@ -17,6 +17,7 @@
     size,
     edit,
     mark,
+    brief = false,
   }: {
     id: string;
     /** The row number, for the list that handles the mouse for all its rows. */
@@ -32,14 +33,32 @@
     edit?: InlineRename;
     /** How the entry stands against the other pane's, after a comparison: a tint, and the same in words. */
     mark?: Mark;
+    /** The brief layout: the icon and the name alone, the extension written after the name, no other column. */
+    brief?: boolean;
   } = $props();
 
   const parts = $derived(entry ? splitName(entry) : undefined);
+  /** The columns the row has besides the name; the brief layout has none. */
+  const columns = $derived({
+    ext: !brief && preferences.value.showExt,
+    size: !brief && preferences.value.showSize,
+    modified: !brief && preferences.value.showModified,
+  });
+
+  /** The tooltip of a name: where a link points; in the brief layout the whole name, which its column may cut short. */
+  function tip(of: Entry): string | undefined {
+    if (of.linkTarget) {
+      return displayName(`${of.name} → ${of.linkTarget}`);
+    }
+
+    return brief ? displayName(of.name) : undefined;
+  }
 </script>
 
 <div
   {id}
   class="row {mark ? `mark-${mark}` : ''}"
+  class:brief
   class:cursor
   class:selected
   class:d={entry?.kind === 'dir'}
@@ -63,19 +82,19 @@
       <!-- The extension is written after the name wherever its own column is not on the screen (hidden by the settings,
         or the narrow layout), so that report.pdf and report.png never read as the same name. While the column is there, it
         is the one a screen reader reads. -->
-      <span class="nm" title={entry.linkTarget ? displayName(`${entry.name} → ${entry.linkTarget}`) : undefined}
-        >{displayName(parts.base)}{#if parts.ext}<span class="nx" class:shown={!preferences.value.showExt} aria-hidden={preferences.value.showExt}
+      <span class="nm" title={tip(entry)}
+        >{displayName(parts.base)}{#if parts.ext}<span class="nx" class:shown={!columns.ext} aria-hidden={columns.ext}
             >.{displayName(parts.ext)}</span
           >{/if}</span
       >
-      {#if preferences.value.showExt}
+      {#if columns.ext}
         <span class="ex">{displayName(parts.ext)}</span>
       {/if}
     {/if}
-    {#if preferences.value.showSize}
+    {#if columns.size}
       <span class="sz">{#if size !== undefined}{size}{:else}<span class="dirtag">DIR</span>{/if}</span>
     {/if}
-    {#if preferences.value.showModified}
+    {#if columns.modified}
       <span class="dt">{formatDate(entry.modified)}</span>
     {/if}
   {/if}
@@ -92,6 +111,12 @@
     border-left: 2px solid transparent;
     cursor: default;
     user-select: none;
+  }
+
+  /* The icon and the name alone. */
+  .row.brief {
+    --rename-end: 3;
+    grid-template-columns: 20px minmax(0, 1fr);
   }
 
   .row:hover {

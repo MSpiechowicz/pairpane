@@ -1,4 +1,5 @@
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
+import type { PaneLayout } from '$lib/ipc/bindings/PaneLayout';
 import type { SavedTab } from '$lib/ipc/bindings/SavedTab';
 import type { Transport } from '$lib/ipc/transport';
 
@@ -20,14 +21,16 @@ export interface Tab {
   /** Where the tab was last left; `null`: the home folder. For the active tab the live folder is `view.listing.folder`. */
   path: string | null;
   sort: TabSort;
+  layout: PaneLayout;
   back: string[];
   forward: string[];
 }
 
-/** The folder and sort of a tab as they are now (the active tab's live ones included). */
+/** The folder, sort and layout of a tab as they are now (the active tab's live ones included). */
 export interface TabState {
   path: string | null;
   sort: TabSort;
+  layout: PaneLayout;
 }
 
 /** How the pane got to the folder that is being opened, so that only real navigation is added to the history. */
@@ -35,7 +38,7 @@ type Move = 'back' | 'forward' | 'switch';
 
 /**
  * One side's tabs. The side keeps a single {@link PaneView} (the backend lists and watches one folder per side), so
- * switching tabs re-opens the folder of the tab and restores its sort. Each tab has its own back and forward
+ * switching tabs re-opens the folder of the tab and restores its sort and layout. Each tab has its own back and forward
  * history; the history is recorded when a folder is listed, whoever asked for it (a click, the keyboard, a
  * crumb), except for the moves that walk the history itself and for tab switches.
  */
@@ -80,11 +83,11 @@ export class PaneTabs {
       onNotice: () => this.#refused(),
       showHidden: hooks.showHidden,
     });
-    this.#tabs = [this.#create(null, { column: 'name', desc: false })];
+    this.#tabs = [this.#create(null, { column: 'name', desc: false }, 'detailed')];
   }
 
-  #create(path: string | null, sort: TabSort): Tab {
-    return { id: this.#nextId++, path, sort, back: [], forward: [] };
+  #create(path: string | null, sort: TabSort, layout: PaneLayout): Tab {
+    return { id: this.#nextId++, path, sort, layout, back: [], forward: [] };
   }
 
   get tabs(): readonly Tab[] {
@@ -114,10 +117,10 @@ export class PaneTabs {
     return tabs.flatMap((tab) => [...tab.back].reverse().concat([...tab.forward].reverse()));
   }
 
-  /** Every tab's folder and sort, the active one's as shown now. Reactive. */
+  /** Every tab's folder, sort and layout, the active one's as shown now. Reactive. */
   get state(): TabState[] {
     return this.tabs.map((tab, index) =>
-      index === this.#active ? this.#live(tab) : { path: tab.path, sort: tab.sort },
+      index === this.#active ? this.#live(tab) : { path: tab.path, sort: tab.sort, layout: tab.layout },
     );
   }
 
@@ -126,6 +129,7 @@ export class PaneTabs {
     return {
       path: this.#entering ? tab.path : (this.view.listing.folder ?? tab.path),
       sort: { column: this.view.column, desc: this.view.desc },
+      layout: this.view.layout,
     };
   }
 
@@ -141,7 +145,10 @@ export class PaneTabs {
    * the home folder.
    */
   restore(saved: readonly SavedTab[], active: number) {
-    const tabs = saved.slice(0, MAX_TABS).map((tab) => this.#create(tab.path, { column: tab.sort, desc: tab.desc }));
+    // A tab saved before layouts existed has none: it is shown in detail.
+    const tabs = saved
+      .slice(0, MAX_TABS)
+      .map((tab) => this.#create(tab.path, { column: tab.sort, desc: tab.desc }, tab.layout ?? 'detailed'));
     if (tabs.length > 0) {
       this.#tabs = tabs;
       this.#active = Math.min(Math.max(active, 0), tabs.length - 1);
@@ -165,15 +172,15 @@ export class PaneTabs {
     this.#go(null, 'switch');
   }
 
-  /** Adds a tab showing the current folder, after the active one, and makes it the active one. */
+  /** Adds a tab showing the current folder, after the active one, and makes it the active one. It copies the sort and layout. */
   add(): boolean {
     if (this.#tabs.length >= MAX_TABS) {
       return false;
     }
 
     this.#leave();
-    const { path, sort } = this.#tabs[this.#active];
-    this.#tabs.splice(this.#active + 1, 0, this.#create(path, { ...sort }));
+    const { path, sort, layout } = this.#tabs[this.#active];
+    this.#tabs.splice(this.#active + 1, 0, this.#create(path, { ...sort }, layout));
     this.#active += 1;
     this.#touch();
     // A move of the tab it copies that has not listed yet is that tab's: the new one opens its folder itself, so
@@ -206,7 +213,7 @@ export class PaneTabs {
     return true;
   }
 
-  /** Makes the tab the active one: its folder is opened and its sort applied. */
+  /** Makes the tab the active one: its folder is opened and its sort and layout applied. */
   select(index: number) {
     if (index === this.#active || index < 0 || index >= this.#tabs.length) {
       return;
@@ -228,24 +235,26 @@ export class PaneTabs {
   }
 
   /**
-   * The active tab is about to stop being it: it keeps the sort the pane shows and the folder it is at, or the one
+   * The active tab is about to stop being it: it keeps the sort and layout the pane shows and the folder it is at, or the one
    * a back or forward move not listed yet takes it to (that move's step goes into its history now).
    */
   #leave() {
     this.#settle();
     const tab = this.#current;
-    const { path, sort } = this.#live(tab);
+    const { path, sort, layout } = this.#live(tab);
     tab.path = this.#route ?? path;
     tab.sort = sort;
+    tab.layout = layout;
   }
 
   /**
-   * Shows the active tab: its sort at once, its folder when it is listed. Not a step of its history. `home`: a
+   * Shows the active tab: its sort and layout at once, its folder when it is listed. Not a step of its history. `home`: a
    * folder that cannot be opened is replaced by the home folder.
    */
   #enter(home: boolean) {
     const tab = this.#current;
     this.view.restoreSort(tab.sort.column, tab.sort.desc);
+    this.view.layout = tab.layout;
     this.#go(tab.path, 'switch');
     this.#entering = true;
     this.#homing = home;
