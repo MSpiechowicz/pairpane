@@ -9,6 +9,9 @@ ignore = [
   { id = "RUSTSEC-2026-0370", reason = "zvariant, transitive via tauri plugins -> zbus; unmaintained, no vulnerability" },
   { id = "RUSTSEC-2026-0371", reason = "zbus_names, transitive via tauri plugins -> zbus; unmaintained, no vulnerability" },
   { id = "RUSTSEC-2026-0372", reason = "zvariant_derive, transitive via tauri plugins -> zbus; unmaintained, no vulnerability" },
+  # cookie 0.18: private cookie nonces can repeat after a fork. Pulled in only by tauri, tauri-runtime and wry, which
+  # require ^0.18; the app never uses cookie's PrivateJar. Drop this once Tauri moves to a fixed cookie.
+  { id = "RUSTSEC-2026-0594", reason = "cookie 0.18, transitive via tauri/wry (^0.18); PrivateJar is never used by the app" },
 ]
 
 [licenses]

@@ -1,3 +1,10 @@
+# [0.22.0](https://github.com/MSpiechowicz/pairpane/compare/v0.21.0...v0.22.0) (2026-11-23)
+
+
+### Features
+
+* **sync:** synchronize into archives (#46) ([565f499](https://github.com/MSpiechowicz/pairpane/commit/565f4998c8aa5e24d87f17ed9b1943160606aacc)), closes [#40](https://github.com/MSpiechowicz/pairpane/issues/40)
+
 # [0.21.0](https://github.com/MSpiechowicz/pairpane/compare/v0.20.0...v0.21.0) (2026-11-23)
 
 
