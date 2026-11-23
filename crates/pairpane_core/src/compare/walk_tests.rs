@@ -118,6 +118,8 @@ fn hidden_entries_are_left_out_unless_asked_for() {
     put(left.path(), ".secret", b"1", 10_000);
     put(left.path(), ".dir/inside.txt", b"1", 10_000);
     put(left.path(), "shown.txt", b"1", 10_000);
+    // What a synchronization keeps for its undo is never listed, hidden entries shown or not.
+    put(left.path(), ".pairpane-sync-3-1700000000000/1", b"old", 10_000);
     let hidden = CompareOptions {
         hidden: true,
         ..plain()

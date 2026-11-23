@@ -53,16 +53,11 @@ impl RenameUndo {
     /// engine (too many jobs) leaves the slot too, so the page can try again.
     pub(super) fn undo(&self, engine: &Engine, job: JobId) -> CommandResult<JobId> {
         let mut slot = self.lock();
-        let Some(pending) = slot.as_ref().filter(|pending| pending.job == job) else {
-            return Err(nothing());
-        };
-
-        if !pending.log.finished() {
-            return Err(CommandError::new(
-                IpcErrorCode::InvalidInput,
-                "The rename is still running.",
-            ));
-        }
+        let pending = over(
+            slot.as_ref().filter(|pending| pending.job == job),
+            |pending| pending.log.finished(),
+            "The rename is still running.",
+        )?;
 
         let done = pending.log.done();
         if done.is_empty() {
@@ -94,7 +89,22 @@ impl RenameUndo {
     }
 }
 
-fn nothing() -> CommandError {
+/// The job in a slot that is asked to be undone, when it is over: not found when there is none (`pending`), and invalid
+/// input with `running` while it still runs.
+pub(super) fn over<'p, P>(
+    pending: Option<&'p P>,
+    finished: impl Fn(&P) -> bool,
+    running: &str,
+) -> CommandResult<&'p P> {
+    let pending = pending.ok_or_else(nothing)?;
+    if !finished(pending) {
+        return Err(CommandError::new(IpcErrorCode::InvalidInput, running));
+    }
+
+    Ok(pending)
+}
+
+pub(super) fn nothing() -> CommandError {
     CommandError::new(IpcErrorCode::NotFound, "Nothing to undo.")
 }
 

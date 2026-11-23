@@ -105,6 +105,7 @@ fn a_copy_into_an_archive_that_is_not_written_and_two_archives_are_refused_when_
                 plans: vec![plan],
                 removals: Vec::new(),
                 permanent: false,
+                log: super::SyncLog::default(),
             },
         ))
     };

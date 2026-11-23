@@ -55,9 +55,24 @@ impl Run<'_> {
             plans,
             removals,
             permanent,
+            log,
         } = task
         {
-            return self.sync(left, right, plans, removals, *permanent);
+            // The log is finished however the job ends, a panic included: its holding folders then go when released.
+            struct Finish<'l>(&'l super::SyncLog);
+            impl Drop for Finish<'_> {
+                fn drop(&mut self) {
+                    self.0.finish(super::sync_aside::now_millis());
+                }
+            }
+
+            let _finish = Finish(log);
+
+            return self.sync((left, right), plans, (removals, *permanent), log);
+        }
+
+        if let Task::SyncUndo { log } = task {
+            return self.sync_undo(log);
         }
 
         let scene = self.prepare_task(task)?;
@@ -73,7 +88,8 @@ impl Run<'_> {
             | Task::Pack { .. }
             | Task::AddToArchive { .. }
             | Task::Rename { .. }
-            | Task::Sync { .. } => {
+            | Task::Sync { .. }
+            | Task::SyncUndo { .. } => {
                 Err(refusal(io::ErrorKind::InvalidInput, "this job cannot start with these items").into())
             }
         }

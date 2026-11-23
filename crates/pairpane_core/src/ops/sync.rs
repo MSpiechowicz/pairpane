@@ -17,6 +17,7 @@
 //! whole, the steps go by path, the race the other copies document. Items from an archive are in `sync_archive`; copies into
 //! an archive and removals from one are applied in one rewrite of it (`sync_into`), after the copies out of it.
 
+use std::collections::HashSet;
 use std::fs::{self, Metadata};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -30,7 +31,7 @@ use super::report::refusal;
 use super::sync_remove::Removal;
 use super::sync_terms::{Terms, seen_at};
 use super::transfer::{Run, Stop};
-use super::{SyncPlan, SyncRemove, SyncRoot};
+use super::{SyncLog, SyncPlan, SyncRemove, SyncRoot};
 
 /// An archive that items are copied from, and where it is.
 pub(super) struct ArchiveSide<'a> {
@@ -67,11 +68,10 @@ impl Run<'_> {
     /// so a job that is cancelled or fails has removed nothing it had not copied first.
     pub(super) fn sync(
         &mut self,
-        left: &SyncRoot,
-        right: &SyncRoot,
+        (left, right): (&SyncRoot, &SyncRoot),
         plans: &[SyncPlan],
-        removals: &[SyncRemove],
-        permanent: bool,
+        (removals, permanent): (&[SyncRemove], bool),
+        log: &SyncLog,
     ) -> Result<(), Stop> {
         let job = self.job;
         let request = &job.request;
@@ -117,8 +117,12 @@ impl Run<'_> {
 
             match source {
                 Side::Disk(root) => {
+                    let before = self.before_item(log, target, rel, plan);
                     let done = self.sync_item(root, target, rel, plan);
-                    self.settle(rel, done)?;
+                    let settled = self.settle(rel, done);
+                    // Written down even when the job stops here: a cancel can come after the item is in place.
+                    self.after_item(log, (target, rel), plan, before, None);
+                    settled?;
                 }
                 Side::Archive(archive) => from_archive.push((archive, target, rel, plan)),
             }
@@ -130,7 +134,16 @@ impl Run<'_> {
                 .map(|(_, _, rel, plan)| (*rel, *plan))
                 .collect::<Vec<_>>();
 
-            self.sync_from_archive(archive, target, &rows)?;
+            let before: Vec<_> = rows
+                .iter()
+                .map(|(rel, plan)| self.before_item(log, target, rel, plan))
+                .collect();
+            let mut wrote = HashSet::new();
+            let extracted = self.sync_from_archive(archive, target, &rows, &mut wrote);
+            for ((rel, plan), before) in rows.iter().zip(before) {
+                self.after_item(log, (target, rel), plan, before, Some(wrote.contains(rel)));
+            }
+            extracted?;
         }
 
         let names_of_removals = &request.names[plans.len().min(request.names.len())..];

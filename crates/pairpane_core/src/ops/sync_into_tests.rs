@@ -95,6 +95,7 @@ fn run(root: &Path, inner: &str, (copies, removals): (&[CopyRow], &[RemoveRow]),
             plans: copies.iter().map(|(_, plan)| *plan).collect(),
             removals: removals.iter().map(|(_, removal)| *removal).collect(),
             permanent: false,
+            log: super::SyncLog::default(),
         },
     );
 
@@ -266,6 +267,7 @@ fn copy_from(root: &Path, disk: &Path, rel: &str) -> super::Request {
             }],
             removals: Vec::new(),
             permanent: false,
+            log: super::SyncLog::default(),
         },
     )
 }

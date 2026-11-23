@@ -278,6 +278,11 @@ impl Run<'_> {
         Ok(())
     }
 
+    /// How many items failed so far.
+    pub(super) fn failures(&self) -> usize {
+        self.errors.len().saturating_add(self.more_errors as usize)
+    }
+
     /// Records that the item at `rel` failed; the job goes on.
     pub(super) fn fail(&mut self, rel: &str, error: &io::Error) {
         if self.errors.len() >= MAX_REPORTED_ERRORS {

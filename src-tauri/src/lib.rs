@@ -114,6 +114,7 @@ pub fn run() -> ExitCode {
             commands::ops::ops_rename,
             commands::ops::tasks::ops_task,
             commands::ops::ops_rename_undo,
+            commands::ops::ops_sync_undo,
             commands::compare::ops_sync,
             commands::renames::rename_preview,
             commands::items::ops_trash,

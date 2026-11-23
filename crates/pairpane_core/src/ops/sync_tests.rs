@@ -62,6 +62,7 @@ pub(super) fn with_plans(left: &Path, right: &Path, rels: &[&str], plans: Vec<Sy
             plans,
             removals: Vec::new(),
             permanent: false,
+            log: super::SyncLog::default(),
         },
     )
 }

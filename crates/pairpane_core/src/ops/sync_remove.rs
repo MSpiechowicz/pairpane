@@ -65,15 +65,15 @@ pub(super) struct Removal<'a> {
 const TIME_SLACK: i64 = 2_000;
 
 /// The folder of a side, held open for the whole job, and where it really is.
-struct Root {
-    path: PathBuf,
+pub(super) struct Root {
+    pub(super) path: PathBuf,
     real: PathBuf,
-    held: Held,
+    pub(super) held: Held,
 }
 
 impl Root {
     /// Opens the side's folder `path`; on Unix the path, resolved, must name the folder that was opened.
-    fn open(path: &Path) -> io::Result<Self> {
+    pub(super) fn open(path: &Path) -> io::Result<Self> {
         let root = Self {
             path: path.to_owned(),
             real: real(path)?,
@@ -98,7 +98,7 @@ impl Root {
 }
 
 /// The archive of the other side, when it is one: where it is, and (Unix) what it is.
-struct Archive {
+pub(super) struct Archive {
     real: PathBuf,
     #[cfg(unix)]
     id: Option<(u64, u64)>,
@@ -231,7 +231,7 @@ impl Run<'_> {
                 &held,
                 (node.device, &self.inner.hooks),
                 depth,
-                (since, archive),
+                (Since::any(since), archive),
                 &mut found,
             )?
             .is_none()
@@ -245,7 +245,7 @@ impl Run<'_> {
         }
 
         if permanent {
-            self.remove_held(folder, &node, since)?;
+            self.remove_held(folder, &node, Since::any(since))?;
         } else if self.inner.hooks.refuse_trash {
             return Err(refusal(io::ErrorKind::Unsupported, "the system could not move it to the Trash").into());
         } else {
@@ -278,7 +278,11 @@ fn too_many_open(stop: Stop) -> Stop {
 /// Enters the folders `parents` below `root`, each from the one above with no link followed: the last of them (`None` for
 /// the root itself) and its path. `Ok(None)` when one is gone or is not a folder now. `before` is a test's, run between
 /// the look at a folder and its open.
-fn enter(root: &Root, parents: &str, before: Option<&OpenHook>) -> io::Result<Option<(Option<Held>, PathBuf)>> {
+pub(super) fn enter(
+    root: &Root,
+    parents: &str,
+    before: Option<&OpenHook>,
+) -> io::Result<Option<(Option<Held>, PathBuf)>> {
     let mut held: Option<Held> = None;
     let mut path = root.path.clone();
     let mut walked = String::new();
@@ -327,8 +331,35 @@ pub(super) fn is_newer(node: &Node, since: i64) -> bool {
     node.modified.is_none_or(|time| time > since) || node.changed.is_some_and(|time| time > since)
 }
 
+/// After when nothing may have changed in what is removed, and by which times that is told.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Since {
+    pub(super) time: i64,
+    /// Only the change time tells (Unix `ctime`, which a copy that keeps the source's time does not keep): a file may say
+    /// it is from any time. Where there is no change time (Windows) the modification time tells after all.
+    pub(super) changes_only: bool,
+}
+
+impl Since {
+    /// Both times tell (see [`is_newer`]).
+    pub(super) fn any(time: i64) -> Self {
+        Self {
+            time,
+            changes_only: false,
+        }
+    }
+
+    /// Whether `node` changed after this.
+    pub(super) fn sees(self, node: &Node) -> bool {
+        match node.changed {
+            Some(changed) if self.changes_only => changed > self.time,
+            _ => is_newer(node, self.time),
+        }
+    }
+}
+
 /// The device of the folder `held` (Unix); `None` on Windows, where it is not looked at.
-fn device_of(held: &Held) -> io::Result<Option<u64>> {
+pub(super) fn device_of(held: &Held) -> io::Result<Option<u64>> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -346,11 +377,11 @@ fn device_of(held: &Held) -> io::Result<Option<u64>> {
 
 /// What a folder holds, all of it.
 #[derive(Default)]
-struct Survey {
-    files: u64,
-    bytes: u64,
+pub(super) struct Survey {
+    pub(super) files: u64,
+    pub(super) bytes: u64,
     /// A folder in it is the top of another mounted drive.
-    mount: bool,
+    pub(super) mount: bool,
 }
 
 /// Walks the folder `held` (on `device`, `depth` levels down the compared folders) by handle, depth first, holding only the
@@ -358,11 +389,11 @@ struct Survey {
 /// counted as nothing and never followed), and whether it holds a mount. `Ok(None)` when it is not as the scan saw it:
 /// deeper than the scan goes, an entry left out of a listing, anything modified or changed after `since`, or the archive
 /// compared (`archive`) in it. A folder that cannot be read fails the walk.
-fn survey(
+pub(super) fn survey(
     held: &Held,
     (device, hooks): (Option<u64>, &Hooks),
     depth: usize,
-    (since, archive): (i64, Option<&Archive>),
+    (since, archive): (Since, Option<&Archive>),
     found: &mut Survey,
 ) -> io::Result<Option<()>> {
     let entries = held.entries()?;
@@ -374,7 +405,7 @@ fn survey(
     }
 
     for entry in entries.nodes {
-        if is_newer(&entry, since) || archive.is_some_and(|archive| archive.is(&entry)) {
+        if since.sees(&entry) || archive.is_some_and(|archive| archive.is(&entry)) {
             return Ok(None);
         }
 

@@ -101,10 +101,12 @@
     }
 
     files.renames.ended(job, result);
+    files.syncs.ended(job, result);
   });
   let panelOpen = $state(false);
   const files = new FileActions(ipc, panes, () => active);
   const comparison = new Comparison(ipc, panes, (text, error) => files.say(text, error), () => showHidden);
+  comparison.syncer.onQueued = (job, undoable) => files.syncs.expect(job, undoable);
   const viewer = new Viewer(ipc, panes, () => active);
   // The editor and the diff both hold text that is not saved: the backend hears of the two as one.
   const unsaved = new Unsaved(ipc);

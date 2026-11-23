@@ -42,6 +42,7 @@
     addToArchive: 'Add to archive',
     rename: 'Rename',
     sync: 'Synchronize',
+    syncUndo: 'Undo synchronize',
   } as const;
 
   /** The jobs that put things into a folder of their own: the row says where. */

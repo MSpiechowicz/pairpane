@@ -12,7 +12,7 @@ use super::plan::Kind;
 #[cfg(unix)]
 use super::report::refusal;
 #[cfg(unix)]
-use super::sync_remove::{HOLDS_A_MOUNT, is_mount, is_newer};
+use super::sync_remove::{HOLDS_A_MOUNT, Since, is_mount};
 #[cfg(unix)]
 use super::transfer::MAX_DEPTH;
 use super::transfer::{Run, Stop};
@@ -27,7 +27,7 @@ fn changed_meanwhile() -> io::Error {
 impl Run<'_> {
     /// Removes `node` of `folder` for good, through handles: a file or a link alone (when it is still that entry), a folder
     /// with all that is in it, entered from its folder with no link followed (see [`Run::empty_held`]).
-    pub(super) fn remove_held(&mut self, folder: &Held, node: &Node, since: i64) -> Result<(), Stop> {
+    pub(super) fn remove_held(&mut self, folder: &Held, node: &Node, since: Since) -> Result<(), Stop> {
         use rustix::fs::{AtFlags, statat, unlinkat};
 
         if node.kind == Kind::Dir {
@@ -53,7 +53,7 @@ impl Run<'_> {
         &mut self,
         held: &Held,
         device: Option<u64>,
-        (depth, since): (usize, i64),
+        (depth, since): (usize, Since),
         unlinked: &mut HashSet<(u64, u64)>,
     ) -> Result<(), Stop> {
         use rustix::fs::{AtFlags, unlinkat};
@@ -67,9 +67,9 @@ impl Run<'_> {
         for entry in entries.nodes {
             let ours = entry.id.is_some_and(|id| unlinked.contains(&id));
             let newer = if ours {
-                entry.modified.is_none_or(|time| time > since)
+                entry.modified.is_none_or(|time| time > since.time)
             } else {
-                is_newer(&entry, since)
+                since.sees(&entry)
             };
             if newer {
                 return Err(changed_meanwhile().into());
@@ -99,7 +99,7 @@ impl Run<'_> {
 #[cfg(windows)]
 impl Run<'_> {
     /// Removes `node` for good by its path: the system's removal never enters a mounted volume or a link (see `delete`).
-    pub(super) fn remove_held(&mut self, _folder: &Held, node: &Node, _since: i64) -> Result<(), Stop> {
+    pub(super) fn remove_held(&mut self, _folder: &Held, node: &Node, _since: Since) -> Result<(), Stop> {
         Ok(super::delete::remove(&node.path)?)
     }
 }

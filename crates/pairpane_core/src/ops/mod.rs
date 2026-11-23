@@ -143,9 +143,13 @@ mod runnable;
 mod split;
 mod sync;
 mod sync_archive;
+mod sync_aside;
+mod sync_holding;
 mod sync_into;
+mod sync_log;
 mod sync_remove;
 mod sync_terms;
+mod sync_undo;
 mod sync_unlink;
 #[cfg(unix)]
 mod sync_write;
@@ -261,6 +265,8 @@ mod sync_remove_tests;
 #[cfg(test)]
 mod sync_tests;
 #[cfg(test)]
+mod sync_undo_tests;
+#[cfg(test)]
 mod testing;
 #[cfg(test)]
 mod transfer_tests;
@@ -277,6 +283,8 @@ pub(crate) use partial::{Partial, run_token};
 pub(crate) use plan::{Child, Kind, is_inside, read_children, real};
 pub use rename_log::RenameLog;
 pub use request::{AnswerError, PackJob, Refused, Request, SyncPlan, SyncRemove, SyncRoot, Task, UnknownJob};
+pub use sync_aside::HOLDING_PREFIX;
+pub use sync_log::SyncLog;
 pub(crate) use transfer::MAX_DEPTH;
 pub use trash::{CAN_UNTRASH, Trashed, UntrashFailure};
 pub(crate) use validate::fold_case;

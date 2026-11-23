@@ -26,6 +26,7 @@ use tauri::ipc::Channel;
 
 use self::extractions::Extractions;
 use self::rename_undo::RenameUndo;
+use self::sync_undo::SyncUndo;
 use super::limit::{Permit, ThreadCap};
 use super::panes::resolve;
 use super::within::{Within, confirm};
@@ -52,6 +53,7 @@ pub struct Ops {
     listener: Listener,
     extractions: Arc<Extractions>,
     rename_undo: RenameUndo,
+    sync_undo: SyncUndo,
     renames: ThreadCap,
     guards: ThreadCap,
 }
@@ -76,6 +78,7 @@ impl Default for Ops {
             listener,
             extractions,
             rename_undo: RenameUndo::default(),
+            sync_undo: SyncUndo::default(),
             renames: ThreadCap::default(),
             guards: ThreadCap::default(),
         }
@@ -100,6 +103,8 @@ impl Ops {
     /// file and the folders it made. A job stuck on a folder that does not answer is left behind.
     pub fn shutdown(&self) {
         self.engine.shutdown(SHUTDOWN_WAIT);
+        // The sync that could be undone is over by now (or left behind): the files it kept go.
+        self.sync_undo.shut_down();
     }
 
     /// Validates the request, checks the folder of search results when `within` says so, then queues it. Touches no disk
@@ -213,6 +218,15 @@ pub async fn ops_rename(ops: State<'_, Ops>, path: String, from: String, to: Str
 #[tauri::command]
 pub async fn ops_rename_undo(ops: State<'_, Ops>, job: JobId) -> CommandResult<JobId> {
     ops.rename_undo.undo(&ops.engine, job)
+}
+
+/// Puts back the last synchronization, which the job `job` was (the id `ops_sync` returned), and returns the id of the job
+/// that does it: the files it replaced come back and what it made goes, each only while it is still what the sync left
+/// (the rest is skipped and counted). Not found when `job` is not the most recent sync, was undone already or did nothing
+/// that can be undone; invalid input while it still runs.
+#[tauri::command]
+pub async fn ops_sync_undo(ops: State<'_, Ops>, job: JobId) -> CommandResult<JobId> {
+    ops.sync_undo.undo(&ops.engine, job)
 }
 
 /// Checks a request from the webview and builds the engine's: both folders pass `check_folder`, and the names pass
@@ -370,6 +384,7 @@ mod extractions;
 pub mod pack;
 mod rename_undo;
 mod sync;
+mod sync_undo;
 pub mod tasks;
 
 #[cfg(test)]

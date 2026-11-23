@@ -90,6 +90,11 @@ pub(super) fn validate(request: &Request) -> Result<(), Refused> {
         if has_nested_names(&request.names) {
             return Err(Refused::InvalidNames);
         }
+    } else if matches!(request.task, Task::SyncUndo { .. }) {
+        // The names are the log's own paths, below two folders: one may be inside another, and appear on both sides.
+        if !request.names.iter().all(|name| is_sync_path(name)) {
+            return Err(Refused::InvalidNames);
+        }
     } else if matches!(request.task, Task::Sync { .. }) {
         check_names_with(&request.names, is_sync_path)?;
 
@@ -220,6 +225,8 @@ fn validate_task(request: &Request) -> Result<(), Refused> {
             removals,
             ..
         } => sync_acceptable(left, right, plans, removals, request.names.len()),
+        // Only a synchronization that is over is undone, and the names are what its log looks at.
+        Task::SyncUndo { log } => log.finished() && log.undoable() == request.names.len(),
     };
 
     if accepted { Ok(()) } else { Err(Refused::InvalidTask) }
