@@ -126,6 +126,7 @@ pub fn run() -> ExitCode {
             commands::items::props::ops_properties,
             commands::view::view_open,
             commands::view::archive_entry::archive_view_open,
+            commands::view::archive_entry::archive_edit_open,
             commands::view::view_close,
             commands::view::read::view_bytes,
             commands::view::read::view_text,

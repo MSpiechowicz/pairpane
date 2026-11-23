@@ -45,6 +45,7 @@
     "allow-ops-properties",
     "allow-view-open",
     "allow-archive-view-open",
+    "allow-archive-edit-open",
     "allow-view-close",
     "allow-view-bytes",
     "allow-view-text",

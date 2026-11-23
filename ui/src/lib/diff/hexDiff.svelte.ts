@@ -47,8 +47,8 @@ export class HexDiff {
 
   constructor(ipc: Transport, left: Target, right: Target) {
     this.#ipc = ipc;
-    this.left = new ViewSession(ipc, left.path, left.name);
-    this.right = new ViewSession(ipc, right.path, right.name);
+    this.left = new ViewSession(ipc, left.path, left.name, undefined, left.inside);
+    this.right = new ViewSession(ipc, right.path, right.name, undefined, right.inside);
 
     const extent = () => this.size;
     this.lead = new Leading(this.left, extent);

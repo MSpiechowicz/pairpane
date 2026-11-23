@@ -13,8 +13,9 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use pairpane_core::archive::{self, Flow, MAX_VIEW_ENTRY, MIN_FREE_RESERVE, PasswordFault};
+use pairpane_core::edit::{self, MAX_EDIT};
 use pairpane_core::listing::platform;
-use pairpane_core::model::{IpcError, IpcErrorCode, ViewOpened};
+use pairpane_core::model::{EditOpened, IpcError, IpcErrorCode, ViewOpened};
 use pairpane_core::ops::name_fits;
 use pairpane_core::view::{self as files, Opened, refusal};
 use tauri::State;
@@ -28,6 +29,8 @@ use crate::error::{CommandError, CommandResult};
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 
+#[cfg(test)]
+mod edit_tests;
 #[cfg(test)]
 mod tests;
 
@@ -52,6 +55,62 @@ pub async fn archive_view_open(
     viewer.open_archive_entry(&archives, archive, dir, name).await
 }
 
+/// Reads the file `name` of the folder `dir` of the archive `archive` as text for a comparison, in the encoding `encoding`
+/// labels or the one found from it: read-only, as an archive is never written from the editor. Refused as
+/// `archive_view_open` refuses; one bigger than the editor takes is `tooLarge`. Read into memory, never onto the disk.
+#[tauri::command]
+pub async fn archive_edit_open(
+    archives: State<'_, Archives>,
+    archive: String,
+    dir: String,
+    name: String,
+    encoding: Option<String>,
+) -> CommandResult<EditOpened> {
+    edit_entry(&archives, (archive, dir, name), encoding, MAX_EDIT as u64).await
+}
+
+/// [`archive_edit_open`] for entries of at most `most` bytes.
+async fn edit_entry(
+    archives: &Archives,
+    (archive, dir, name): (String, String, String),
+    encoding: Option<String>,
+    most: u64,
+) -> CommandResult<EditOpened> {
+    let target = checked(archive, &dir, &name)?;
+    let permit = archives.begin()?;
+    let shared = archives.clone();
+
+    let read = blocking(permit, move || {
+        read_entry(&shared, &target, (&dir, &name), most).map(|bytes| (bytes, name))
+    })
+    .await?
+    .map_err(failed)?;
+
+    match read {
+        (Some(bytes), name) => {
+            edit::open_bytes(&name, &bytes, encoding.as_deref()).map_err(|error| failed(archive_error(&error)))
+        }
+        (None, _) => Ok(EditOpened::TooLarge { size: most + 1 }),
+    }
+}
+
+/// The archive of `archive`, when the folder `dir` and the name `name` in it pass the checks of a request.
+fn checked(archive: String, dir: &str, name: &str) -> CommandResult<Target> {
+    let target = Target::parse(archive)?;
+    check_inner(dir)?;
+    if !name_fits(name) {
+        return Err(names_too_large());
+    }
+    if !platform::is_plain_name(name) {
+        return Err(CommandError::new(
+            IpcErrorCode::InvalidInput,
+            "an item name must be a single plain name",
+        ));
+    }
+
+    Ok(target)
+}
+
 impl Viewer {
     /// Checks the arguments, extracts the entry on a blocking thread and starts a session on it.
     pub(super) async fn open_archive_entry(
@@ -61,18 +120,7 @@ impl Viewer {
         dir: String,
         name: String,
     ) -> CommandResult<ViewOpened> {
-        let target = Target::parse(archive)?;
-        check_inner(&dir)?;
-        if !name_fits(&name) {
-            return Err(names_too_large());
-        }
-        if !platform::is_plain_name(&name) {
-            return Err(CommandError::new(
-                IpcErrorCode::InvalidInput,
-                "an item name must be a single plain name",
-            ));
-        }
-
+        let target = checked(archive, &dir, &name)?;
         let permit = archives.begin()?;
         let shared = archives.clone();
         let opened = blocking(permit, move || open_entry(&shared, &target, &dir, &name))
@@ -83,8 +131,10 @@ impl Viewer {
     }
 }
 
-/// Extracts the entry into a private temporary file, opens it for the viewer and deletes it.
-fn open_entry(archives: &Archives, target: &Target, dir: &str, name: &str) -> Result<Opened, IpcError> {
+/// The file entry `name` of the folder `dir` of the archive, found in its index, with the archive opened and its password:
+/// what both a session of the viewer and a text for a comparison read. A folder, a link, a name the archive code refuses
+/// and an encrypted entry with no password are refused.
+fn find_entry(archives: &Archives, target: &Target, dir: &str, name: &str) -> Result<Found, IpcError> {
     let opened = archives.open(target).map_err(|error| archive_error(&error))?;
     let index = archives
         .index(target, &opened, archives.stop(), None)
@@ -94,34 +144,53 @@ fn open_entry(archives: &Archives, target: &Target, dir: &str, name: &str) -> Re
         .find(dir, name)
         .ok_or_else(|| IpcError::new(IpcErrorCode::NotFound, "the file is not in the archive"))?;
     let entry = match found.entry {
-        Some(entry) if !found.dir => entry,
+        Some(entry) if !found.dir => entry.clone(),
         _ => return Err(not_a_file(found.dir)),
     };
     if !entry.writable() || entry.kind != archive::EntryType::File {
         return Err(not_a_file(false));
     }
 
-    let password = archives.password(&target.path);
-    if entry.encrypted && password.is_none() {
+    let secret = archives.password(&target.path);
+    if entry.encrypted && secret.is_none() {
         return Err(archive_error(&archive::password_error(PasswordFault::Needed)));
     }
-    if entry.size > MAX_VIEW_ENTRY {
-        return Err(IpcError::new(IpcErrorCode::InvalidInput, TOO_BIG));
-    }
 
-    if !has_room(platform::free_space(&std::env::temp_dir()), entry.size) {
-        return Err(IpcError::new(IpcErrorCode::Io, NO_ROOM));
-    }
+    Ok(Found {
+        opened,
+        index,
+        entry,
+        secret,
+    })
+}
 
-    let scratch = Scratch::create(name).map_err(|error| archive_error(&error))?;
-    let mut file = scratch.open_file().map_err(|error| archive_error(&error))?;
-    let mut source = archive::open_source(&index, &opened.input(), archives.stop(), password.as_deref())
-        .map_err(|error| archives.report(target, &error))?;
+/// An entry found in its archive (see [`find_entry`]).
+struct Found {
+    opened: crate::commands::archives::Opened,
+    index: std::sync::Arc<archive::ArchiveIndex>,
+    entry: archive::IndexEntry,
+    secret: Option<std::sync::Arc<archive::Password>>,
+}
+
+/// Hands the data of the entry `found` to `write`; fails when the archive yields none.
+fn extract(
+    archives: &Archives,
+    target: &Target,
+    found: &Found,
+    write: &mut dyn FnMut(&mut dyn Read) -> io::Result<()>,
+) -> Result<(), IpcError> {
+    let mut source = archive::open_source(
+        &found.index,
+        &found.opened.input(),
+        archives.stop(),
+        found.secret.as_deref(),
+    )
+    .map_err(|error| archives.report(target, &error))?;
 
     let mut written = false;
     source
-        .extract(&[entry.ordinal], &mut |_, reader| {
-            copy_capped(reader, &mut file)?;
+        .extract(&[found.entry.ordinal], &mut |_, reader| {
+            write(reader)?;
             written = true;
 
             Ok(Flow::Stop)
@@ -130,10 +199,50 @@ fn open_entry(archives: &Archives, target: &Target, dir: &str, name: &str) -> Re
     if !written {
         return Err(archive_error(&archive::unreadable()));
     }
+
+    Ok(())
+}
+
+/// Extracts the entry into a private temporary file, opens it for the viewer and deletes it.
+fn open_entry(archives: &Archives, target: &Target, dir: &str, name: &str) -> Result<Opened, IpcError> {
+    let found = find_entry(archives, target, dir, name)?;
+    if found.entry.size > MAX_VIEW_ENTRY {
+        return Err(IpcError::new(IpcErrorCode::InvalidInput, TOO_BIG));
+    }
+
+    if !has_room(platform::free_space(&std::env::temp_dir()), found.entry.size) {
+        return Err(IpcError::new(IpcErrorCode::Io, NO_ROOM));
+    }
+
+    let scratch = Scratch::create(name).map_err(|error| archive_error(&error))?;
+    let mut file = scratch.open_file().map_err(|error| archive_error(&error))?;
+    extract(archives, target, &found, &mut |reader| copy_capped(reader, &mut file))?;
     drop(file);
 
     // Opened before it is deleted: the session holds the handle.
     files::open(&scratch.folder, name).map_err(|error| archive_error(&error))
+}
+
+/// The bytes of the file entry `name` of the folder `dir` of the archive, at most `most` of them; `Ok(None)` when it holds
+/// more. Read into memory, never onto the disk.
+fn read_entry(
+    archives: &Archives,
+    target: &Target,
+    (dir, name): (&str, &str),
+    most: u64,
+) -> Result<Option<Vec<u8>>, IpcError> {
+    let found = find_entry(archives, target, dir, name)?;
+    if found.entry.size > most {
+        return Ok(None);
+    }
+
+    let mut bytes = Vec::new();
+    extract(archives, target, &found, &mut |reader| {
+        bytes.clear();
+        reader.take(most + 1).read_to_end(&mut bytes).map(drop)
+    })?;
+
+    Ok((bytes.len() as u64 <= most).then_some(bytes))
 }
 
 /// Whether a temporary volume with `free` bytes (`None`: the system does not tell) can take `size` bytes and still keep

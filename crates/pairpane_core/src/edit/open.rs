@@ -58,7 +58,38 @@ pub fn open(folder: &Path, name: &str, encoding: Option<&str>) -> io::Result<Edi
         });
     }
 
-    let (text, found, bom) = match text::decode(&bytes, encoding)? {
+    document_of(
+        name,
+        &bytes,
+        encoding,
+        (!disk::writable(&folder.join(name), &meta), disk::revision(&meta)),
+    )
+}
+
+/// The text of `bytes`, an entry of an archive called `name`, for a comparison: in the encoding labelled `encoding` or the
+/// one found from the bytes, read-only (an archive is never written from the editor). More than the editor takes is
+/// [`EditOpened::TooLarge`].
+pub fn open_bytes(name: &str, bytes: &[u8], encoding: Option<&str>) -> io::Result<EditOpened> {
+    if let Some(label) = encoding {
+        crate::view::by_name(label)?;
+    }
+    if bytes.len() > MAX_EDIT {
+        return Ok(EditOpened::TooLarge {
+            size: bytes.len() as u64,
+        });
+    }
+
+    document_of(name, bytes, encoding, (true, String::new()))
+}
+
+/// The document of the text `bytes` of the file `name`, with whether it is read-only and the revision it was read at.
+fn document_of(
+    name: &str,
+    bytes: &[u8],
+    encoding: Option<&str>,
+    (read_only, revision): (bool, String),
+) -> io::Result<EditOpened> {
+    let (text, found, bom) = match text::decode(bytes, encoding)? {
         Decoded::Text { text, encoding, bom } => (text, encoding, bom),
         Decoded::Binary => return Ok(EditOpened::Binary),
         Decoded::Undecodable(found) => {
@@ -78,9 +109,9 @@ pub fn open(folder: &Path, name: &str, encoding: Option<&str>) -> io::Result<Edi
             bom,
             line_ending: breaks.ending,
             mixed_endings: breaks.mixed,
-            read_only: !disk::writable(&folder.join(name), &meta),
+            read_only,
             size: bytes.len() as u64,
-            revision: disk::revision(&meta),
+            revision,
         },
     })
 }

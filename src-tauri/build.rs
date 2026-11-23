@@ -49,6 +49,7 @@ const COMMANDS: &[&str] = &[
     "ops_properties",
     "view_open",
     "archive_view_open",
+    "archive_edit_open",
     "view_close",
     "view_bytes",
     "view_text",

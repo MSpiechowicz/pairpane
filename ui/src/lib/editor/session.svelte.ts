@@ -23,6 +23,8 @@ export const isUnicode = (encoding: string) => encoding === 'UTF-8' || encoding.
 export class EditSession {
   readonly path: string;
   readonly name: string;
+  /** For an entry of an archive (read-only, for a comparison): the folder it is in, inside the archive (`path` is then the archive file). */
+  readonly inside: string | undefined;
 
   /** `opening` until the backend answers; `undecodable` when the bytes are not text in the encoding that was tried. */
   status = $state<'opening' | 'ready' | 'undecodable'>('opening');
@@ -57,16 +59,20 @@ export class EditSession {
   /** Counts every change of the text and of the choices: a save only clears `dirty` when none came after it began. */
   #edits = 0;
 
-  constructor(ipc: Transport, path: string, name: string, onDirty: (dirty: boolean) => void = () => {}) {
+  constructor(ipc: Transport, path: string, name: string, onDirty: (dirty: boolean) => void = () => {}, inside?: string) {
     this.#ipc = ipc;
     this.path = path;
     this.name = name;
     this.#onDirty = onDirty;
+    this.inside = inside;
   }
 
   /** Reads the file (in `encoding`, or the one the backend finds); the caller deals with an answer that is no text. */
   async open(encoding: string | null): Promise<EditOpened> {
-    const opened = await this.#ipc.invoke('edit_open', { path: this.path, name: this.name, encoding });
+    const opened =
+      this.inside === undefined
+        ? await this.#ipc.invoke('edit_open', { path: this.path, name: this.name, encoding })
+        : await this.#ipc.invoke('archive_edit_open', { archive: this.path, dir: this.inside, name: this.name, encoding });
 
     if (opened.kind === 'text') {
       this.#load(opened.document);

@@ -128,6 +128,7 @@ export const commands = {
   view_archive: cmd<{ session: number }, ArchiveListing>(),
   view_media: cmd<{ session: number }, string>(),
   edit_open: cmd<{ path: string; name: string; encoding: string | null }, EditOpened>(),
+  archive_edit_open: cmd<{ archive: string; dir: string; name: string; encoding: string | null }, EditOpened>(),
   edit_save: cmd<{ path: string; name: string; text: string; options: EditSaveOptions }, EditSaved>(),
   edit_external: cmd<{ path: string; name: string }, ExternalEdit>(),
   settings_open: cmd<undefined, null>(),
