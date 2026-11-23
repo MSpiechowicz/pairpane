@@ -36,7 +36,7 @@ pub(super) mod libheif;
 #[cfg(windows)]
 pub(super) mod wic;
 
-mod items;
+pub(super) mod items;
 // The thumbnail helper (`view::thumb`) is another child of the same kind and shares the process and its confinement.
 pub(super) mod process;
 
@@ -346,7 +346,7 @@ pub(super) fn map_hresult(hresult: i32) -> io::Error {
 }
 
 #[cfg(test)]
-mod items_tests;
+pub(super) mod items_tests;
 #[cfg(test)]
 mod process_tests;
 #[cfg(all(test, target_os = "linux"))]

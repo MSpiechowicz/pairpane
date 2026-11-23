@@ -64,6 +64,8 @@ const COMMANDS: &[&str] = &[
     "view_image_decode",
     "view_media",
     "thumb_get",
+    "columns_dimensions",
+    "columns_checksum",
     "edit_open",
     "edit_save",
     "edit_external",

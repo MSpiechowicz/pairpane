@@ -67,6 +67,8 @@
     { flag: 'showExt', text: 'Ext' },
     { flag: 'showSize', text: 'Size' },
     { flag: 'showModified', text: 'Modified' },
+    { flag: 'showDimensions', text: 'Dimensions' },
+    { flag: 'showChecksum', text: 'Checksum' },
   ];
 
   const FILES: readonly Toggle[] = [{ flag: 'showHidden', text: 'Show hidden files' }];

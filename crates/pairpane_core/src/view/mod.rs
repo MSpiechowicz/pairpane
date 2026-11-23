@@ -31,6 +31,7 @@
 //! ours are marked ([`refusal`], [`is_refusal`]), so a caller can show those and nothing else.
 
 mod archive;
+pub mod columns;
 mod difference;
 mod encoding;
 mod file;

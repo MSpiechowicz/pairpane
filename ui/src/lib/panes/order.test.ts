@@ -86,3 +86,64 @@ describe('viewOrder', () => {
     expect(performance.now() - started).toBeLessThan(3000);
   });
 });
+
+describe('viewOrder by an extra column', () => {
+  const pics = [
+    entry('docs', 'dir'),
+    entry('a.jpg'),
+    entry('b.jpg'),
+    entry('c.jpg'),
+    entry('d.jpg'),
+    entry('e.jpg'),
+  ];
+  const known: Record<string, number | string> = { 'b.jpg': 300, 'd.jpg': 100, 'e.jpg': 300 };
+  const extraOf = (e: Entry) => known[e.name];
+
+  it('sorts by the value, ties in backend order, and puts what is not known last in either direction', () => {
+    expect(names(pics, viewOrder(pics, options({ column: 'dimensions', extraOf })))).toEqual(['docs', 'd.jpg', 'b.jpg', 'e.jpg', 'a.jpg', 'c.jpg']);
+    expect(names(pics, viewOrder(pics, options({ column: 'dimensions', desc: true, extraOf })))).toEqual([
+      'docs',
+      'b.jpg',
+      'e.jpg',
+      'd.jpg',
+      'a.jpg',
+      'c.jpg',
+    ]);
+  });
+
+  it('sorts text (a checksum) as text', () => {
+    const sums: Record<string, string> = { 'a.jpg': 'ff00', 'c.jpg': '0a0b', 'd.jpg': 'a1' };
+
+    const order = viewOrder(pics, options({ column: 'checksum', extraOf: (e) => sums[e.name] }));
+
+    expect(names(pics, order)).toEqual(['docs', 'c.jpg', 'd.jpg', 'a.jpg', 'b.jpg', 'e.jpg']);
+  });
+
+  it('keeps the backend order when nothing is known yet, and without a way to know', () => {
+    const backend = ['docs', 'a.jpg', 'b.jpg', 'c.jpg', 'd.jpg', 'e.jpg'];
+
+    expect(names(pics, viewOrder(pics, options({ column: 'dimensions', extraOf: () => undefined })))).toEqual(backend);
+    expect(names(pics, viewOrder(pics, options({ column: 'checksum', desc: true })))).toEqual(backend);
+  });
+
+  it('applies the filter, and the unloaded entries stay last', () => {
+    const entries = [...pics, undefined];
+
+    expect(names(entries, viewOrder(entries, options({ column: 'dimensions', filter: '.jpg', extraOf })))).toEqual([
+      'd.jpg',
+      'b.jpg',
+      'e.jpg',
+      'a.jpg',
+      'c.jpg',
+    ]);
+    expect(names(entries, viewOrder(entries, options({ column: 'dimensions', extraOf })))).toEqual([
+      'docs',
+      'd.jpg',
+      'b.jpg',
+      'e.jpg',
+      'a.jpg',
+      'c.jpg',
+      undefined,
+    ]);
+  });
+});

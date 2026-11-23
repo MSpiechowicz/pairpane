@@ -20,18 +20,18 @@ const ALLOWED: [[u8; 4]; 9] = [
 ];
 
 /// The most boxes looked at in one list (the top level, the children of `meta`, the items) before a file is refused.
-const MAX_BOXES: usize = 4096;
+pub(in crate::view) const MAX_BOXES: usize = 4096;
 
 /// One box cut off the front of its bytes: its type, its content and what follows it.
-struct Split<'a> {
-    kind: [u8; 4],
-    content: &'a [u8],
-    rest: &'a [u8],
+pub(in crate::view) struct Split<'a> {
+    pub kind: [u8; 4],
+    pub content: &'a [u8],
+    pub rest: &'a [u8],
 }
 
 /// The first box of `data`: a size of 1 is a 64-bit size after the type, a size of 0 is to the end of `data`. `None`
 /// when the head is cut short or the box is smaller than its head or does not fit in `data`.
-fn split_box(data: &[u8]) -> Option<Split<'_>> {
+pub(in crate::view) fn split_box(data: &[u8]) -> Option<Split<'_>> {
     let size = u32::from_be_bytes(data.get(..4)?.try_into().ok()?);
     let kind: [u8; 4] = data.get(4..8)?.try_into().ok()?;
 
@@ -54,7 +54,7 @@ fn split_box(data: &[u8]) -> Option<Split<'_>> {
 }
 
 /// The content of a full box (a version byte and three bytes of flags before it), and its version.
-fn full_box(content: &[u8]) -> Option<(u8, &[u8])> {
+pub(in crate::view) fn full_box(content: &[u8]) -> Option<(u8, &[u8])> {
     Some((*content.first()?, content.get(4..)?))
 }
 
@@ -78,7 +78,7 @@ pub(super) fn only_hevc_items(bytes: &[u8]) -> bool {
 /// The content of the one `meta` box of the file, after its version and flags. The boxes before it must be whole; after
 /// it, a second `meta` makes the file ambiguous (refused), and a box that is malformed ends the walk, because no reader
 /// gets past it to a later box either.
-fn top_level_meta(bytes: &[u8]) -> Option<&[u8]> {
+pub(in crate::view) fn top_level_meta(bytes: &[u8]) -> Option<&[u8]> {
     let mut found = None;
     let mut rest = bytes;
 
@@ -107,7 +107,7 @@ fn top_level_meta(bytes: &[u8]) -> Option<&[u8]> {
 
 /// The content of the one box of type `kind` among the boxes of `children`. `None` when there is none, there are two, or
 /// a box is malformed.
-fn single_child(children: &[u8], kind: [u8; 4]) -> Option<&[u8]> {
+pub(in crate::view) fn single_child(children: &[u8], kind: [u8; 4]) -> Option<&[u8]> {
     let mut found = None;
     let mut rest = children;
 

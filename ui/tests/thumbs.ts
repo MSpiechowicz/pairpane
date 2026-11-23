@@ -1,15 +1,13 @@
 // Test helpers for the thumbnails: the backend's answer to `thumb_get`, a request the test settles when it likes, and a
 // pane in the thumbnails layout.
-import { render, screen } from '@testing-library/svelte';
+import { screen } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { vi } from 'vitest';
 
-import { Hotlist } from '$lib/panes/hotlist.svelte';
 import { PaneTabs } from '$lib/panes/tabs.svelte';
-import { Volumes } from '$lib/panes/volumes.svelte';
 
-import Pane from '../src/lib/shell/Pane.svelte';
 import { entry, fakeBackend } from './panes';
+import { mountPane } from './pane';
 
 /** A `thumb_get` answer: the width and height (u32, little-endian), then `width * height` RGBA pixels (all of `pixel`, or as given). */
 export function picture(width: number, height: number, pixels?: ArrayLike<number>, pixel = [10, 20, 30, 255]): ArrayBuffer {
@@ -53,17 +51,7 @@ type Answers = NonNullable<Parameters<typeof fakeBackend>[0]>;
 /** Shows `tabs` in a pane, in the thumbnails layout. */
 export async function mountThumbnails(backend: ReturnType<typeof fakeBackend>, tabs: PaneTabs) {
   tabs.view.layout = 'thumbnails';
-  render(Pane, {
-    label: 'Left pane',
-    tabs,
-    volumes: new Volumes(backend.ipc),
-    hotlist: new Hotlist(),
-    menu: undefined,
-    active: true,
-    onActivate: vi.fn(),
-    onMenu: vi.fn(),
-  });
-  await tick();
+  await mountPane(backend, tabs);
 }
 
 const PICTURES = [entry('sub', 'dir'), ...Array.from({ length: 199 }, (_, i) => entry(`p${i}.jpg`, 'file', { size: 10 }))];

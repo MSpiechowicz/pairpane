@@ -4,6 +4,7 @@
   import { preferences } from '$lib/shell/preferences.svelte';
   import { type Decoded, drawDecoded } from '$lib/viewer/decoded';
 
+  import type { Cell } from './extras';
   import { displayName, formatDate, iconClass, splitName } from './format';
   import type { InlineRename } from './inlineRename.svelte';
   import RenameField from './RenameField.svelte';
@@ -21,6 +22,7 @@
     brief = false,
     tile = false,
     thumb,
+    extra,
   }: {
     id: string;
     /** The row number, for the list that handles the mouse for all its rows. */
@@ -42,6 +44,8 @@
     tile?: boolean;
     /** The thumbnail to show in a tile in place of the icon. */
     thumb?: Decoded;
+    /** The Dimensions and Checksum columns, as far as the settings show them; empty until the value arrives. */
+    extra?: { dimensions: Cell; checksum: Cell };
   } = $props();
 
   const parts = $derived(entry ? splitName(entry) : undefined);
@@ -52,6 +56,8 @@
     ext: !plain && preferences.value.showExt,
     size: !plain && preferences.value.showSize,
     modified: !plain && preferences.value.showModified,
+    dimensions: !plain && preferences.value.showDimensions,
+    checksum: !plain && preferences.value.showChecksum,
   });
 
   /** The tooltip of a name: where a link points; in the brief and thumbnails layouts the whole name, which may be cut short. */
@@ -118,6 +124,12 @@
     {/if}
     {#if columns.modified}
       <span class="dt">{formatDate(entry.modified)}</span>
+    {/if}
+    {#if columns.dimensions}
+      <span class="dm" title={extra?.dimensions.tip}>{extra?.dimensions.text}</span>
+    {/if}
+    {#if columns.checksum}
+      <span class="ck" title={extra?.checksum.tip}>{extra?.checksum.text}</span>
     {/if}
   {/if}
 </div>
@@ -214,7 +226,7 @@
     background: var(--cursor-bg);
   }
 
-  .row.selected :is(.nm, .ex, .sz, .dt) {
+  .row.selected :is(.nm, .ex, .sz, .dt, .dm, .ck) {
     color: var(--accent);
   }
 
@@ -228,15 +240,23 @@
 
   .nm,
   .ex,
-  .dt {
+  .dt,
+  .dm,
+  .ck {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .ex,
-  .dt {
+  .dt,
+  .dm {
     font-size: 12px;
+    color: var(--dim);
+  }
+
+  .ck {
+    font: 11.5px var(--font-mono);
     color: var(--dim);
   }
 
@@ -329,7 +349,9 @@
 
   @media (max-width: 760px) {
     .ex,
-    .dt {
+    .dt,
+    .dm,
+    .ck {
       display: none;
     }
 

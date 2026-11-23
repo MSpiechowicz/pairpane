@@ -273,6 +273,7 @@ mod transfer_tests;
 #[cfg(test)]
 mod trash_tests;
 
+pub(crate) use digest::Digester;
 pub use engine::Engine;
 pub use extract::ArchiveJob;
 pub use items::{ItemFailure, MAX_FOLDER_DEPTH};

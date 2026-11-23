@@ -3,6 +3,7 @@
 
   import ColumnHeader from '$lib/panes/ColumnHeader.svelte';
   import { columnTracks, shows } from '$lib/panes/columns';
+  import { extraTargetOf, wantedExtras } from '$lib/panes/extras';
   import { displayName } from '$lib/panes/format';
   import type { FlatSide } from '$lib/panes/flat.svelte';
   import type { Hotlist } from '$lib/panes/hotlist.svelte';
@@ -56,7 +57,14 @@
   const view = $derived(tabs.view);
   const brief = $derived(view.layout === 'brief');
   const thumbnails = $derived(view.layout === 'thumbnails');
+  const detailed = $derived(view.layout === 'detailed');
   const thumbs = $derived(tabs.thumbs);
+  const extras = $derived(tabs.extras);
+  /** The extra columns the pane shows now: only the detailed layout has them. */
+  const extraColumns = $derived({
+    dimensions: detailed && preferences.value.showDimensions,
+    checksum: detailed && preferences.value.showChecksum,
+  });
   const listing = $derived(view.listing);
   const uid = $props.id();
   let list = $state<HTMLElement>();
@@ -85,6 +93,11 @@
   // The thumbnails to fetch are those of the pictures in view, then those near it; none when the pane shows no tiles.
   $effect(() => {
     thumbs.want(thumbnails ? wantedBy(view, visible, near, thumbs.size) : []);
+  });
+
+  // The values of the extra columns to fetch are those of the files in view, then those near it; none for a column that is off.
+  $effect(() => {
+    extras.want(wantedExtras(view, visible, near, extraColumns));
   });
 
   // The active pane's list holds the keyboard focus (Tab, a click or the start of the app make a pane active),
@@ -189,7 +202,7 @@
     <HotlistMenu {tabs} {hotlist} onClose={closeMenu} />
   {/if}
 
-  {#if view.layout === 'detailed'}
+  {#if detailed}
     <ColumnHeader {view} />
   {/if}
 
@@ -218,6 +231,7 @@
             {brief}
             tile={thumbnails}
             thumb={thumbnails ? thumbs.get(targetOf(listing, entry, thumbs.size)) : undefined}
+            extra={extraColumns.dimensions || extraColumns.checksum ? extras.cells(extraTargetOf(listing, entry)) : undefined}
             up={view.isUp(index)}
             cursor={index === view.cursor}
             selected={entry !== undefined && view.isSelected(entry.name)}
@@ -234,7 +248,7 @@
           {:else if brief}
             <VirtualColumns count={view.count} active={view.cursor} bind:pageSize {row} />
           {:else}
-            <VirtualRows count={view.count} active={view.cursor} bind:pageSize {row} />
+            <VirtualRows count={view.count} active={view.cursor} bind:pageSize bind:visible bind:near {row} />
           {/if}
         {/key}
       </div>
@@ -256,7 +270,7 @@
 
 <style>
   .pane {
-    /* The columns of the header and of every row: icon, name, then ext, size and modified as far as the settings show them. */
+    /* The columns of the header and of every row: icon, name, then ext, size, modified, dimensions and checksum as far as the settings show them. */
     --pane-cols: var(--cols-full);
     --cursor-line: color-mix(in srgb, var(--accent) 35%, transparent);
     --cursor-bg: color-mix(in srgb, var(--text) 5%, transparent);

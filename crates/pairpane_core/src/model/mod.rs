@@ -6,6 +6,7 @@
 
 mod app;
 mod archive;
+mod columns;
 mod compare;
 mod edit;
 mod find;
@@ -25,6 +26,7 @@ mod volume;
 
 pub use app::AppInfo;
 pub use archive::ArchiveSpot;
+pub use columns::Dimensions;
 pub use compare::{
     CompareEvent, CompareFacts, CompareId, CompareOptions, CompareRoot, CompareRow, CompareStatus, SyncDirection,
     SyncFacts, SyncItem, SyncRemoval,

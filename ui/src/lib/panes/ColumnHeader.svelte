@@ -1,19 +1,14 @@
 <script lang="ts">
   import { preferences } from '$lib/shell/preferences.svelte';
 
-  import { shows } from './columns';
+  import { COLUMNS, shows } from './columns';
   import type { SortColumn } from './order';
   import type { PaneView } from './view.svelte';
 
   let { view }: { view: PaneView } = $props();
 
-  /** `cell` names the column in the narrow layout, which drops Ext and Modified. */
-  const columns: { column: SortColumn; label: string; cell: string }[] = [
-    { column: 'name', label: 'Name', cell: 'nm' },
-    { column: 'ext', label: 'Ext', cell: 'ex' },
-    { column: 'size', label: 'Size', cell: 'sz' },
-    { column: 'modified', label: 'Modified', cell: 'dt' },
-  ];
+  /** `cell` names the column in the narrow layout, which keeps the name and the size only. */
+  const columns: { column: SortColumn; label: string; cell: string }[] = [{ column: 'name', label: 'Name', cell: 'nm' }, ...COLUMNS];
 
   const shown = $derived(columns.filter(({ column }) => shows(column, preferences.value)));
 </script>
@@ -80,7 +75,9 @@
 
   @media (max-width: 760px) {
     .ex,
-    .dt {
+    .dt,
+    .dm,
+    .ck {
       display: none;
     }
   }
