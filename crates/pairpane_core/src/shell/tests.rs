@@ -1,3 +1,6 @@
+#[cfg(all(unix, not(target_os = "macos")))]
+use std::ffi::OsString;
+
 use super::*;
 
 #[test]
@@ -23,6 +26,26 @@ fn escapes_and_control_characters_are_left_out_and_a_character_cut_between_reads
     assert_eq!(cleaner.finish(), "\u{fffd}");
 }
 
+#[test]
+fn a_cut_character_after_a_bad_byte_is_still_joined() {
+    let mut cleaner = Cleaner::default();
+
+    assert_eq!(cleaner.push(&[0xff, 0xc3]), "\u{fffd}");
+    assert_eq!(cleaner.push(&[0xa9]), "é");
+}
+
+#[test]
+fn a_character_set_escape_is_left_out_whole_and_an_unfinished_escape_does_not_hide_the_rest() {
+    let mut cleaner = Cleaner::default();
+    assert_eq!(cleaner.push(b"a\x1b(Bb"), "ab");
+
+    let mut unfinished = Cleaner::default();
+    let text = unfinished.push(format!("\x1b[{}", "1;".repeat(40)).as_bytes());
+    let shown = format!("{text}{}", unfinished.push(b"shown"));
+    assert!(shown.ends_with(";1;shown"), "{shown:?}");
+    assert!(shown.len() < 40, "the start of the sequence is left out: {shown:?}");
+}
+
 #[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn the_terminal_is_the_one_terminal_names_then_the_first_known_one_found() {
@@ -45,7 +68,6 @@ fn the_terminal_is_the_one_terminal_names_then_the_first_known_one_found() {
 mod on_unix {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -56,12 +78,12 @@ mod on_unix {
         let shell = Shell {
             program: PathBuf::from("/bin/sh"),
         };
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(Stop::default());
         if let Some(after) = stop_after {
             let flag = Arc::clone(&stop);
             thread::spawn(move || {
                 thread::sleep(after);
-                flag.store(true, Ordering::Relaxed);
+                flag.ask();
             });
         }
 
@@ -157,6 +179,73 @@ mod on_unix {
     }
 
     #[test]
+    fn a_command_that_closes_both_pipes_and_keeps_running_is_waited_for_its_end() {
+        let folder = temp();
+        let started = Instant::now();
+
+        let (result, events) = run_sh("exec sleep 1 >&- 2>&-", folder.path(), None);
+
+        result.expect("ran");
+        assert!(
+            started.elapsed() >= Duration::from_millis(900),
+            "the end is the program's"
+        );
+        assert!(matches!(
+            events.last(),
+            Some(ShellEvent::Done {
+                code: Some(0),
+                stopped: false,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_forced_stop_kills_at_once_a_command_that_ignores_the_polite_one() {
+        let folder = temp();
+        let shell = Shell {
+            program: PathBuf::from("/bin/sh"),
+        };
+        let stop = Arc::new(Stop::default());
+        let flag = Arc::clone(&stop);
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            flag.force();
+        });
+        let started = Instant::now();
+        let mut last = None;
+
+        run(&shell, "trap '' TERM; sleep 30", folder.path(), &stop, &mut |event| {
+            last = Some(event);
+            true
+        })
+        .expect("ran");
+
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(matches!(last, Some(ShellEvent::Done { stopped: true, .. })));
+    }
+
+    #[test]
+    fn a_stop_after_the_end_leaves_alone_what_the_command_left_running() {
+        let folder = temp();
+        let marker = folder.path().join("survived");
+        // The background program holds the output open, so the end is waited for after the shell has gone; the stop
+        // comes in that wait.
+        let line = format!("(sleep 1; touch '{}') &", marker.display());
+
+        let (result, events) = run_sh(&line, folder.path(), Some(Duration::from_millis(300)));
+
+        result.expect("ran");
+        thread::sleep(Duration::from_millis(1200));
+        assert!(matches!(events.last(), Some(ShellEvent::Done { stopped: false, .. })));
+        assert!(marker.exists(), "the background program ran to its end");
+    }
+
+    #[test]
     fn output_past_the_cap_is_read_and_left_out() {
         let folder = temp();
 
@@ -191,7 +280,7 @@ mod on_unix {
             &shell,
             "echo one; sleep 30",
             folder.path(),
-            &AtomicBool::new(false),
+            &Stop::default(),
             &mut |event| {
                 last = Some(event);
                 false

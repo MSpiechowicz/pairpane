@@ -30,6 +30,19 @@ fn the_user_is_asked_once_a_yes_holds_and_a_no_asks_again_next_time() {
 }
 
 #[test]
+fn a_question_that_panicked_does_not_leave_the_next_one_busy() {
+    let shells = Shells::default();
+    let asked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = shells.consent(Path::new("/bin/sh"), |_| panic!("the dialog failed"));
+    }));
+    assert!(asked.is_err());
+
+    shells
+        .consent(Path::new("/bin/sh"), |_| true)
+        .expect("asked again and allowed");
+}
+
+#[test]
 fn a_second_question_at_once_is_busy() {
     let shells = Shells::default();
     let _asking = shells.asking.lock().expect("the lock");
@@ -48,7 +61,7 @@ fn at_most_four_commands_run_and_a_stop_of_one_that_ended_is_not_found() {
 
     let (id, stop, _) = &runs[0];
     shells.stop(*id).expect("stopped");
-    assert!(stop.load(Ordering::Relaxed));
+    assert!(stop.asked());
 
     shells.forget(*id);
     assert_eq!(shells.stop(*id).expect_err("ended").code(), IpcErrorCode::NotFound);
@@ -62,7 +75,7 @@ fn the_exit_raises_every_stop_flag() {
 
     shells.shut_down();
 
-    assert!(first.load(Ordering::Relaxed) && second.load(Ordering::Relaxed));
+    assert!(first.asked() && second.asked());
 }
 
 #[test]

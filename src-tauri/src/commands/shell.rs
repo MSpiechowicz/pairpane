@@ -20,11 +20,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::{Duration, Instant};
 
 use pairpane_core::model::{IpcError, IpcErrorCode, ShellEvent, ShellId};
-use pairpane_core::shell::{self, Shell};
+use pairpane_core::shell::{self, Shell, Stop};
 use pairpane_core::view::is_refusal;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State, async_runtime};
@@ -49,7 +49,7 @@ const EXIT_WAIT: Duration = Duration::from_millis(200);
 /// The commands that run, and the user's say on the command line in this run.
 #[derive(Default)]
 pub struct Shells {
-    runs: Mutex<HashMap<ShellId, Arc<AtomicBool>>>,
+    runs: Mutex<HashMap<ShellId, Arc<Stop>>>,
     ids: AtomicU64,
     running: ThreadCap,
     starting: ThreadCap,
@@ -67,8 +67,13 @@ impl Shells {
             return Ok(());
         }
 
-        let Ok(_asking) = self.asking.try_lock() else {
-            return Err(CommandError::new(IpcErrorCode::Busy, "another question is open"));
+        // A question that panicked is over: its lock is taken again, not left as one open for good.
+        let _asking = match self.asking.try_lock() {
+            Ok(asking) => asking,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                return Err(CommandError::new(IpcErrorCode::Busy, "another question is open"));
+            }
         };
         if self.allowed.load(Ordering::Acquire) {
             return Ok(());
@@ -88,13 +93,13 @@ impl Shells {
     }
 
     /// Takes a place for a command and gives it an id and a stop flag; `busy` when [`RUNNING`] run.
-    fn register(&self) -> CommandResult<(ShellId, Arc<AtomicBool>, Permit)> {
+    fn register(&self) -> CommandResult<(ShellId, Arc<Stop>, Permit)> {
         let permit = self.running.acquire(RUNNING).ok_or_else(|| {
             CommandError::new(IpcErrorCode::Busy, "four commands are running; stop one or wait for it")
         })?;
 
         let id = ShellId(self.ids.fetch_add(1, Ordering::Relaxed) + 1);
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(Stop::default());
         self.lock().insert(id, Arc::clone(&stop));
 
         Ok((id, stop, permit))
@@ -107,7 +112,7 @@ impl Shells {
             .get(&id)
             .cloned()
             .ok_or_else(|| CommandError::new(IpcErrorCode::NotFound, "this command has ended"))?;
-        stop.store(true, Ordering::Relaxed);
+        stop.ask();
 
         Ok(())
     }
@@ -116,11 +121,12 @@ impl Shells {
         self.lock().remove(&id);
     }
 
-    /// Stops every command, as the app exits, and waits a moment for them to be told (each is checked every few
-    /// milliseconds), so that none outlives the app.
+    /// Kills every command and what it started, as the app exits (not the polite stop, which waits
+    /// [`GRACE`](pairpane_core::process::GRACE) for a
+    /// command that ignores it), and waits a moment for them to be killed: each sees it within a poll of its thread.
     pub fn shut_down(&self) {
         for stop in self.lock().values() {
-            stop.store(true, Ordering::Relaxed);
+            stop.force();
         }
 
         let since = Instant::now();
@@ -129,7 +135,7 @@ impl Shells {
         }
     }
 
-    fn lock(&self) -> MutexGuard<'_, HashMap<ShellId, Arc<AtomicBool>>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<ShellId, Arc<Stop>>> {
         self.runs.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -147,13 +153,15 @@ fn question(shell: &Path) -> String {
 fn spawn(
     app: AppHandle,
     id: ShellId,
-    stop: Arc<AtomicBool>,
+    stop: Arc<Stop>,
     permit: Permit,
     job: (Shell, PathBuf, String),
     on_event: Channel<ShellEvent>,
 ) {
     async_runtime::spawn_blocking(move || {
         let _permit = permit;
+        // The command is forgotten however this ends, a panic included, so that the exit does not wait for it.
+        let _forget = Forget(app, id);
         let (shell, folder, line) = job;
         let mut emit = |event: ShellEvent| on_event.send(event).is_ok();
 
@@ -162,9 +170,16 @@ fn spawn(
                 error: start_error(&error),
             });
         }
-
-        app.state::<Shells>().forget(id);
     });
+}
+
+/// Forgets a command of `Shells` when it is dropped.
+struct Forget(AppHandle, ShellId);
+
+impl Drop for Forget {
+    fn drop(&mut self) {
+        self.0.state::<Shells>().forget(self.1);
+    }
 }
 
 /// What the page is told when a line cannot run: our own texts as they are, else a fixed one (the details, which may

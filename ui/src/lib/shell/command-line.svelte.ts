@@ -44,12 +44,16 @@ export class CommandLine {
 
   shown = $state<Shown | undefined>();
   #id: ShellId | undefined;
+  /** Stop was asked before the command's id came: it is sent when it does. */
+  #stopWanted = false;
   /** Bumped by each run, so events of an earlier one are left out. */
   #run = 0;
 
   #history: string[] = [];
   /** Where the arrow keys are in the history: its length when at the line being typed. */
   #cursor = 0;
+  /** The line that was being typed when the arrow keys left it, given back when they come down to it again. */
+  #draft = '';
 
   constructor(ipc: Transport, place: () => Place, say: (text: string, error: boolean) => void) {
     this.#ipc = ipc;
@@ -61,7 +65,7 @@ export class CommandLine {
     return this.shown?.status === 'starting' || this.shown?.status === 'running';
   }
 
-  /** Runs `line` in the active folder; `false` when it was not started (the notice says why), and the line is kept. */
+  /** Runs `line` in the active folder; `false` when it was not started (the notice or the panel says why). */
   async run(line: string): Promise<boolean> {
     const text = line.trim();
     if (text === '') {
@@ -81,6 +85,7 @@ export class CommandLine {
     this.#remember(text);
     const run = ++this.#run;
     this.#id = undefined;
+    this.#stopWanted = false;
     this.shown = { line: text, output: '', status: 'starting' };
 
     try {
@@ -95,11 +100,15 @@ export class CommandLine {
       } else if (this.shown !== undefined && this.running) {
         this.#id = id;
         this.shown = { ...this.shown, status: 'running' };
+        if (this.#stopWanted) {
+          this.stop();
+        }
       }
     } catch (error) {
       if (run === this.#run) {
         this.shown = { ...this.shown, status: 'failed', note: messageOf(error) };
       }
+      return false;
     }
 
     return true;
@@ -107,7 +116,12 @@ export class CommandLine {
 
   /** Stops the command shown (its end follows as an event). */
   stop() {
-    if (this.#id !== undefined && this.running) {
+    if (!this.running) {
+      return;
+    }
+    if (this.#id === undefined) {
+      this.#stopWanted = true;
+    } else {
       this.#ipc.invoke('shell_stop', { id: this.#id }).catch(() => {});
     }
   }
@@ -120,15 +134,21 @@ export class CommandLine {
     this.shown = undefined;
   }
 
-  /** The line before (`-1`) or after (`1`) the one the arrow keys are at; `undefined` past either end. */
-  recall(step: -1 | 1): string | undefined {
+  /**
+   * The line before (`-1`) or after (`1`) the one the arrow keys are at, `typed` being what the field holds now;
+   * `undefined` past either end. Below the newest line is the one that was being typed.
+   */
+  recall(step: -1 | 1, typed: string): string | undefined {
     const next = this.#cursor + step;
     if (next < 0 || next > this.#history.length) {
       return undefined;
     }
 
+    if (this.#cursor === this.#history.length) {
+      this.#draft = typed;
+    }
     this.#cursor = next;
-    return this.#history[next] ?? '';
+    return this.#history[next] ?? this.#draft;
   }
 
   /** Opens the user's terminal in the active folder. */
@@ -149,6 +169,7 @@ export class CommandLine {
   #remember(line: string) {
     this.#history = [...this.#history.filter((kept) => kept !== line), line].slice(-MOST_REMEMBERED);
     this.#cursor = this.#history.length;
+    this.#draft = '';
   }
 
   #take(run: number, event: ShellEvent) {

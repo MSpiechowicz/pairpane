@@ -96,9 +96,10 @@ describe('the command line of the dock', () => {
     await fireEvent.keyDown(input, { key: 'Enter' });
     await vi.waitFor(() => expect(input).toHaveValue(''));
 
-    sinks[0]({ kind: 'output', text: 'notes.txt\n' });
+    sinks[0]({ kind: 'output', text: 'notes.txt\nplan.md\n' });
     const output = await screen.findByRole('region', { name: 'Command output' });
-    expect(output).toHaveTextContent('notes.txt');
+    // Lines stay lines (not written out as ⟨U+000A⟩).
+    expect(output.querySelector('pre')?.textContent).toBe('notes.txt\nplan.md\n');
     expect(output).toHaveTextContent('Running…');
 
     await fireEvent.click(screen.getByRole('button', { name: 'Stop' }));

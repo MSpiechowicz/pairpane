@@ -52,12 +52,14 @@
 
     if (event.key === 'Enter') {
       event.preventDefault();
-      if (await commandLine.run(typed)) {
+      const line = typed;
+      // Cleared only when it ran, and only if nothing else was typed while it started.
+      if ((await commandLine.run(line)) && typed === line) {
         typed = '';
       }
     } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       event.preventDefault();
-      const line = commandLine.recall(event.key === 'ArrowUp' ? -1 : 1);
+      const line = commandLine.recall(event.key === 'ArrowUp' ? -1 : 1, typed);
       if (line !== undefined) {
         typed = line;
       }

@@ -7,6 +7,8 @@ enum State {
     Text,
     /// After `ESC`.
     Escape,
+    /// After `ESC` and an intermediate character (`ESC ( B` chooses a character set): one more character ends it.
+    EscapeOne,
     /// In a control sequence (`ESC [`), up to its final byte.
     Control,
     /// In an operating system command (`ESC ]`), up to `BEL` or `ESC \`.
@@ -23,6 +25,9 @@ pub struct Cleaner {
     /// The start of a character the last read cut.
     partial: Vec<u8>,
     state: State,
+    /// Characters within the escape sequence so far: one that does not end in time is given up, and what follows
+    /// shows again (an unfinished sequence never hides the rest of the output).
+    within: usize,
     /// The last character kept was a carriage return turned into a line break.
     after_return: bool,
 }
@@ -33,12 +38,8 @@ impl Cleaner {
         let mut joined = std::mem::take(&mut self.partial);
         joined.extend_from_slice(bytes);
 
-        let complete = match std::str::from_utf8(&joined) {
-            Ok(_) => joined.len(),
-            // Bytes that may still become a character are kept for the next read.
-            Err(error) if error.error_len().is_none() => error.valid_up_to(),
-            Err(_) => joined.len(),
-        };
+        // The start of a character cut at the end is kept for the next read, whatever comes before it.
+        let complete = joined.len() - cut_tail(&joined);
         self.partial = joined.split_off(complete);
 
         let text = String::from_utf8_lossy(&joined).into_owned();
@@ -75,7 +76,8 @@ impl Cleaner {
                 }
                 (State::Escape, '[') => State::Control,
                 (State::Escape, ']') => State::Command,
-                (State::Escape, _) => State::Text,
+                (State::Escape, '\u{20}'..='\u{2f}') => State::EscapeOne,
+                (State::Escape, _) | (State::EscapeOne, _) => State::Text,
                 (State::Control, '\u{40}'..='\u{7e}') => State::Text,
                 (State::Control, _) => State::Control,
                 (State::Command, '\u{7}') => State::Text,
@@ -85,8 +87,45 @@ impl Cleaner {
                 (State::CommandEscape, _) => State::Command,
             };
             self.after_return = false;
+
+            self.within = if self.state == State::Text { 0 } else { self.within + 1 };
+            let limit = if matches!(self.state, State::Command | State::CommandEscape) {
+                MAX_COMMAND
+            } else {
+                MAX_CONTROL
+            };
+            if self.within > limit {
+                self.state = State::Text;
+                self.within = 0;
+            }
         }
 
         out
     }
+}
+
+/// The longest control sequence (`ESC [`…) waited for to end, in characters.
+const MAX_CONTROL: usize = 64;
+
+/// The longest operating system command (`ESC ]`…, a title or a link) waited for to end, in characters.
+const MAX_COMMAND: usize = 4096;
+
+/// How many bytes at the end of `bytes` are the start of a character that the next read may finish: a lead byte and
+/// fewer continuation bytes than it needs. 0 when the end is whole (or not UTF-8 at all, which is replaced as it is).
+fn cut_tail(bytes: &[u8]) -> usize {
+    for back in 1..=bytes.len().min(3) {
+        let byte = bytes[bytes.len() - back];
+        let needs = match byte {
+            0xC2..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF4 => 4,
+            // A continuation byte: the lead may be further back.
+            0x80..=0xBF => continue,
+            _ => return 0,
+        };
+
+        return if back < needs { back } else { 0 };
+    }
+
+    0
 }

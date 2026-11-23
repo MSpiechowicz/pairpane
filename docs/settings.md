@@ -65,6 +65,6 @@ These two are not settings, but they use what your system says:
   the dock: up to 1 MiB, with colours and other terminal codes left out. **Stop** ends the command and everything it
   started. The first command after each start of Pairpane asks you to allow the command line.
 - **Open terminal here** (in the command palette, and it can be given a key) opens a terminal in that folder: on Linux
-  the one `$TERMINAL` names (a program name or an absolute path, with no arguments), otherwise the first of
+  the one `$TERMINAL` names (a program name or an absolute path; a value with arguments is not used), otherwise the first of
   `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `kitty`, `alacritty`, `wezterm`, `foot` and
   `xterm` that is installed; Terminal on macOS; a new console window of your shell on Windows.

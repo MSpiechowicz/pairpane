@@ -64,12 +64,26 @@ describe('CommandLine', () => {
     expect(busy.sent('shell_run')).toHaveLength(1);
   });
 
-  it('shows why a command was not run', async () => {
+  it('shows why a command was not run, and says it did not start (the line is kept)', async () => {
     const s = setup(undefined, () => Promise.reject(new IpcFailure({ code: 'invalidInput', message: 'the command line was not allowed' })));
 
-    await s.line.run('ls');
+    expect(await s.line.run('ls')).toBe(false);
 
     expect(s.line.shown).toMatchObject({ status: 'failed', note: 'the command line was not allowed' });
+  });
+
+  it('a stop asked before the command`s id came is sent when it does', async () => {
+    let answer!: (id: number) => void;
+    const s = setup(undefined, (name) => (name === 'shell_run' ? new Promise((resolve) => (answer = resolve)) : Promise.resolve(null)));
+
+    const running = s.line.run('make');
+    await vi.waitFor(() => expect(s.sinks).toHaveLength(1));
+    s.line.stop();
+    expect(s.sent('shell_stop')).toEqual([]);
+    answer(9);
+    await running;
+
+    expect(s.sent('shell_stop')).toEqual([{ id: 9 }]);
   });
 
   it('a close stops the command and leaves out what it still sends', async () => {
@@ -90,8 +104,9 @@ describe('CommandLine', () => {
       s.sinks.at(-1)!({ kind: 'done', code: 0, stopped: false, truncated: false });
     }
 
-    expect([s.line.recall(-1), s.line.recall(-1), s.line.recall(-1)]).toEqual(['one', 'two', undefined]);
-    expect([s.line.recall(1), s.line.recall(1), s.line.recall(1)]).toEqual(['one', '', undefined]);
+    // What was being typed is given back below the newest line.
+    expect([s.line.recall(-1, 'draft'), s.line.recall(-1, 'one'), s.line.recall(-1, 'two')]).toEqual(['one', 'two', undefined]);
+    expect([s.line.recall(1, 'two'), s.line.recall(1, 'one'), s.line.recall(1, 'draft')]).toEqual(['one', 'draft', undefined]);
     expect(MOST_REMEMBERED).toBe(50);
   });
 

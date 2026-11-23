@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { displayName } from '$lib/panes/format';
+  import { displayName, displayText } from '$lib/panes/format';
 
   import type { CommandLine } from './command-line.svelte';
 
@@ -25,15 +25,20 @@
     }
   });
 
-  /** Keeps the newest output in view while it comes, unless the user scrolled up to read. */
+  /** Keeps the newest output in view while it comes, unless the user scrolled up to read (until they scroll back down). */
   function follow(node: HTMLElement) {
+    let atEnd = true;
+    const onScroll = () => (atEnd = node.scrollHeight - node.scrollTop - node.clientHeight < 24);
+    node.addEventListener('scroll', onScroll);
+
     $effect(() => {
       void shown?.output;
-      const atEnd = node.scrollHeight - node.scrollTop - node.clientHeight < 24;
-      if (atEnd || commandLine.running) {
+      if (atEnd) {
         node.scrollTop = node.scrollHeight;
       }
     });
+
+    return () => node.removeEventListener('scroll', onScroll);
   }
 </script>
 
@@ -49,7 +54,7 @@
       {/if}
       <button class="btn" type="button" aria-label="Close the output" onclick={() => commandLine.close()}>Close</button>
     </header>
-    <pre class="text" tabindex="-1" {@attach follow}>{displayName(shown.output)}</pre>
+    <pre class="text" tabindex="-1" {@attach follow}>{displayText(shown.output)}</pre>
     {#if shown.note}
       <p class="note">{displayName(shown.note)}</p>
     {/if}

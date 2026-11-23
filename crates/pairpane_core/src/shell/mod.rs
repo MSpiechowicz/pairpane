@@ -14,11 +14,12 @@
 //! its output is waited for at most [`process::GRACE`] (a background program may hold the pipe open), and [`run`]
 //! returns.
 
+#[cfg(windows)]
 use std::ffi::OsString;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Instant;
@@ -27,10 +28,14 @@ use crate::model::ShellEvent;
 use crate::process::{GRACE, POLL};
 
 mod clean;
+mod terminal;
 #[cfg(test)]
 mod tests;
 
 pub use clean::Cleaner;
+pub use terminal::terminal;
+#[cfg(all(test, unix, not(target_os = "macos")))]
+use terminal::terminal_from;
 
 /// The most output sent for one command, in bytes of text.
 pub const MAX_OUTPUT: usize = 1024 * 1024;
@@ -205,6 +210,34 @@ impl Running {
     }
 }
 
+/// How a command is asked to stop: gently ([`Stop::ask`]: `SIGTERM`, then `SIGKILL` [`GRACE`] later), or at once
+/// ([`Stop::force`], as the app exits, so that nothing it started outlives it). A stop asked once the command has ended
+/// does nothing.
+#[derive(Debug, Default)]
+pub struct Stop(AtomicU8);
+
+impl Stop {
+    const ASKED: u8 = 1;
+    const FORCED: u8 = 2;
+
+    pub fn ask(&self) {
+        self.0.fetch_max(Self::ASKED, Ordering::Relaxed);
+    }
+
+    pub fn force(&self) {
+        self.0.store(Self::FORCED, Ordering::Relaxed);
+    }
+
+    /// Whether a stop has been asked, gently or not.
+    pub fn asked(&self) -> bool {
+        self.0.load(Ordering::Relaxed) >= Self::ASKED
+    }
+
+    fn forced(&self) -> bool {
+        self.0.load(Ordering::Relaxed) >= Self::FORCED
+    }
+}
+
 /// What a reading thread sends: a chunk read, or the end of its pipe.
 enum Piece {
     Bytes(Vec<u8>),
@@ -234,13 +267,13 @@ fn read_on_thread(mut pipe: impl Read + Send + 'static, sender: Sender<Piece>, n
 }
 
 /// Runs `line` with `shell` in `folder`, sending its output to `emit` and ending with one `done`; an `error` (with the
-/// io error returned) when it cannot be started. Stops the command when `stop` is raised, or when `emit` says the
-/// output is no longer wanted (it returns `false`).
+/// io error returned) when it cannot be started. Stops the command as `stop` asks, or when `emit` says the output is
+/// no longer wanted (it returns `false`).
 pub fn run(
     shell: &Shell,
     line: &str,
     folder: &Path,
-    stop: &AtomicBool,
+    stop: &Stop,
     emit: &mut dyn FnMut(ShellEvent) -> bool,
 ) -> io::Result<()> {
     check_line(line)?;
@@ -294,21 +327,22 @@ struct Supervisor {
 
 impl Supervisor {
     /// Runs until the command has ended and its output has (or [`GRACE`] after that, has not); its exit status.
-    fn drive(&mut self, stop: &AtomicBool, emit: &mut dyn FnMut(ShellEvent) -> bool) -> Option<ExitStatus> {
+    fn drive(&mut self, stop: &Stop, emit: &mut dyn FnMut(ShellEvent) -> bool) -> Option<ExitStatus> {
         let mut status = None;
         let mut ended_at: Option<Instant> = None;
 
         loop {
-            if self.stopped_at.is_none() && stop.load(Ordering::Relaxed) {
-                self.stop();
-            }
-            if let Some(asked) = self.stopped_at
-                && !self.killed
-                && status.is_none()
-                && asked.elapsed() >= GRACE
-            {
-                self.running.kill();
-                self.killed = true;
+            // A stop counts only while the command runs: one that comes after it ended leaves alone what it left
+            // running in the background, and does not say it was stopped.
+            if status.is_none() {
+                if stop.asked() {
+                    self.stop();
+                }
+                let overdue = self.stopped_at.is_some_and(|asked| asked.elapsed() >= GRACE);
+                if !self.killed && (stop.forced() || overdue) {
+                    self.running.kill();
+                    self.killed = true;
+                }
             }
 
             if status.is_none() {
@@ -335,13 +369,18 @@ impl Supervisor {
 
             match self.receiver.recv_timeout(POLL) {
                 Ok(Piece::Bytes(bytes)) => {
-                    if !self.forward(&bytes, emit) {
+                    if !self.forward(&bytes, emit) && status.is_none() {
                         self.stop();
                     }
                 }
                 Ok(Piece::End) => self.open_pipes = self.open_pipes.saturating_sub(1),
                 Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => self.open_pipes = 0,
+                // Both pipes have closed while the command still runs (it closed them, or `exec`ed a program that did):
+                // the channel answers at once from now on, so the wait is a sleep.
+                Err(RecvTimeoutError::Disconnected) => {
+                    self.open_pipes = 0;
+                    thread::sleep(POLL);
+                }
             }
         }
 
@@ -388,85 +427,4 @@ impl Supervisor {
 
         text.is_empty() || emit(ShellEvent::Output { text })
     }
-}
-
-/// The program a terminal is opened with in a folder, with its arguments (the folder is also its working directory).
-/// `None` when none is found.
-pub fn terminal(folder: &Path) -> Option<(OsString, Vec<OsString>)> {
-    terminal_from(folder, std::env::var_os("TERMINAL"), &|name| on_path(name))
-}
-
-/// The terminals tried in order on Linux and the BSDs, when `$TERMINAL` names none.
-#[cfg(all(unix, not(target_os = "macos")))]
-const TERMINALS: &[&str] = &[
-    "x-terminal-emulator",
-    "gnome-terminal",
-    "konsole",
-    "xfce4-terminal",
-    "kitty",
-    "alacritty",
-    "wezterm",
-    "foot",
-    "xterm",
-];
-
-/// [`terminal`], from what `$TERMINAL` holds and a lookup of a name on the `PATH`, so that it can be tested.
-#[cfg(all(unix, not(target_os = "macos")))]
-fn terminal_from(
-    _folder: &Path,
-    variable: Option<OsString>,
-    find: &dyn Fn(&str) -> Option<PathBuf>,
-) -> Option<(OsString, Vec<OsString>)> {
-    // `$TERMINAL` is the user's own choice: a name on the PATH or an absolute path, with no arguments.
-    let chosen = variable.and_then(|value| {
-        let value = value.into_string().ok()?;
-        let path = PathBuf::from(&value);
-        if path.is_absolute() {
-            return path.is_file().then_some(path);
-        }
-        (!value.is_empty() && !value.contains('/'))
-            .then(|| find(&value))
-            .flatten()
-    });
-
-    chosen
-        .or_else(|| TERMINALS.iter().find_map(|name| find(name)))
-        .map(|program| (program.into_os_string(), Vec::new()))
-}
-
-/// [`terminal`] on macOS: Terminal opened on the folder.
-#[cfg(target_os = "macos")]
-fn terminal_from(
-    folder: &Path,
-    _variable: Option<OsString>,
-    _find: &dyn Fn(&str) -> Option<PathBuf>,
-) -> Option<(OsString, Vec<OsString>)> {
-    Some((
-        OsString::from("/usr/bin/open"),
-        vec![
-            OsString::from("-a"),
-            OsString::from("Terminal"),
-            folder.as_os_str().to_owned(),
-        ],
-    ))
-}
-
-/// [`terminal`] on Windows: the shell in a console of its own (its working directory is the folder).
-#[cfg(windows)]
-fn terminal_from(
-    _folder: &Path,
-    _variable: Option<OsString>,
-    _find: &dyn Fn(&str) -> Option<PathBuf>,
-) -> Option<(OsString, Vec<OsString>)> {
-    Some((Shell::of_user().program.into_os_string(), vec![OsString::from("/K")]))
-}
-
-/// The file `name` stands for on the `PATH`: the first folder that has it as a file.
-fn on_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-
-    std::env::split_paths(&path)
-        .filter(|folder| folder.is_absolute())
-        .map(|folder| folder.join(name))
-        .find(|candidate| candidate.is_file())
 }
