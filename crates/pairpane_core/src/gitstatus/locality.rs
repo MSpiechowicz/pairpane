@@ -7,14 +7,15 @@
 
 use std::path::{Path, PathBuf};
 
-use super::links::is_local;
+use super::links::{is_local, is_physical};
 
 /// The place the pointer `pointer` leads to, read from the folder `base` (an absolute path), or `None` when it is not a
-/// pointer to a local place: it is empty, holds a NUL, is a network or device path (`\\host\share`, `//host/share`,
-/// `\\?\UNC\host\share`, `\\.\pipe\x`), is under an automounted network folder, or leads through a link to one of those
-/// (see [`is_local`]). `pointer` is what the file said, as the parser of gix gave it (a `gitdir:` file and the list of
-/// alternates are parsed by gix's own functions, so that what is checked here is what gix opens). A relative pointer is
-/// joined to `base` as gix joins it and is not otherwise changed.
+/// pointer to a local place that has no link on it: it is empty, holds a NUL, is a network or device path (`\\host\share`,
+/// `//host/share`, `\\?\UNC\host\share`, `\\.\pipe\x`), is under an automounted network folder, leads through a link to
+/// one of those (see [`is_local`]), or has a link anywhere on it (see [`is_physical`]: gix takes the `..` of a pointer out by
+/// reading it, and a link before a `..` would lead the system elsewhere than gix goes). `pointer` is what the file said, as
+/// the parser of gix gave it (a `gitdir:` file and the list of alternates are parsed by gix's own functions, so that what is
+/// checked here is what gix opens). A relative pointer is joined to `base` as gix joins it and is not otherwise changed.
 pub(super) fn pointer_target(base: &Path, pointer: &Path) -> Option<PathBuf> {
     let text = pointer.to_string_lossy();
     if text.is_empty() || text.contains('\0') || looks_like_network_path(&text) {
@@ -23,7 +24,7 @@ pub(super) fn pointer_target(base: &Path, pointer: &Path) -> Option<PathBuf> {
 
     let target = base.join(pointer);
 
-    is_local(&target).then_some(target)
+    (is_local(&target) && is_physical(&target)).then_some(target)
 }
 
 /// A text that starts like a network or device path in either separator (`\\host\share`, `//host/share`, `\\.\pipe\x`, a
@@ -116,15 +117,35 @@ mod tests {
 
     #[test]
     fn a_relative_pointer_is_read_from_the_folder_that_holds_it() {
-        let base = base();
+        let folder = tempfile::tempdir().expect("a folder");
+        let root = gix::path::realpath(folder.path()).expect("its real path");
+        let base = root.join("work/project");
+        std::fs::create_dir_all(&base).expect("folders");
+        std::fs::create_dir_all(root.join(".git/modules")).expect("folders");
 
         assert_eq!(pointer_target(&base, Path::new("../x")), Some(base.join("../x")));
+        // A submodule's own place: `..` after real folders is fine.
         assert_eq!(
             pointer_target(&base, Path::new("../../.git/modules/m")),
             Some(base.join("../../.git/modules/m"))
         );
         // Nothing is trimmed here: the text is what gix's parser gave, which cut the end of a line and nothing else.
         assert_eq!(pointer_target(&base, Path::new(" a")), Some(base.join(" a")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pointer_with_a_link_on_its_way_is_refused_whatever_it_leads_to() {
+        let folder = tempfile::tempdir().expect("a folder");
+        let root = gix::path::realpath(folder.path()).expect("its real path");
+        std::fs::create_dir_all(root.join("x/y")).expect("folders");
+        std::os::unix::fs::symlink("x/y", root.join("l")).expect("a link");
+        std::os::unix::fs::symlink("gone", root.join("dangling")).expect("a link");
+
+        for pointer in ["l", "l/../real", "dangling/repo.git", "x/../l"] {
+            assert_eq!(pointer_target(&root, Path::new(pointer)), None, "{pointer}");
+        }
+        assert!(pointer_target(&root, Path::new("x/y/../y")).is_some());
     }
 
     #[cfg(not(windows))]

@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+use super::testing::status;
 use super::tests::{clean, clean_paths};
 use super::*;
 

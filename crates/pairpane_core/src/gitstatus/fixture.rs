@@ -31,6 +31,8 @@ pub(super) struct Staged<'a> {
     pub(super) mode: Mode,
     /// The id of the entry, when it is not the id of a blob of `content` (a sparse directory is a tree).
     pub(super) id: Option<gix::ObjectId>,
+    /// The entry is marked skip-worktree: its file is not to be looked for in the work tree, and what reads it reads the blob.
+    pub(super) skip_worktree: bool,
 }
 
 impl<'a> Staged<'a> {
@@ -41,6 +43,15 @@ impl<'a> Staged<'a> {
             stage: Stage::Unconflicted,
             mode: Mode::FILE,
             id: None,
+            skip_worktree: false,
+        }
+    }
+
+    /// The entry marked skip-worktree.
+    pub(super) fn skipped(self) -> Self {
+        Self {
+            skip_worktree: true,
+            ..self
         }
     }
 
@@ -257,7 +268,7 @@ impl Repo {
                 None => self.repo.write_blob(entry.content).expect("a blob").detach(),
             };
             // A sparse directory is not in the work tree, and git marks it so.
-            let flags = if entry.mode == Mode::DIR {
+            let flags = if entry.mode == Mode::DIR || entry.skip_worktree {
                 Flags::from_stage(entry.stage) | Flags::SKIP_WORKTREE | Flags::EXTENDED
             } else {
                 Flags::from_stage(entry.stage)

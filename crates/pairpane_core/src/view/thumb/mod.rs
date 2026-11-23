@@ -40,7 +40,7 @@ mod environment;
 mod format;
 mod identity;
 #[cfg(target_os = "macos")]
-mod macos;
+pub(crate) mod macos;
 
 use std::io;
 use std::path::Path;

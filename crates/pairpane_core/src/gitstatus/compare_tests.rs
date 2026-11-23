@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime};
 use gix::index::entry::Stage;
 
 use super::fixture::{Repo, Staged, pairs, within};
+use super::testing::status;
 use super::tests::{clean, marks_with, owned};
 use super::*;
 use crate::model::GitMark::{Conflicted, Modified, Staged as Added};
@@ -162,9 +163,10 @@ mod unix {
             )
         });
 
-        // From the root the folder is not entered (nothing untracked is found in it); from the folder itself it has no status.
+        // From the root the folder is not entered, and is `modified` as the safe thing to say of what was not looked at; from the
+        // folder itself it has no status (a pipe is no rules file, which is read for every entry of the folder).
         assert!(from_root.repo);
-        assert_eq!(pairs(&from_root.marks), vec![]);
+        assert_eq!(pairs(&from_root.marks), vec![("sub", Modified)]);
         assert!(!from_sub.repo);
     }
 

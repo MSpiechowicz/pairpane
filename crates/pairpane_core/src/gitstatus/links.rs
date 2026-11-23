@@ -12,7 +12,6 @@ use crate::listing::platform;
 
 #[cfg(not(windows))]
 use std::ffi::OsString;
-#[cfg(not(windows))]
 use std::fs;
 
 /// Most links followed while resolving one path, like the Linux kernel's own limit.
@@ -74,8 +73,22 @@ pub(super) fn is_automount(place: &Path) -> bool {
 /// The path that the absolute `path` finally leads to, with every link on it followed one at a time and every hop checked
 /// before it is followed (an automounted network folder, too many links). `InvalidInput` says a hop must not be followed;
 /// `NotFound` that a name on the way is not there (the path is not a network place then, but it leads nowhere either).
+///
+/// A path that this walk cannot follow to its end but the system can is refused as well (`InvalidInput`), and is never "led
+/// nowhere": that is a magic link, which has no path to walk, such as `/proc/self/fd/3` for a pipe (`pipe:[1234]`), a socket
+/// (`socket:[1234]`), an `anon_inode:` or a deleted file (`/tmp/x (deleted)`). The system opens the very object it stands
+/// for, which no look at its text can tell, so any such path is odd.
 #[cfg(not(windows))]
 pub(super) fn resolve(path: &Path) -> io::Result<PathBuf> {
+    match walk(path) {
+        Err(error) if leads_nowhere(&error) && fs::metadata(path).is_ok() => Err(refused()),
+        other => other,
+    }
+}
+
+/// The walk of [`resolve`].
+#[cfg(not(windows))]
+fn walk(path: &Path) -> io::Result<PathBuf> {
     if !path.is_absolute() {
         return Err(refused());
     }
@@ -165,6 +178,48 @@ pub(super) fn is_local(place: &Path) -> bool {
         Ok(_) => true,
         Err(error) => leads_nowhere(&error),
     })
+}
+
+/// Whether the system reads `path` as it is written once its `.` and `..` are taken out: no link (or, on Windows, junction)
+/// is anywhere on it, so what a program that takes the dots out first (gix does, for a `gitdir:` pointer) means is what the
+/// system opens, and `resolve(path) == normalise(path)`. A name that is not there has no link in it; a `..` after a name
+/// that is not there, or after a file, is one the system cannot follow, and so is not physical. `..` is fine where it
+/// follows real folders only (a submodule's `gitdir: ../.git/modules/x`).
+pub(super) fn is_physical(path: &Path) -> bool {
+    if !path.is_absolute() {
+        return false;
+    }
+
+    let mut at = PathBuf::new();
+    let mut in_folder = true;
+    let mut components = path.components();
+
+    while let Some(component) = components.next() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => at.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !in_folder {
+                    return false;
+                }
+                at.pop();
+            }
+            Component::Normal(name) => {
+                at.push(name);
+
+                match fs::symlink_metadata(&at) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => return false,
+                    Ok(metadata) => in_folder = metadata.is_dir(),
+                    Err(error) if leads_nowhere(&error) => {
+                        return components.all(|rest| !matches!(rest, Component::ParentDir));
+                    }
+                    Err(_) => return false,
+                }
+            }
+        }
+    }
+
+    true
 }
 
 #[cfg(not(windows))]
@@ -303,6 +358,83 @@ mod tests {
         assert!(
             !is_local(Path::new("relative/path")),
             "a path that is not absolute cannot be checked"
+        );
+    }
+
+    #[test]
+    fn a_path_is_physical_when_no_link_is_on_it_and_dots_follow_real_folders_only() {
+        let folder = tempfile::tempdir().expect("a folder");
+        let root = gix::path::realpath(folder.path()).expect("its real path");
+        fs::create_dir_all(root.join("a/b")).expect("folders");
+        fs::write(root.join("a/file"), b"x").expect("a file");
+        symlink("a/b", root.join("link")).expect("a link");
+
+        for physical in ["a/b", "a/b/../b", "a/./b", "a/none", "none/deeper", "a/file", "a/b/.."] {
+            assert!(is_physical(&root.join(physical)), "{physical}");
+        }
+        for odd in [
+            "link",
+            "link/..",
+            "link/../a",
+            "a/link2/../b",
+            "none/../a",
+            "a/file/../b",
+            "a/none/../b",
+        ] {
+            assert!(!is_physical(&root.join(odd)), "{odd}");
+        }
+        assert!(!is_physical(Path::new("relative")));
+        assert!(is_physical(Path::new("/")));
+    }
+
+    #[test]
+    fn a_path_whose_dots_the_link_would_read_differently_is_not_physical_and_resolves_elsewhere() {
+        // The auditor's `lexical` fixture: gix reads `l/../real` as `w/real`, the system as `x/real`.
+        let folder = tempfile::tempdir().expect("a folder");
+        let root = gix::path::realpath(folder.path()).expect("its real path");
+        fs::create_dir_all(root.join("x/y")).expect("folders");
+        fs::create_dir(root.join("x/real")).expect("a folder");
+        fs::create_dir(root.join("real")).expect("a folder");
+        symlink("x/y", root.join("l")).expect("a link");
+        let path = root.join("l/../real");
+
+        assert!(!is_physical(&path));
+        assert_eq!(resolve(&path).expect("resolved"), root.join("x/real"));
+        assert_ne!(resolve(&path).expect("resolved"), normalise(&path));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_magic_link_that_is_no_path_is_refused_and_never_leads_nowhere() {
+        use std::os::fd::AsRawFd;
+
+        let folder = tempfile::tempdir().expect("a folder");
+        let root = gix::path::realpath(folder.path()).expect("its real path");
+        let (reader, writer) = std::io::pipe().expect("a pipe");
+        let at = format!("/proc/self/fd/{}", reader.as_raw_fd());
+        symlink(&at, root.join("to-pipe")).expect("a link");
+        symlink(format!("/proc/self/fd/{}", writer.as_raw_fd()), root.join("to-writer")).expect("a link");
+
+        for name in ["to-pipe", "to-writer"] {
+            let error = resolve(&root.join(name)).expect_err(name);
+
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{name}");
+            assert!(!is_local(&root.join(name)), "{name}");
+        }
+        assert_eq!(
+            resolve(Path::new(&at)).expect_err("the pipe itself").kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        // A deleted file is the same: the link's text is a path that is not there, and the system opens the file.
+        let gone = root.join("gone");
+        let file = fs::File::create(&gone).expect("a file");
+        fs::remove_file(&gone).expect("removed");
+        let at = format!("/proc/self/fd/{}", file.as_raw_fd());
+
+        assert_eq!(
+            resolve(Path::new(&at)).expect_err("deleted").kind(),
+            io::ErrorKind::InvalidInput
         );
     }
 }

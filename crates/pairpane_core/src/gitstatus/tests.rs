@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use gix::index::entry::Stage;
 
 use super::fixture::{Repo, Staged, pairs};
+use super::testing::status;
 use super::*;
 use crate::model::GitMark::{Conflicted, Ignored, Modified, Staged as Added, Untracked};
 
@@ -288,7 +289,7 @@ fn a_folder_outside_any_repository_is_not_a_repo() {
 
 /// The marks of `folder` when the search for a repository must stop at `home`.
 fn marks_with_home(folder: &Path, home: Option<&Path>) -> Option<Vec<(String, crate::model::GitMark)>> {
-    let answer = scan::status_below(
+    let answer = super::testing::status_below(
         folder,
         home.map(Path::to_path_buf),
         Limits::default(),

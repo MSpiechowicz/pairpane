@@ -1,17 +1,24 @@
 //! The files of a repository that gix is about to read, looked at first (see [`super::files`]): each has to be a regular
-//! file within its cap, so that a named pipe, a device or a link to `/dev/zero` in a place where a file is expected never
-//! reaches an open that waits for ever or a read that does not end. The folders gix goes through to those files are looked at
-//! too: `refs`, `objects`, `objects/info`, `objects/pack` and each `objects/xx` of every object folder must be real folders and
-//! no link (or reparse point), as a link there would lead to files that were not looked at. Everything that is not here (the
-//! content of a loose object, the blobs of the index) is read by gix, and what holds up a read of those is the time limit of
-//! the caller, which answers for the request whether or not the read returns.
+//! file within its cap (by the size of the file that is opened, not by what `lstat` says), so that a named pipe, a device or a
+//! link to `/dev/zero` in a place where a file is expected never reaches an open that waits for ever or a read that does not
+//! end. None of them may be a link: `HEAD`, `info/exclude`, `info/attributes`, `config`, `config.worktree`, `commondir`, the
+//! `index`, `packed-refs` and the files of the refs are what they are or the repository is not read (a deliberate trade: git
+//! itself follows a link there, and a `HEAD` that is a link to a branch, or an `info/exclude` that is shared between
+//! repositories by a link, is a repository without a status here). The folders gix goes through to those files are looked at
+//! too: `refs`, `info`, `objects`, `objects/info`, `objects/pack` and each `objects/xx` of every object folder must be real
+//! folders and no link (or reparse point), as a link there would lead to files that were not looked at. Everything that is not
+//! here (the content of a loose object, the blobs of the index) is read by gix inside the process that the status runs in,
+//! which is held to a memory and a time limit, and may read nothing but the folders of the repository.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::budget::SOURCE_BYTES;
 use super::files::{self, Seen};
+use super::layout::Layout;
+use super::links::normalise;
 use super::locality::pointer_target;
-use super::locate::{Layout, POINTER_BYTES};
+use super::locate::POINTER_BYTES;
 
 /// The most a repository's `config` may hold.
 const CONFIG_BYTES: u64 = 1024 * 1024;
@@ -42,6 +49,14 @@ pub(super) enum Refusal {
     TooBig,
 }
 
+/// What the files of a repository add up to for the rules budget, and where its alternates are.
+pub(super) struct Sources {
+    /// The object folders of the alternates (not the repository's own).
+    pub(super) alternates: Vec<PathBuf>,
+    /// The bytes of `info/exclude` and `info/attributes` of the git folder and of the common folder.
+    pub(super) info_rules: u64,
+}
+
 /// A file that is not there or is plain is fine; anything else is a repository not to read.
 fn fine<T>(seen: Seen<T>) -> Result<(), Refusal> {
     match seen {
@@ -51,31 +66,46 @@ fn fine<T>(seen: Seen<T>) -> Result<(), Refusal> {
 }
 
 /// Looks at every file of the repository that gix reads on opening it and on a status.
-pub(super) fn files(layout: &Layout) -> Result<(), Refusal> {
+pub(super) fn files(layout: &Layout) -> Result<Sources, Refusal> {
     index(&layout.git_dir)?;
 
     let mut folders = vec![layout.git_dir.as_path()];
     if layout.common_dir != layout.git_dir {
         folders.push(layout.common_dir.as_path());
     }
+    let mut info_rules = 0;
     for folder in &folders {
-        // The ignore and attribute rules of the repository's own folder. gix reads them through a link, and a link is fine when
-        // it leads to a regular file of a local place (or nowhere, which gix reads as no rules): see [`files::seen_following`].
+        // The ignore and attribute rules of the repository's own folder: read whole, as they are the first of the rules that
+        // the budget of a status counts. One that is over the cap of a source is a repository too big to read.
         for name in ["info/exclude", "info/attributes"] {
-            fine(files::seen_following_below(folder, name, CONFIG_BYTES))?;
+            match files::read_below(folder, name, SOURCE_BYTES) {
+                Seen::Missing => {}
+                Seen::Plain(bytes) => info_rules += bytes.len() as u64,
+                Seen::Large => return Err(Refusal::TooBig),
+                Seen::Odd => return Err(Refusal::Odd),
+            }
         }
     }
 
-    fine(files::seen(&layout.common_dir.join("config"), CONFIG_BYTES))?;
-    fine(files::seen(&layout.git_dir.join("config.worktree"), CONFIG_BYTES))?;
+    for config in [layout.common_dir.join("config"), layout.git_dir.join("config.worktree")] {
+        match files::read(&config, CONFIG_BYTES) {
+            Seen::Missing | Seen::Plain(_) => {}
+            Seen::Odd | Seen::Large => return Err(Refusal::Odd),
+        }
+    }
     fine(files::seen(&layout.common_dir.join("packed-refs"), PACKED_REFS_BYTES))?;
     refs(layout)?;
 
-    for objects in object_folders(&layout.common_dir)? {
-        object_folder(&objects)?;
+    let mut objects = object_folders(&layout.common_dir)?;
+    for folder in &objects {
+        object_folder(folder)?;
     }
+    objects.remove(0);
 
-    Ok(())
+    Ok(Sources {
+        alternates: objects,
+        info_rules,
+    })
 }
 
 /// The index, and the shared index it may point to (a split index), which gix reads next to it.
@@ -120,7 +150,7 @@ fn check_index(path: &Path) -> Result<(), Refusal> {
 /// reads it from, in the common folder, or in the work tree's own folder for a ref of that work tree). A ref that is in
 /// `packed-refs` has no file, and `HEAD` that is an id has none either.
 fn refs(layout: &Layout) -> Result<(), Refusal> {
-    let mut text = match files::read_following(&layout.git_dir.join("HEAD"), POINTER_BYTES) {
+    let mut text = match files::read(&layout.git_dir.join("HEAD"), POINTER_BYTES) {
         Seen::Plain(bytes) => bytes,
         Seen::Missing => return Ok(()),
         Seen::Odd | Seen::Large => return Err(Refusal::Odd),
@@ -207,7 +237,7 @@ fn object_folders(common_dir: &Path) -> Result<Vec<PathBuf>, Refusal> {
             }
 
             // Not a local place: the repository is not read, and nothing at the other end is touched.
-            let target = pointer_target(&own, &entry).ok_or(Refusal::Odd)?;
+            let target = normalise(&pointer_target(&own, &entry).ok_or(Refusal::Odd)?);
             folders.push(target.clone());
             pending.push((target, depth + 1));
         }

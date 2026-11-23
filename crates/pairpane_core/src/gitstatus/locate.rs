@@ -1,17 +1,19 @@
 //! Finding the repository a folder is in, before gix is let near it. gix discovers a repository by walking up and reading
 //! what it finds (`HEAD`, `commondir`, `gitdir`, the target of a `.git` file); here the same walk is done with only `lstat`
-//! and small, non-blocking reads, so that what a repository names is looked at first: a pointer to a network place and a
-//! file that is no regular file make the folder "not in a repository" (see [`super::locality`] and [`super::files`]). The
-//! repository found is the one gix would find: the first folder going up that has a `.git` (a folder, or a file that points
-//! to one) with a valid `HEAD`, an `objects` and a `refs` folder, a filesystem boundary (Unix) ends the search, and so does
-//! the `ceiling`, the user's home folder, which is the last folder tried.
+//! and small, non-blocking reads, so that what a repository names is looked at first: a pointer to a network place or with a
+//! link on its way, and a file that is no regular file (or is a link), make the folder "not in a repository" (see
+//! [`super::locality`], [`super::links`] and [`super::files`]). The repository found is the one gix would find: the first
+//! folder going up that has a `.git` (a folder, or a file that points to one, or a link to a folder) with a valid `HEAD`, an
+//! `objects` and a `refs` folder, a filesystem boundary (Unix) ends the search, and so does the `ceiling`, the user's home
+//! folder, which is the last folder tried.
 //!
 //! What is read is read the way gix reads it, so that what is looked at is what gix opens: a `.git` file is parsed with gix's
 //! own `gitdir:` parser (`gix::discover::parse::gitdir`: one space after the colon, and the text up to the end of the file
-//! without its trailing white space), a `commondir` is the file without its trailing white space, and a `.git` folder that
-//! has both a `commondir` and a `gitdir` is the folder of a linked work tree, whose work tree gix takes from the content of the
-//! `gitdir` file (so that is refused unless it names this very `.git`). The [`Layout`] that this finds is what the repository
-//! must be once gix has opened it (see [`Layout::is_opened`]).
+//! without its trailing white space), a `HEAD` with gix's parser of a loose reference ([`is_head`]), a `commondir` is the file
+//! without its trailing white space, and a `.git` folder that has both a `commondir` and a `gitdir` is the folder of a linked
+//! work tree, whose work tree gix takes from the content of the `gitdir` file (so that is refused unless it names this very
+//! `.git`). The [`Layout`] that this finds is what the repository must be once gix has opened it (see
+//! [`Layout::is_opened`](super::layout::Layout::is_opened)) and what the helper that reads it may read.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,49 +23,13 @@ use gix::bstr::ByteSlice;
 use super::GitError;
 use super::files::{self, Seen};
 use super::inspect::{self, Refusal};
+use super::layout::Layout;
 use super::links::{self, is_local, normalise};
 use super::locality::pointer_target;
 use crate::listing::platform;
 
 /// The most a `HEAD`, a `commondir`, a `gitdir` or a `.git` file may hold.
 pub(super) const POINTER_BYTES: u64 = 4 * 1024;
-
-/// The folders of a repository that was found, as gix is to open them.
-pub(super) struct Layout {
-    /// The `.git` that is handed to gix: a folder, a file that points to one, or a link to a folder.
-    pub(super) dot_git: PathBuf,
-    /// The folder with `HEAD`, the `index` and the files of a work tree of its own.
-    pub(super) git_dir: PathBuf,
-    /// The folder with `config`, the objects and the refs: the same as `git_dir` unless this is a linked work tree.
-    pub(super) common_dir: PathBuf,
-    /// The work tree: the folder that holds the `.git`.
-    pub(super) workdir: PathBuf,
-}
-
-impl Layout {
-    /// Whether the repository gix opened is the one that was looked at: the same git folder, common folder and work tree, as
-    /// paths are compared (their `.` and `..` read away). When it is not, gix took a path from somewhere that this did not
-    /// look at, and the repository must not be read.
-    pub(super) fn is_opened(&self, repository: &gix::Repository) -> bool {
-        same(repository.git_dir(), &self.git_dir)
-            && same(repository.common_dir(), &self.common_dir)
-            && repository.workdir().is_some_and(|workdir| same(workdir, &self.workdir))
-    }
-}
-
-/// Whether two paths are the same one once their dots are read away (and, on macOS, once they are precomposed, which gix does
-/// to the paths of a repository that asks for it).
-fn same(opened: &Path, looked_at: &Path) -> bool {
-    let (opened, looked_at) = (normalise(opened), normalise(looked_at));
-
-    if opened == looked_at {
-        return true;
-    }
-
-    cfg!(target_os = "macos")
-        && gix::utils::str::precompose_path(opened.as_path().into())
-            == gix::utils::str::precompose_path(looked_at.as_path().into())
-}
 
 /// Why a folder going up the search gives no repository.
 enum Skip {
@@ -97,9 +63,14 @@ pub(super) fn find(real: &Path, ceiling: Option<&Path>) -> Result<Option<Layout>
     }
 }
 
-fn found(layout: Layout) -> Result<Option<Layout>, GitError> {
+fn found(mut layout: Layout) -> Result<Option<Layout>, GitError> {
     match inspect::files(&layout) {
-        Ok(()) => Ok(Some(layout)),
+        Ok(sources) => {
+            layout.alternates = sources.alternates;
+            layout.info_rules = sources.info_rules;
+
+            Ok(Some(layout))
+        }
         Err(Refusal::Odd) => Ok(None),
         Err(Refusal::TooBig) => Err(GitError::TooBig),
     }
@@ -124,7 +95,9 @@ fn candidate(dir: &Path) -> Result<Layout, Skip> {
     }
 }
 
-/// The repository the `.git` of `dir` is: a folder, a file that points to a folder, or a link to either.
+/// The repository the `.git` of `dir` is: a folder, a file that points to a folder, or a link to a folder. A link is followed
+/// hop by hop to a local place, and the folder at the end of it is the git folder (a path that has no link on it, so that it is
+/// the one every place below it is looked at and opened by); a link to anything else is not read.
 fn dot_git_folder(dir: &Path) -> Result<Layout, Skip> {
     let dot_git = dir.join(".git");
     let metadata = match fs::symlink_metadata(&dot_git) {
@@ -133,39 +106,42 @@ fn dot_git_folder(dir: &Path) -> Result<Layout, Skip> {
         Err(_) => return Err(Skip::Refused),
     };
 
-    // A link is followed hop by hop to a local place, and what is at the end of it is looked at, not what the link is.
-    let (metadata, at) = if metadata.file_type().is_symlink() {
+    if metadata.file_type().is_symlink() {
         let resolved = match links::resolve(&dot_git) {
             Ok(resolved) => resolved,
             Err(error) if links::leads_nowhere(&error) => return Err(Skip::NotHere),
             Err(_) => return Err(Skip::Refused),
         };
-        let metadata = fs::symlink_metadata(&resolved).map_err(|_| Skip::NotHere)?;
-
-        (metadata, resolved)
-    } else {
-        (metadata, dot_git.clone())
-    };
+        return match fs::symlink_metadata(&resolved) {
+            Ok(target) if target.is_dir() => own_folder(dir, dot_git, resolved),
+            Ok(_) => Err(Skip::Refused),
+            Err(_) => Err(Skip::NotHere),
+        };
+    }
 
     if metadata.is_dir() {
-        own_folder(dir, dot_git)
+        let git_dir = dot_git.clone();
+
+        own_folder(dir, dot_git, git_dir)
     } else if metadata.is_file() {
-        pointed_to(dir, dot_git, &at)
+        pointed_to(dir, dot_git)
     } else {
         Err(Skip::Refused)
     }
 }
 
-/// The repository whose own folder is `dot_git` (a `.git` folder).
-fn own_folder(dir: &Path, dot_git: PathBuf) -> Result<Layout, Skip> {
-    let folders = git_dir(&dot_git)?;
-    names_this_folder(&dot_git, &folders)?;
+/// The repository whose own folder is `git_dir` (the `.git` folder `dot_git` is, or what it links to).
+fn own_folder(dir: &Path, dot_git: PathBuf, git_dir: PathBuf) -> Result<Layout, Skip> {
+    let folders = self::git_dir(&git_dir)?;
+    names_this_folder(&git_dir, &folders)?;
 
     Ok(Layout {
-        git_dir: dot_git.clone(),
+        git_dir,
         common_dir: folders.common_dir,
         workdir: dir.to_path_buf(),
         dot_git,
+        alternates: Vec::new(),
+        info_rules: 0,
     })
 }
 
@@ -207,10 +183,9 @@ fn plain_path(bytes: &[u8]) -> Option<PathBuf> {
     gix::path::from_bstring(text.to_vec()).ok()
 }
 
-/// The repository a `.git` file points to with its `gitdir: <path>` line. `dot_git` is where the file is, and `at` where it is
-/// read from (the same, unless `.git` is a link to it).
-fn pointed_to(dir: &Path, dot_git: PathBuf, at: &Path) -> Result<Layout, Skip> {
-    let bytes = match files::read(at, POINTER_BYTES) {
+/// The repository a `.git` file points to with its `gitdir: <path>` line.
+fn pointed_to(dir: &Path, dot_git: PathBuf) -> Result<Layout, Skip> {
+    let bytes = match files::read(&dot_git, POINTER_BYTES) {
         Seen::Plain(bytes) => bytes,
         Seen::Missing => return Err(Skip::NotHere),
         Seen::Odd | Seen::Large => return Err(Skip::Refused),
@@ -220,14 +195,10 @@ fn pointed_to(dir: &Path, dot_git: PathBuf, at: &Path) -> Result<Layout, Skip> {
         return Err(Skip::NotHere);
     };
 
-    // Not a local place: the folder is in no repository, and nothing at the other end is touched.
-    let target = pointer_target(dir, &pointer).ok_or(Skip::Refused)?;
-    let resolved = match links::resolve(&target) {
-        Ok(resolved) => resolved,
-        Err(error) if links::leads_nowhere(&error) => return Err(Skip::NotHere),
-        Err(_) => return Err(Skip::Refused),
-    };
-    match fs::symlink_metadata(&resolved) {
+    // Not a local place, or one that has a link on its way: the folder is in no repository, and nothing at the other end is
+    // touched.
+    let target = normalise(&pointer_target(dir, &pointer).ok_or(Skip::Refused)?);
+    match fs::symlink_metadata(&target) {
         Ok(metadata) if metadata.is_dir() => {}
         _ => return Err(Skip::NotHere),
     }
@@ -239,6 +210,8 @@ fn pointed_to(dir: &Path, dot_git: PathBuf, at: &Path) -> Result<Layout, Skip> {
         common_dir: folders.common_dir,
         workdir: dir.to_path_buf(),
         dot_git,
+        alternates: Vec::new(),
+        info_rules: 0,
     })
 }
 
@@ -257,8 +230,9 @@ fn git_dir(git_dir: &Path) -> Result<Folders, Skip> {
         return Err(Skip::Refused);
     }
 
-    // gix reads `HEAD` through a link (git's old way of writing a symbolic ref), so it is read as gix reads it.
-    match files::read_following(&git_dir.join("HEAD"), POINTER_BYTES) {
+    // No file of the repository is a link, `HEAD` included (git's old way of writing a symbolic ref): such a repository is not
+    // read.
+    match files::read(&git_dir.join("HEAD"), POINTER_BYTES) {
         Seen::Missing => return Err(Skip::NotHere),
         Seen::Plain(head) if is_head(&head) => {}
         // A `HEAD` that holds neither makes a folder that is no git folder, as for git.
@@ -295,15 +269,21 @@ fn git_dir(git_dir: &Path) -> Result<Folders, Skip> {
     })
 }
 
-/// Whether the content of a `HEAD` is one a git folder has: a symbolic ref to a name below `refs/`, or an object id (of 40 or
-/// 64 hex digits). A `HEAD` of anything else is no git folder, which is where git itself goes on to the parent folder.
+/// Whether the content of a `HEAD` is one a git folder has: what gix's own parser of a loose reference takes (a symbolic ref
+/// with a valid name, or an object id), which is where git itself goes on to the parent folder otherwise. An object id of a
+/// SHA-256 repository (64 hex digits) is one too: it is a git folder of a format that is not read, and gix says so when it
+/// opens it (`repo: false`, and the search does not go on to a parent that holds another repository).
 pub(super) fn is_head(bytes: &[u8]) -> bool {
-    let text = bytes.trim_end();
-
-    match text.strip_prefix(b"ref:") {
-        Some(name) => name.trim_start().starts_with(b"refs/"),
-        None => matches!(text.len(), 40 | 64) && text.iter().all(u8::is_ascii_hexdigit),
+    let Ok(name) = gix::refs::FullName::try_from("HEAD") else {
+        return false;
+    };
+    if gix::refs::file::loose::Reference::try_from_path(name, bytes, gix::hash::Kind::Sha1).is_ok() {
+        return true;
     }
+
+    let id = bytes.trim_end_with(|c| c == '\n' || c == '\r');
+
+    id.len() == 64 && id.iter().all(u8::is_ascii_hexdigit)
 }
 
 /// The folder a `commondir` names: its text without the white space at its end, joined to the git folder as gix joins it, and
@@ -311,5 +291,5 @@ pub(super) fn is_head(bytes: &[u8]) -> bool {
 fn common_dir(git_dir: &Path, bytes: &[u8]) -> Option<PathBuf> {
     let named = plain_path(bytes)?;
 
-    pointer_target(git_dir, &named)
+    pointer_target(git_dir, &named).map(|target| normalise(&target))
 }

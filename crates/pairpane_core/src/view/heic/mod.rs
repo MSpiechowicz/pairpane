@@ -41,13 +41,15 @@ pub(super) mod items;
 pub(super) mod process;
 
 #[cfg(windows)]
-pub(super) mod job;
+pub(crate) mod job;
 #[cfg(target_os = "linux")]
 mod kernel;
 #[cfg(all(test, target_os = "linux"))]
 mod kernel_probes;
 #[cfg(target_os = "linux")]
-pub(super) mod sandbox;
+pub(crate) mod sandbox;
+#[cfg(target_os = "linux")]
+mod writes;
 
 pub use process::child_main;
 

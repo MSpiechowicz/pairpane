@@ -2,7 +2,6 @@
 //! directory walk, each counted and noted in the marks.
 
 use std::ops::ControlFlow;
-use std::path::Path;
 
 use gix::bstr::BStr;
 use gix::dir::EntryRef;
@@ -11,7 +10,7 @@ use gix::dir::walk::{Action, Delegate};
 use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
 use gix::status::plumbing::index_as_worktree_with_renames::{Entry, VisitEntry};
 
-use super::files::{self, Rules};
+use super::budget::{Budget, Charged};
 use super::marks::Marks;
 use super::watch::Meter;
 use crate::model::GitMark;
@@ -50,31 +49,27 @@ impl<'index> VisitEntry<'index> for Changes<'_, '_> {
 pub(super) struct Walker<'a, 'm> {
     pub(super) marks: &'a mut Marks,
     pub(super) meter: &'a mut Meter<'m>,
-    /// The work tree, to look at the `.gitignore` of a folder before the walk enters it.
-    pub(super) workdir: &'a Path,
-    /// The bytes of the rules files read so far: the ones of the folder and its parents, and of each folder entered.
-    pub(super) rules: u64,
+    /// The rules budget of the status: what the rules of each folder entered add up to.
+    pub(super) budget: &'a Budget,
 }
 
 impl Walker<'_, '_> {
-    /// Whether the walk may enter the folder `rela_path`, whose `.gitignore` it reads on entering (see [`files::rules_file`]):
-    /// a pipe there would hold it up for ever, and a file too big is no rules file, so such a folder is not entered. The bytes
-    /// of the rules files add up, and past [`files::RULES_TOTAL_BYTES`] the status is too big (the patterns of all of them are
-    /// held in memory).
+    /// Whether the walk may enter the folder `rela_path`, whose rules it reads on entering (see [`Budget`]): a pipe there
+    /// would hold it up for ever, and a file too big is no rules file, so such a folder is not entered, and is `modified` as
+    /// the safe thing to say of what is not looked at. The sources add up, and past the total the status is too big (the
+    /// patterns of all of them are held in memory).
     fn may_enter(&mut self, rela_path: &BStr) -> bool {
-        let Ok(rela_path) = gix::path::from_bstr(rela_path) else {
-            return false;
-        };
+        match self.budget.charge(rela_path) {
+            Charged::Fine => !self.meter.is_stopped(),
+            Charged::Large | Charged::Odd => {
+                self.marks.note(rela_path, GitMark::Modified);
 
-        match files::rules_file(&self.workdir.join(rela_path).join(".gitignore")) {
-            Rules::Risky => false,
-            Rules::Bytes(bytes) => {
-                self.rules += bytes;
-                if self.rules > files::RULES_TOTAL_BYTES {
-                    self.meter.exhaust();
-                }
+                false
+            }
+            Charged::Over => {
+                self.meter.exhaust();
 
-                !self.meter.is_stopped()
+                false
             }
         }
     }

@@ -1,5 +1,5 @@
-//! What every child process of the core is started and supervised with: the HEIC helper (`view::heic`) and `unrar`
-//! (`archive::rar`).
+//! What every child process of the core is started and supervised with: the HEIC helper (`view::heic`), the thumbnail helper
+//! (`view::thumb`), the git status helper (`gitstatus`) and `unrar` (`archive::rar`).
 //!
 //! A child is never started through a shell: [`command`] takes a fixed program and an argument list and builds a command
 //! with a cleared environment, no standard input, a piped standard output (the caller may override it), no standard error,

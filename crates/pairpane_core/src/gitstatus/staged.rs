@@ -35,9 +35,8 @@ const MAX_PATH: usize = 64 * 1024;
 /// The most the trees held open by the walk may add up to, in bytes.
 const MAX_HELD: usize = 64 * 1024 * 1024;
 
-/// What `HEAD` is: the commit (none for an unborn branch) and its tree.
+/// What `HEAD` is: its tree (the empty one for an unborn branch).
 pub(super) struct Head {
-    pub(super) commit: Option<gix::ObjectId>,
     pub(super) tree: gix::ObjectId,
 }
 
@@ -47,7 +46,6 @@ pub(super) fn head(repository: &gix::Repository, stop: &Stop) -> Result<Head, Gi
         let mut head = repository.head()?;
         if head.is_unborn() {
             return Ok(Head {
-                commit: None,
                 tree: repository.empty_tree().id,
             });
         }
@@ -55,7 +53,6 @@ pub(super) fn head(repository: &gix::Repository, stop: &Stop) -> Result<Head, Gi
         let commit = head.peel_to_commit()?;
 
         Ok(Head {
-            commit: Some(commit.id),
             tree: commit.tree_id()?.detach(),
         })
     };

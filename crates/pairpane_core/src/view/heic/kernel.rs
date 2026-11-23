@@ -11,6 +11,8 @@ use std::io;
 
 use libc::{c_long, sock_filter, sock_fprog};
 
+use super::writes::{WRITES, open_prelude};
+
 /// `AUDIT_ARCH_*` of the architecture this is built for, which the filter requires of every call (a program of another
 /// ABI that the kernel runs, the 32-bit one on x86-64, has other call numbers). `None` where there is no filter.
 #[cfg(target_arch = "x86_64")]
@@ -22,13 +24,18 @@ const AUDIT_ARCH: Option<u32> = None;
 
 /// Which seccomp filter a helper takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::view) enum Filter {
+pub(crate) enum Filter {
     /// Refuse the calls of [`DENIED`] and allow the rest: for the HEIC helper, whose codecs (and their plugins) make calls
     /// that differ between libheif's builds and distributions.
     DenyList,
     /// Allow only the calls of [`ALLOWED`] and refuse the rest: for the thumbnail helper, which, once it is confined, only
     /// reads its input, allocates, computes and writes its answer.
     AllowList,
+    /// Refuse the calls of [`DENIED`] and of [`WRITES`], and an open of a file to write, create or truncate it (`openat` and
+    /// `open` with such flags; `openat2` is answered `ENOSYS`, as its flags are in memory the filter cannot read, and the C
+    /// library goes on with `openat`), and allow the rest: for the helper that reads a repository (`gitstatus`), which reads
+    /// files in many ways and writes none, so that where Landlock is not there the filter is still a read-only file system.
+    ReadOnly,
 }
 
 /// The call numbers the filter refuses with `EPERM`:
@@ -133,9 +140,9 @@ const ALLOWED: &[c_long] = &[
 #[cfg(target_arch = "x86_64")]
 const X32_BIT: u32 = 0x4000_0000;
 
-const BPF_LD_W_ABS: u16 = 0x20;
-const BPF_JEQ_K: u16 = 0x15;
-const BPF_JSET_K: u16 = 0x45;
+pub(super) const BPF_LD_W_ABS: u16 = 0x20;
+pub(super) const BPF_JEQ_K: u16 = 0x15;
+pub(super) const BPF_JSET_K: u16 = 0x45;
 const BPF_RET_K: u16 = 0x06;
 
 /// The offsets of `seccomp_data`: the call number, then the architecture.
@@ -147,8 +154,15 @@ const ARCH: u32 = 4;
 const ARG0_LOW: u32 = 16;
 const ARG0_HIGH: u32 = 20;
 
+/// The offset of the low half of the second argument of the call: the flags of `open`.
+#[cfg_attr(
+    not(target_arch = "x86_64"),
+    allow(dead_code, reason = "aarch64 has no `open`, only `openat`")
+)]
+pub(super) const ARG1_LOW: u32 = 24;
+
 /// The offset of the low half of the third argument of the call: the protection of `mmap` and `mprotect`.
-const ARG2_LOW: u32 = 32;
+pub(super) const ARG2_LOW: u32 = 32;
 
 /// The offset of the low half of the fifth argument of the call: the descriptor of `mmap`.
 const ARG4_LOW: u32 = 48;
@@ -159,7 +173,7 @@ const RET_EPERM: u32 = 0x0005_0000 | libc::EPERM as u32;
 const RET_ENOSYS: u32 = 0x0005_0000 | libc::ENOSYS as u32;
 
 /// One instruction of a classic BPF program.
-fn instruction(code: u16, jt: u8, jf: u8, k: u32) -> sock_filter {
+pub(super) fn instruction(code: u16, jt: u8, jf: u8, k: u32) -> sock_filter {
     sock_filter { code, jt, jf, k }
 }
 
@@ -174,6 +188,11 @@ fn header(arch: u32) -> Vec<sock_filter> {
     ]
 }
 
+/// The places in the tail of [`program`] that a jump goes to: its `RET_ALLOW`, `RET_EPERM` and `RET_ENOSYS`.
+pub(super) const TAIL_ALLOW: usize = 13;
+pub(super) const TAIL_EPERM: usize = 14;
+pub(super) const TAIL_ENOSYS: usize = 15;
+
 /// The classic BPF program of the filter for the process `pid` (the helper's own):
 ///
 /// - the wrong architecture kills the process;
@@ -187,7 +206,10 @@ fn header(arch: u32) -> Vec<sock_filter> {
 /// - every other call is allowed.
 ///
 /// `None` where [`AUDIT_ARCH`] is `None`.
-fn program(pid: u32) -> Option<Vec<sock_filter>> {
+///
+/// With `read_only` ([`Filter::ReadOnly`]) the calls of [`WRITES`] are refused too, and an open that writes, creates or
+/// truncates (see [`open_prelude`]).
+fn program(pid: u32, read_only: bool) -> Option<Vec<sock_filter>> {
     let arch = AUDIT_ARCH?;
 
     // The tests that end in `EPERM`, in order; each jumps forward to that refusal when it holds.
@@ -195,12 +217,17 @@ fn program(pid: u32) -> Option<Vec<sock_filter>> {
     #[cfg(target_arch = "x86_64")]
     tests.push((BPF_JSET_K, X32_BIT));
     tests.extend(DENIED.iter().map(|&number| (BPF_JEQ_K, number as u32)));
+    if read_only {
+        tests.extend(WRITES.iter().map(|&number| (BPF_JEQ_K, number as u32)));
+    }
 
     let mut program = header(arch);
+    if read_only {
+        program.extend(open_prelude(tests.len())?);
+    }
 
     // The tail below, numbered; a jump of n lands n instructions after the one that follows the jump. Each test of
     // the list jumps over the tests left after it and the tail up to its `EPERM` return.
-    const TAIL_EPERM: usize = 14;
     for (at, &(code, k)) in tests.iter().enumerate() {
         let to_refusal = u8::try_from(tests.len() - at - 1 + TAIL_EPERM).ok()?;
         program.push(instruction(code, to_refusal, 0, k));
@@ -297,7 +324,8 @@ pub(super) fn has_filter() -> bool {
 /// to be set already (`limit` does). `Unsupported` on an architecture without a filter.
 pub(super) fn deny_syscalls(filter: Filter) -> io::Result<()> {
     let program = match filter {
-        Filter::DenyList => program(std::process::id()),
+        Filter::DenyList => program(std::process::id(), false),
+        Filter::ReadOnly => program(std::process::id(), true),
         Filter::AllowList => allow_program(),
     };
     let Some(mut filters) = program else {

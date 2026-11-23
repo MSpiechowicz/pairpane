@@ -1,17 +1,17 @@
 //! Looking at a file of a repository before gix opens it. gix opens what a repository names with a plain `open`, which on
 //! a named pipe waits for a writer for ever, and reads it up to its end, which on `/dev/zero` (a link to it, or the device
-//! made as a file) never comes. So each file gix is about to read is first looked at with `lstat` (nothing is opened, no
-//! link is followed): it has to be a regular file, and not over its cap. The small files this module reads itself are
-//! opened without blocking and without following a link, and what was opened is looked at again (`fstat`), so that a file
-//! swapped in between the two looks changes nothing. A few files that gix reads through a link (`HEAD`, `info/exclude`,
-//! `info/attributes`) are allowed to be one: the link is resolved hop by hop to a local place (see [`super::links`]), and
-//! what it leads to has to be a regular file within the cap.
+//! made as a file) never comes. So each file gix is about to read is first looked at: `lstat` says it is a regular file (no
+//! link is followed, nothing is opened for anything else), and then it is opened without blocking and without following a
+//! link, and what was opened is looked at again with `fstat`, which is the size that counts: the size `lstat` gives is
+//! nothing to rely on (a file of `/proc`, `/sys` or `/sys/kernel/debug` says 0 and reads without an end), so on Linux a file
+//! of a pseudo file system (procfs, sysfs, debugfs, cgroup, tracefs and the like) is odd too. A file that gix reads whole
+//! and that is small is read here, up to its cap and one byte more ([`read`]), which is the only size there is. No file of
+//! a repository's own is allowed to be a link: a link anywhere among them is a repository that is not read (see
+//! [`super::inspect`]).
 
 use std::fs::{self, File, Metadata};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-
-use super::links;
 
 /// What the look at a file found.
 #[derive(Debug, PartialEq, Eq)]
@@ -20,7 +20,8 @@ pub(super) enum Seen<T> {
     Missing,
     /// A regular file within the cap; for a read, its bytes.
     Plain(T),
-    /// Anything else: a link, a pipe, a device, a socket, a folder, a file that cannot be looked at.
+    /// Anything else: a link, a pipe, a device, a socket, a folder, a file of a pseudo file system, a file that cannot be
+    /// looked at.
     Odd,
     /// A regular file over the cap.
     Large,
@@ -46,12 +47,36 @@ fn missing(error: &io::Error) -> bool {
     matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory)
 }
 
-/// Looks at `path` with `lstat`: a regular file of at most `cap` bytes, or not there, is fine.
-pub(super) fn seen(path: &Path, cap: u64) -> Seen<()> {
+/// The file at `path` opened to be looked at or read: `lstat` first (a link, a pipe or a device is not opened), then an
+/// open that neither waits nor follows a link, then `fstat` on what was opened, which is also the file that is read.
+fn opened(path: &Path, cap: u64) -> Result<File, Seen<()>> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) => judge(&metadata, cap),
-        Err(error) if missing(&error) => Seen::Missing,
-        Err(_) => Seen::Odd,
+        Ok(metadata) if metadata.file_type().is_file() => {}
+        Ok(_) => return Err(Seen::Odd),
+        Err(error) if missing(&error) => return Err(Seen::Missing),
+        Err(_) => return Err(Seen::Odd),
+    }
+
+    let file = match open(path) {
+        Ok(file) => file,
+        Err(error) if missing(&error) => return Err(Seen::Missing),
+        Err(_) => return Err(Seen::Odd),
+    };
+    let metadata = file.metadata().map_err(|_| Seen::Odd)?;
+
+    match judge(&metadata, cap) {
+        Seen::Plain(()) if on_pseudo_file_system(&file) => Err(Seen::Odd),
+        Seen::Plain(()) => Ok(file),
+        Seen::Large => Err(Seen::Large),
+        Seen::Odd | Seen::Missing => Err(Seen::Odd),
+    }
+}
+
+/// Looks at `path`: a regular file of at most `cap` bytes (as `fstat` of the opened file says), or not there, is fine.
+pub(super) fn seen(path: &Path, cap: u64) -> Seen<()> {
+    match opened(path, cap) {
+        Ok(_) => Seen::Plain(()),
+        Err(why) => why,
     }
 }
 
@@ -93,47 +118,38 @@ fn is_reparse_point(_metadata: &Metadata) -> bool {
     false
 }
 
-/// The path that `path` is read through: itself, or when it is a link, the local file it leads to (resolved hop by hop). `Err`
-/// says why not: nothing is there (or the link is dangling, which gix reads as nothing too), or it leads somewhere that must not
-/// be followed.
-fn followed(path: &Path) -> Result<PathBuf, Seen<()>> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if missing(&error) => return Err(Seen::Missing),
-        Err(_) => return Err(Seen::Odd),
-    };
-    if !metadata.file_type().is_symlink() {
-        return Ok(path.to_path_buf());
-    }
+/// Whether `file` is on a file system of the kernel's own (procfs, sysfs, debugfs, cgroup, tracefs, ...), whose files say
+/// they are regular, give a size of 0 and read as much as the kernel makes up. A file whose file system cannot be told is
+/// taken for one.
+#[cfg(target_os = "linux")]
+fn on_pseudo_file_system(file: &File) -> bool {
+    /// `f_type` of `statfs(2)` for the file systems that make their files up.
+    const PSEUDO: [u64; 14] = [
+        0x0000_9fa0, // procfs
+        0x6265_6572, // sysfs
+        0x6462_6720, // debugfs
+        0x0027_e0eb, // cgroup
+        0x6367_7270, // cgroup2
+        0x7472_6163, // tracefs
+        0x7363_6673, // securityfs
+        0xcafe_4a11, // bpf
+        0xf97c_ff8c, // selinuxfs
+        0x6165_676c, // pstore
+        0x6265_6570, // configfs
+        0x4249_4e4d, // binfmt_misc
+        0x6573_5543, // fuse control
+        0x0000_1cd1, // devpts
+    ];
 
-    match links::resolve(path) {
-        Ok(resolved) => Ok(resolved),
-        Err(error) if links::leads_nowhere(&error) => Err(Seen::Missing),
-        Err(_) => Err(Seen::Odd),
+    match rustix::fs::fstatfs(file) {
+        Ok(stat) => u64::try_from(stat.f_type).map_or(true, |kind| PSEUDO.contains(&kind)),
+        Err(_) => true,
     }
 }
 
-/// Like [`seen`], and a link is followed to a local place (see [`followed`]) and what it leads to is looked at.
-pub(super) fn seen_following(path: &Path, cap: u64) -> Seen<()> {
-    match followed(path) {
-        Ok(resolved) => seen(&resolved, cap),
-        Err(why) => why,
-    }
-}
-
-/// Like [`read`], and a link is followed to a local place (see [`followed`]) and what it leads to is read.
-pub(super) fn read_following(path: &Path, cap: u64) -> Seen<Vec<u8>> {
-    match followed(path) {
-        // Looked at before it is opened: a device at the end of a link is not opened at all.
-        Ok(resolved) => match seen(&resolved, cap) {
-            Seen::Plain(()) => read(&resolved, cap),
-            Seen::Missing => Seen::Missing,
-            Seen::Odd => Seen::Odd,
-            Seen::Large => Seen::Large,
-        },
-        Err(Seen::Missing) => Seen::Missing,
-        Err(_) => Seen::Odd,
-    }
+#[cfg(not(target_os = "linux"))]
+fn on_pseudo_file_system(_file: &File) -> bool {
+    false
 }
 
 /// The path of the file `relative` (`/` separated) below `root`, once every folder on the way is known to be a folder and
@@ -160,14 +176,6 @@ fn below(root: &Path, relative: &str) -> Result<PathBuf, Seen<()>> {
     Ok(path)
 }
 
-/// Like [`seen_following`] for the file `relative` below `root` (see [`below`]).
-pub(super) fn seen_following_below(root: &Path, relative: &str, cap: u64) -> Seen<()> {
-    match below(root, relative) {
-        Ok(path) => seen_following(&path, cap),
-        Err(why) => why,
-    }
-}
-
 /// Like [`read`] for the file `relative` below `root` (see [`below`]).
 pub(super) fn read_below(root: &Path, relative: &str, cap: u64) -> Seen<Vec<u8>> {
     match below(root, relative) {
@@ -177,66 +185,47 @@ pub(super) fn read_below(root: &Path, relative: &str, cap: u64) -> Seen<Vec<u8>>
     }
 }
 
-/// The most a rules file of the work tree (`.gitignore`, `.gitattributes`) may hold to be read: a pattern file bigger than this is
-/// not one a person wrote, and gix holds every pattern of the files of the folders it is in.
-const RULES_BYTES: u64 = 256 * 1024;
-
-/// The most the rules files of one status may add up to: the ones of the folder and its parents, and of every folder the
-/// directory walk enters.
-pub(super) const RULES_TOTAL_BYTES: u64 = 4 * 1024 * 1024;
-
 /// What a rules file of the work tree is to the directory walk, which opens it by itself where it finds one (and does not
 /// follow a link).
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Rules {
     /// Not one to open (not there, a link, a folder), or a regular file of this many bytes.
     Bytes(u64),
-    /// A named pipe, a device or a socket, which an open waits on or a read never ends, or a regular file too big to be rules.
-    Risky,
+    /// A regular file over the cap: no one wrote this as rules, and gix holds every pattern of the files it reads.
+    Large,
+    /// A named pipe, a device, a socket or a file of a pseudo file system, which an open waits on or a read never ends.
+    Odd,
 }
 
-/// Looks at the rules file `path` of the work tree with `lstat`: see [`Rules`].
-pub(super) fn rules_file(path: &Path) -> Rules {
-    let Ok(metadata) = fs::symlink_metadata(path) else {
+/// Looks at the rules file `path` of the work tree (`.gitignore`, `.gitattributes`): see [`Rules`]. The size is the one
+/// `fstat` gives of the opened file.
+pub(super) fn rules_file(path: &Path, cap: u64) -> Rules {
+    let kind = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata.file_type(),
+        Err(error) if missing(&error) => return Rules::Bytes(0),
+        Err(_) => return Rules::Odd,
+    };
+    if kind.is_symlink() || kind.is_dir() {
         return Rules::Bytes(0);
-    };
-    let kind = metadata.file_type();
+    }
 
-    if kind.is_file() {
-        if metadata.len() > RULES_BYTES {
-            Rules::Risky
-        } else {
-            Rules::Bytes(metadata.len())
-        }
-    } else if kind.is_symlink() || kind.is_dir() {
-        Rules::Bytes(0)
-    } else {
-        Rules::Risky
+    match opened(path, cap) {
+        Ok(file) => Rules::Bytes(file.metadata().map_or(0, |metadata| metadata.len())),
+        Err(Seen::Large) => Rules::Large,
+        Err(Seen::Missing) => Rules::Bytes(0),
+        Err(_) => Rules::Odd,
     }
 }
 
-/// Whether the rules file `path` is one gix must not be handed (see [`Rules::Risky`]).
-pub(super) fn risky_rules_file(path: &Path) -> bool {
-    rules_file(path) == Rules::Risky
-}
-
-/// Reads the small regular file `path` (at most `cap` bytes): opened without waiting for a writer and without following a
-/// link, then checked as the file that was opened.
+/// Reads the small regular file `path` (at most `cap` bytes, and one byte more is read to tell a file that grew): see
+/// [`opened`] for how it is looked at first.
 pub(super) fn read(path: &Path, cap: u64) -> Seen<Vec<u8>> {
-    let file = match open(path) {
+    let file = match opened(path, cap) {
         Ok(file) => file,
-        Err(error) if missing(&error) => return Seen::Missing,
+        Err(Seen::Missing) => return Seen::Missing,
+        Err(Seen::Large) => return Seen::Large,
         Err(_) => return Seen::Odd,
     };
-    let metadata = match file.metadata() {
-        Ok(metadata) => metadata,
-        Err(_) => return Seen::Odd,
-    };
-    match judge(&metadata, cap) {
-        Seen::Plain(()) => {}
-        Seen::Large => return Seen::Large,
-        Seen::Odd | Seen::Missing => return Seen::Odd,
-    }
 
     let mut bytes = Vec::new();
     match file.take(cap + 1).read_to_end(&mut bytes) {
@@ -268,126 +257,4 @@ fn open(path: &Path) -> io::Result<File> {
     }
 
     File::open(path)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_regular_file_within_the_cap_is_plain_and_one_over_it_is_large() {
-        let folder = tempfile::tempdir().expect("a folder");
-        fs::write(folder.path().join("small"), b"12345").expect("a file");
-
-        assert_eq!(seen(&folder.path().join("small"), 5), Seen::Plain(()));
-        assert_eq!(seen(&folder.path().join("small"), 4), Seen::Large);
-        assert_eq!(seen(&folder.path().join("none"), 4), Seen::Missing);
-        assert_eq!(read(&folder.path().join("small"), 5), Seen::Plain(b"12345".to_vec()));
-        assert_eq!(read(&folder.path().join("small"), 4), Seen::Large);
-        assert_eq!(read(&folder.path().join("none"), 4), Seen::Missing);
-    }
-
-    #[test]
-    fn a_folder_is_odd_and_so_is_a_file_below_a_folder_that_is_a_link() {
-        let folder = tempfile::tempdir().expect("a folder");
-        fs::create_dir(folder.path().join("sub")).expect("a folder");
-        fs::write(folder.path().join("sub/file"), b"x").expect("a file");
-
-        assert_eq!(seen(&folder.path().join("sub"), 10), Seen::Odd);
-        assert_eq!(seen_following_below(folder.path(), "sub/file", 10), Seen::Plain(()));
-        assert_eq!(seen_following_below(folder.path(), "sub/none", 10), Seen::Missing);
-        assert_eq!(seen_following_below(folder.path(), "none/file", 10), Seen::Missing);
-        assert_eq!(seen_following_below(folder.path(), "sub/file/deeper", 10), Seen::Odd);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn pipes_devices_and_links_are_odd_and_nothing_waits_for_them() {
-        let folder = tempfile::tempdir().expect("a folder");
-        crate::view::testing::fifo(folder.path(), "pipe");
-        std::os::unix::fs::symlink("/dev/zero", folder.path().join("zero")).expect("a link");
-        fs::create_dir(folder.path().join("real")).expect("a folder");
-        std::os::unix::fs::symlink(folder.path().join("real"), folder.path().join("via")).expect("a link");
-        fs::write(folder.path().join("real/file"), b"x").expect("a file");
-
-        for name in ["pipe", "zero"] {
-            assert_eq!(seen(&folder.path().join(name), 10), Seen::Odd, "{name}");
-            assert_eq!(read(&folder.path().join(name), 10), Seen::Odd, "{name}");
-        }
-        assert_eq!(read(Path::new("/dev/zero"), 10), Seen::Odd);
-        assert_eq!(seen_following_below(folder.path(), "via/file", 10), Seen::Odd);
-    }
-
-    fn folder_of(path: &Path) -> Seen<()> {
-        folder(path)
-    }
-
-    #[test]
-    fn a_real_folder_is_plain_and_a_file_or_nothing_is_missing() {
-        let folder = tempfile::tempdir().expect("a folder");
-        fs::create_dir(folder.path().join("sub")).expect("a folder");
-        fs::write(folder.path().join("file"), b"x").expect("a file");
-
-        assert_eq!(folder_of(&folder.path().join("sub")), Seen::Plain(()));
-        assert_eq!(folder_of(&folder.path().join("file")), Seen::Missing);
-        assert_eq!(folder_of(&folder.path().join("none")), Seen::Missing);
-        assert_eq!(folder_of(&folder.path().join("file/deeper")), Seen::Missing);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_link_for_a_folder_is_odd_and_a_link_for_a_file_is_followed_only_where_asked_and_only_to_a_plain_local_file() {
-        let folder = tempfile::tempdir().expect("a folder");
-        let root = gix::path::realpath(folder.path()).expect("its real path");
-        fs::create_dir(root.join("sub")).expect("a folder");
-        fs::write(root.join("file"), b"12345").expect("a file");
-        crate::view::testing::fifo(&root, "pipe");
-        for (name, target) in [
-            ("to-folder", root.join("sub")),
-            ("to-file", root.join("file")),
-            ("to-pipe", root.join("pipe")),
-            ("to-device", "/dev/zero".into()),
-            ("to-network", "/net/host/file".into()),
-            ("dangling", root.join("gone")),
-        ] {
-            std::os::unix::fs::symlink(target, root.join(name)).expect("a link");
-        }
-
-        assert_eq!(folder_of(&root.join("to-folder")), Seen::Odd);
-        // Not followed by the strict look, followed by the other.
-        assert_eq!(seen(&root.join("to-file"), 10), Seen::Odd);
-        assert_eq!(seen_following(&root.join("to-file"), 10), Seen::Plain(()));
-        assert_eq!(seen_following(&root.join("to-file"), 4), Seen::Large);
-        assert_eq!(
-            read_following(&root.join("to-file"), 10),
-            Seen::Plain(b"12345".to_vec())
-        );
-        assert_eq!(read_following(&root.join("file"), 10), Seen::Plain(b"12345".to_vec()));
-        for name in ["to-pipe", "to-device", "to-network", "to-folder"] {
-            assert_eq!(seen_following(&root.join(name), 10), Seen::Odd, "{name}");
-            assert_eq!(read_following(&root.join(name), 10), Seen::Odd, "{name}");
-        }
-        // Nothing at the end of it is a file that is not there, which gix reads as none.
-        assert_eq!(seen_following(&root.join("dangling"), 10), Seen::Missing);
-        assert_eq!(read_following(&root.join("none"), 10), Seen::Missing);
-    }
-
-    #[test]
-    fn a_rules_file_is_its_size_unless_it_is_a_pipe_a_device_or_too_big() {
-        let folder = tempfile::tempdir().expect("a folder");
-        fs::write(folder.path().join("small"), b"*.log\n").expect("rules");
-        fs::write(folder.path().join("big"), vec![b'#'; RULES_BYTES as usize + 1]).expect("rules");
-        fs::create_dir(folder.path().join("folder")).expect("a folder");
-
-        assert_eq!(rules_file(&folder.path().join("small")), Rules::Bytes(6));
-        assert_eq!(rules_file(&folder.path().join("none")), Rules::Bytes(0));
-        assert_eq!(rules_file(&folder.path().join("folder")), Rules::Bytes(0));
-        assert_eq!(rules_file(&folder.path().join("big")), Rules::Risky);
-        assert!(risky_rules_file(&folder.path().join("big")));
-        #[cfg(unix)]
-        {
-            crate::view::testing::fifo(folder.path(), "pipe");
-            assert_eq!(rules_file(&folder.path().join("pipe")), Rules::Risky);
-        }
-    }
 }

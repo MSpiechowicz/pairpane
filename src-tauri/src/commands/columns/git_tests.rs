@@ -3,13 +3,11 @@
 //! (`pairpane_core::gitstatus`), against repositories made with gix; here a repository is the few files and folders git
 //! needs to see one.
 
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
 use tauri::async_runtime::block_on;
 
-use super::stuck::until;
 use super::tests::{fill, shown};
 use super::*;
 
@@ -30,8 +28,14 @@ fn repository() -> (tempfile::TempDir, String) {
     (folder, path)
 }
 
+/// The status of `path` read in this process (the tests cannot start the app's executable as the helper; that is
+/// `tests/git_helper.rs`).
+fn git_limited(columns: &Columns, path: &str, limits: Limits) -> CommandResult<GitStatus> {
+    block_on(columns.git_with(path.to_owned(), limits, gitstatus::status_in_process))
+}
+
 fn git(columns: &Columns, path: &str) -> CommandResult<GitStatus> {
-    block_on(columns.git(path.to_owned(), Limits::default()))
+    git_limited(columns, path, Limits::default())
 }
 
 #[test]
@@ -93,7 +97,7 @@ fn a_repository_over_the_cap_is_invalid_input_with_a_fixed_text_and_no_path() {
         ..Limits::default()
     };
 
-    let (code, message) = shown(block_on(Columns::default().git(path.clone(), none)));
+    let (code, message) = shown(git_limited(&Columns::default(), &path, none));
 
     assert_eq!(code, IpcErrorCode::InvalidInput);
     assert_eq!(message, "the repository is too big to read here");
@@ -117,7 +121,7 @@ fn a_status_that_takes_longer_than_its_time_is_the_same_answer() {
         ..Limits::default()
     };
 
-    let (code, message) = shown(block_on(Columns::default().git(path, quick)));
+    let (code, message) = shown(git_limited(&Columns::default(), &path, quick));
 
     // The time limit is `invalidInput` too, with a text of its own.
     assert_eq!(code, IpcErrorCode::InvalidInput);
@@ -148,69 +152,84 @@ fn the_exit_flag_refuses_a_status_that_comes_after_it() {
     assert_eq!(message, "the read was cancelled");
 }
 
-/// A status that does not return until `release` is dropped, as one held up by a read the system never ends.
-fn blocked(
-    hold: mpsc::Receiver<()>,
-) -> impl FnOnce(&Path, Limits, &AtomicBool) -> Result<GitStatus, GitError> + Send + 'static {
-    move |_, _, _| {
-        let _ = hold.recv();
+/// What the page is told of a status that ends with `error`.
+fn told(error: fn() -> GitError) -> (IpcErrorCode, String) {
+    let columns = Columns::default();
+    let (_folder, path) = repository();
 
-        Ok(GitStatus {
-            repo: false,
-            marks: Vec::new(),
-        })
-    }
-}
-
-fn hung(columns: &Columns, path: &str) -> (mpsc::Sender<()>, (IpcErrorCode, String), Duration) {
-    let (release, hold) = mpsc::channel();
-    let started = Instant::now();
-    let answer = shown(block_on(columns.git_with(
-        path.to_owned(),
-        Limits::default(),
-        Duration::from_millis(50),
-        blocked(hold),
-    )));
-
-    (release, answer, started.elapsed())
+    shown(block_on(
+        columns.git_with(path, Limits::default(), move |_, _, _| Err(error())),
+    ))
 }
 
 #[test]
-fn a_status_that_never_returns_is_answered_at_the_deadline_and_gives_its_place_back() {
-    let (_folder, path) = repository();
-    let columns = Columns::default();
-
-    let (release, (code, message), elapsed) = hung(&columns, &path);
-
-    assert_eq!(code, IpcErrorCode::InvalidInput);
-    assert_eq!(message, "the repository took too long to read");
-    assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
-    assert_eq!(columns.stuck.count(), 1, "its thread is counted as stuck");
-    // The places of the statuses are free: the status of the same repository is read.
-    assert!(git(&columns, &path).expect("a status").repo);
-    assert_eq!(fill(&columns.statuses, GIT_THREADS).len(), GIT_THREADS);
-
-    drop(release);
-    until(|| columns.stuck.count() == 0);
+fn every_error_of_a_status_has_its_code_and_a_fixed_text() {
+    assert_eq!(
+        told(|| GitError::TimedOut),
+        (
+            IpcErrorCode::InvalidInput,
+            "the repository took too long to read".to_owned()
+        )
+    );
+    assert_eq!(
+        told(|| GitError::TooBig),
+        (
+            IpcErrorCode::InvalidInput,
+            "the repository is too big to read here".to_owned()
+        )
+    );
+    assert_eq!(
+        told(|| GitError::Repository),
+        (IpcErrorCode::Io, "the repository cannot be read".to_owned())
+    );
+    assert_eq!(
+        told(|| GitError::Cancelled),
+        (IpcErrorCode::Io, "the read was cancelled".to_owned())
+    );
+    assert_eq!(
+        told(|| GitError::Folder(io::ErrorKind::PermissionDenied)),
+        (IpcErrorCode::Io, "the folder cannot be read: no permission".to_owned())
+    );
 }
 
 #[test]
-fn while_the_most_threads_are_stuck_a_status_is_busy_until_one_ends() {
+fn a_place_is_held_while_a_status_runs_and_given_back_when_it_ends() {
     let (_folder, path) = repository();
     let columns = Columns::default();
-    let mut releases = Vec::new();
 
-    for _ in 0..stuck::MAX_STUCK {
-        let (release, (code, _), _) = hung(&columns, &path);
-        assert_eq!(code, IpcErrorCode::InvalidInput);
-        releases.push(release);
-    }
+    std::thread::scope(|scope| {
+        let (started, running) = std::sync::mpsc::channel();
+        // Dropped (or sent to) to let the status end; a failed assertion drops it as it unwinds, and so does not hold the
+        // scope up for ever.
+        let (release, hold) = std::sync::mpsc::channel::<()>();
+        let waiting = scope.spawn(|| {
+            block_on(columns.git_with(path.clone(), Limits::default(), move |_, _, _| {
+                let _ = started.send(());
+                let _ = hold.recv();
 
-    assert_eq!(shown(git(&columns, &path)).0, IpcErrorCode::Busy);
+                Ok(GitStatus {
+                    repo: false,
+                    marks: Vec::new(),
+                })
+            }))
+        });
+        running.recv_timeout(Duration::from_secs(10)).expect("the status runs");
 
-    releases.pop();
-    until(|| !columns.stuck.is_full());
-    assert!(git(&columns, &path).expect("a status again").repo);
+        // Two places, one of them held: the other is free, and with both held a status is refused.
+        let taken = columns.statuses.acquire(GIT_THREADS).expect("the other place");
+        assert_eq!(shown(git(&columns, &path)).0, IpcErrorCode::Busy);
+        drop(taken);
+        assert!(git(&columns, &path).expect("the other place").repo);
+
+        drop(release);
+        assert!(!waiting.join().expect("the thread").expect("a status").repo);
+    });
+
+    assert_eq!(
+        fill(&columns.statuses, GIT_THREADS).len(),
+        GIT_THREADS,
+        "every place is back"
+    );
 }
 
 #[test]

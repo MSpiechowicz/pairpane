@@ -35,7 +35,7 @@ pub mod columns;
 mod difference;
 mod encoding;
 mod file;
-mod heic;
+pub(crate) mod heic;
 mod layout;
 mod markdown;
 mod md_build;

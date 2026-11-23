@@ -9,9 +9,10 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 use super::fixture::within;
+use super::testing::status;
 use super::tests::{clean, owned};
 use super::*;
-use crate::model::GitMark::{Ignored, Untracked};
+use crate::model::GitMark::{Ignored, Modified, Untracked};
 
 fn answer(folder: &Path, limits: Limits) -> Result<GitStatus, GitError> {
     status(folder, limits, &AtomicBool::new(false))
@@ -166,19 +167,16 @@ fn a_rules_file_over_its_cap_keeps_the_walk_out_of_its_folder_and_a_few_small_on
     fs::write(repo.path("fine/.gitignore"), rules(200 * 1024)).expect("rules");
     fs::write(repo.path("fine/x.txt"), b"x").expect("a file");
 
-    // Both are untracked folders; the first is not entered, which does not change what it is.
+    // Both are untracked folders; the first is not entered, and is `modified` as the safe thing to say of what was not looked
+    // at (it is not silence).
     assert_eq!(
         super::tests::marks_with(repo.root(), Limits::default()),
-        owned(&[("big", Untracked), ("fine", Untracked)])
+        owned(&[("big", Modified), ("fine", Untracked)])
     );
-    // A folder that is browsed itself, with such a file, has no status: the file is read for every entry of it.
-    assert_eq!(
-        answer(&repo.path("big"), Limits::default()).expect("a status"),
-        GitStatus {
-            repo: false,
-            marks: vec![]
-        }
-    );
+    // A folder that is browsed itself, with such a file, is too big: the file is read for every entry of it, and it is on the
+    // parent chain of the folder.
+    let too_big = answer(&repo.path("big"), Limits::default());
+    assert!(matches!(too_big, Err(GitError::TooBig)), "{too_big:?}");
 }
 
 #[test]

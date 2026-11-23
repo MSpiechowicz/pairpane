@@ -1,84 +1,41 @@
-//! The status of a folder: find the repository, then merge the three comparisons limited to the folder into marks.
+//! The status of a folder, as the helper reads it: gix opens exactly the repository that was looked at, the three comparisons
+//! limited to the folder are merged into marks, and every source of rules is counted in one budget. This runs in the helper
+//! process (`child`), confined to the folders of the [`Layout`]; the unit tests run it in their own.
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use gix::bstr::{BString, ByteSlice};
 use gix::dir::walk::EmissionMode;
 
-use super::cache::{self, Cache, Key};
+use super::budget::{Budget, Charged};
 use super::compare::{BoundedCompare, NoSubmodules};
-use super::files::{self, Rules};
+use super::ignored::Quiet;
 use super::marks::Marks;
 use super::path::prefix_of;
+use super::request::Request;
 use super::staged::{self, Head};
 use super::visit::{Changes, Walker};
 use super::watch::{Meter, Stop, guarded};
-use super::{GitError, Limits, locate, open};
-use crate::model::{GitMark, GitStatus};
+use super::{GitError, open};
+use crate::model::GitStatus;
 
-/// The status of the direct children of `folder`; see [`super::status`].
-pub(super) fn status(folder: &Path, limits: Limits, cancel: &AtomicBool) -> Result<GitStatus, GitError> {
-    // The user's home folder is where the search for a repository ends (it is the last folder looked in).
-    let home = std::env::home_dir().and_then(|home| gix::path::realpath(home).ok());
-
-    status_with(folder, home, limits, cancel, &cache::SHARED)
-}
-
-/// Like [`status`], with the folder the search for a repository must not go above given (`None`: the filesystem root).
-#[cfg(test)]
-pub(super) fn status_below(
-    folder: &Path,
-    ceiling: Option<PathBuf>,
-    limits: Limits,
-    cancel: &AtomicBool,
-) -> Result<GitStatus, GitError> {
-    status_with(folder, ceiling, limits, cancel, &cache::SHARED)
-}
-
-/// Like [`status_below`], with the cache of decoded indexes given.
-pub(super) fn status_with(
-    folder: &Path,
-    ceiling: Option<PathBuf>,
-    limits: Limits,
-    cancel: &AtomicBool,
-    cache: &Cache,
-) -> Result<GitStatus, GitError> {
+/// The status of the direct children of the folder of `request`; see [`super::status`]. `cancel` stops it as the app's exit
+/// flag does.
+pub(super) fn read(request: &Request, cancel: &AtomicBool) -> Result<GitStatus, GitError> {
     if cancel.load(Ordering::Relaxed) {
         return Err(GitError::Cancelled);
     }
 
-    // Links are resolved first: the work tree has to be found as a parent of where the folder really is.
-    let real = gix::path::realpath(folder).map_err(|error| {
-        tracing::debug!(%error, "git status: the folder cannot be resolved");
-
-        GitError::Folder(if error.is_not_found() {
-            io::ErrorKind::NotFound
-        } else {
-            io::ErrorKind::Other
-        })
-    })?;
-    match fs::metadata(&real) {
-        Ok(metadata) if metadata.is_dir() => {}
-        Ok(_) => return Err(GitError::Folder(io::ErrorKind::NotADirectory)),
-        Err(error) => return Err(GitError::Folder(error.kind())),
-    }
     let stop = Stop::default();
+    let limits = request.limits;
 
     let result = guarded(&stop, limits.time, cancel, || {
         let mut meter = Meter::new(&stop, limits.entries);
-        let read = Read {
-            real: &real,
-            ceiling: ceiling.as_deref(),
-            limits,
-            cache,
-            stop: &stop,
-        };
 
-        read.run(&mut meter)
+        Read { request, stop: &stop }.run(&mut meter)
     });
 
     // A flag that was raised is the answer, whatever error the interrupted read ended in.
@@ -88,7 +45,7 @@ pub(super) fn status_with(
     }
 }
 
-fn not_a_repository() -> GitStatus {
+pub(super) fn not_a_repository() -> GitStatus {
     GitStatus {
         repo: false,
         marks: Vec::new(),
@@ -97,19 +54,15 @@ fn not_a_repository() -> GitStatus {
 
 /// What one status reads.
 struct Read<'a> {
-    real: &'a Path,
-    ceiling: Option<&'a Path>,
-    limits: Limits,
-    cache: &'a Cache,
+    request: &'a Request,
     stop: &'a Stop,
 }
 
 impl Read<'_> {
     fn run(&self, meter: &mut Meter<'_>) -> Result<GitStatus, GitError> {
-        // The files of the repository are looked at, and what they point to, before gix reads one.
-        let Some(layout) = locate::find(self.real, self.ceiling)? else {
-            return Ok(not_a_repository());
-        };
+        let layout = &self.request.layout;
+        let real = self.request.folder.as_path();
+
         let Some(repository) = open::open(&layout.dot_git)? else {
             return Ok(not_a_repository());
         };
@@ -123,39 +76,13 @@ impl Read<'_> {
         let Some(workdir) = repository.workdir() else {
             return Ok(not_a_repository());
         };
-        let Some(prefix) = prefix_of(self.real, workdir) else {
+        let Some(prefix) = prefix_of(real, workdir) else {
             return Ok(not_a_repository());
         };
-        let Some(rules) = rules_of_the_chain(workdir, &prefix) else {
-            return Ok(not_a_repository());
-        };
-        if rules > files::RULES_TOTAL_BYTES {
-            return Err(GitError::TooBig);
-        }
         let mut marks = Marks::new(&prefix);
 
-        self.compare(&repository, workdir, &prefix, rules, &mut marks, meter)?;
-        let marks = marks
-            .finish(self.real, meter)
-            .map_err(|error| match self.stop.reason() {
-                Some(reason) => reason,
-                None => GitError::Folder(error.kind()),
-            })?;
-
-        Ok(GitStatus { repo: true, marks })
-    }
-
-    fn compare(
-        &self,
-        repository: &gix::Repository,
-        workdir: &Path,
-        prefix: &str,
-        rules: u64,
-        marks: &mut Marks,
-        meter: &mut Meter<'_>,
-    ) -> Result<(), GitError> {
-        let head = staged::head(repository, self.stop)?;
-        let index = self.index(repository, &head)?;
+        let head = staged::head(&repository, self.stop)?;
+        let index = self.index(&repository)?;
         let state: &gix::index::State = &index;
 
         // The entries of the index inside the folder are what is checked; a folder with more than the cap is too big. Each of
@@ -164,24 +91,57 @@ impl Read<'_> {
         // time limit bounds the whole.
         let range = state.prefixed_entries_range(marks.prefix().as_bstr());
         if !meter.spend(range.map_or(0, |range| range.len())) {
-            return Ok(());
+            return Err(GitError::TooBig);
         }
 
+        // The rules of the repository itself were counted by the parent; the ones of the work tree on the way from its root to
+        // the folder are counted here, and the walk and the comparison count the rest in the same budget.
+        let budget = Budget::new(workdir, &repository, state, &prefix, layout.info_rules, self.stop);
+        match chain(&budget, &prefix) {
+            Charged::Fine => {}
+            Charged::Odd => return Ok(not_a_repository()),
+            Charged::Large | Charged::Over => return Err(GitError::TooBig),
+        }
+
+        self.compare(&repository, state, &head, &budget, &mut marks, meter)?;
+        let marks = marks.finish(real, meter).map_err(|error| match self.stop.reason() {
+            Some(reason) => reason,
+            None => GitError::Folder(error.kind()),
+        })?;
+
+        Ok(GitStatus { repo: true, marks })
+    }
+
+    fn compare(
+        &self,
+        repository: &gix::Repository,
+        state: &gix::index::State,
+        head: &Head,
+        budget: &Budget,
+        marks: &mut Marks,
+        meter: &mut Meter<'_>,
+    ) -> Result<(), GitError> {
+        let layout = &self.request.layout;
+
         // `:(literal)` keeps the characters of a folder's name (`*`, `[`, `?`) from being read as a pattern.
+        let prefix = marks.prefix().trim_end_with(|c| c == '/').to_vec();
         let patterns: Vec<BString> = if prefix.is_empty() {
             Vec::new()
         } else {
-            vec![format!(":(literal){prefix}").into()]
+            let mut pattern = b":(literal)".to_vec();
+            pattern.extend_from_slice(&prefix);
+
+            vec![pattern.into()]
         };
         let mut run = Run {
             repository,
-            workdir,
-            folder: self.real,
+            workdir: &layout.workdir,
+            folder: self.request.folder.as_path(),
             state,
-            head: &head,
+            head,
             patterns,
-            max_compare_bytes: self.limits.compare_bytes,
-            rules,
+            max_compare_bytes: self.request.limits.compare_bytes,
+            budget,
             marks,
             stop: self.stop,
             meter,
@@ -195,49 +155,46 @@ impl Read<'_> {
         run.ignored_children()
     }
 
-    /// The decoded index of the repository, from the cache when it was decoded lately.
-    fn index(&self, repository: &gix::Repository, head: &Head) -> Result<Arc<gix::index::File>, GitError> {
+    /// The decoded index of the repository. It is decoded for this status alone: the helper is a process of its own for each
+    /// status, so there is nothing to keep it in between.
+    fn index(&self, repository: &gix::Repository) -> Result<gix::index::File, GitError> {
         let path = repository.index_path();
-        let metadata = match fs::metadata(&path) {
-            Ok(metadata) => metadata,
+
+        match fs::metadata(&path) {
+            Ok(_) => repository.open_index().map_err(|error| self.stop.explain(&error)),
             // No index yet (nothing was added): an empty one.
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let state = gix::index::State::new(repository.object_hash());
 
-                return Ok(Arc::new(gix::index::File::from_state(state, path)));
+                Ok(gix::index::File::from_state(state, path))
             }
-            Err(error) => return Err(GitError::Folder(error.kind())),
-        };
-        let key = Key::of(repository.git_dir().to_path_buf(), head.commit, &metadata);
-
-        self.cache.get(key, || {
-            repository.open_index().map_err(|error| self.stop.explain(&error))
-        })
+            Err(error) => Err(GitError::Folder(error.kind())),
+        }
     }
 }
 
-/// How many bytes the rules files (`.gitignore`, `.gitattributes`) of the work tree's root, of the folder and of a folder
-/// between them add up to, or `None` when one is a file gix would be held up by (see [`files::rules_file`]): gix reads each of
-/// them for any entry of the folder.
-fn rules_of_the_chain(workdir: &Path, prefix: &str) -> Option<u64> {
-    let mut folder = workdir.to_path_buf();
+/// Counts the rules of the work tree's root and of each folder from it down to the folder `prefix` (repository-relative, `/`
+/// separated) in `budget`: gix reads each of them for any entry of the folder. `Odd` is a source that must not be opened, and
+/// `Large` and `Over` are too much.
+fn chain(budget: &Budget, prefix: &str) -> Charged {
+    let mut folder = String::new();
     let names = std::iter::once("").chain(prefix.split('/').filter(|name| !name.is_empty()));
-    let mut total = 0_u64;
 
     for name in names {
         if !name.is_empty() {
-            folder.push(name);
+            if !folder.is_empty() {
+                folder.push('/');
+            }
+            folder.push_str(name);
         }
 
-        for file in [".gitignore", ".gitattributes"] {
-            match files::rules_file(&folder.join(file)) {
-                Rules::Risky => return None,
-                Rules::Bytes(bytes) => total += bytes,
-            }
+        match budget.charge(folder.as_bytes().as_bstr()) {
+            Charged::Fine => {}
+            other => return other,
         }
     }
 
-    Some(total)
+    Charged::Fine
 }
 
 /// The three comparisons of one status, all limited to the same pathspec and merging into the same marks.
@@ -250,8 +207,8 @@ struct Run<'a, 'm> {
     head: &'a Head,
     patterns: Vec<BString>,
     max_compare_bytes: u64,
-    /// The bytes of the rules files of the folder and its parents, which the walk adds to.
-    rules: u64,
+    /// The rules budget of the status.
+    budget: &'a Budget,
     marks: &'a mut Marks,
     stop: &'a Stop,
     meter: &'a mut Meter<'m>,
@@ -297,7 +254,13 @@ impl Run<'_, '_> {
                 self.state,
                 &self.patterns,
                 &mut visitor,
-                BoundedCompare::new(self.workdir, self.state, self.max_compare_bytes),
+                BoundedCompare {
+                    root: self.workdir,
+                    state: self.state,
+                    max_bytes: self.max_compare_bytes,
+                    budget: self.budget,
+                    stop: self.stop,
+                },
                 NoSubmodules,
                 &mut gix::progress::Discard,
                 &self.stop.interrupt,
@@ -332,8 +295,7 @@ impl Run<'_, '_> {
         let mut walker = Walker {
             marks: &mut *self.marks,
             meter: &mut *self.meter,
-            workdir: self.workdir,
-            rules: self.rules,
+            budget: self.budget,
         };
 
         self.repository
@@ -344,59 +306,21 @@ impl Run<'_, '_> {
     }
 
     /// When the folder is untracked as a whole, the walk says so with one entry that holds everything below it, and says nothing
-    /// of the ignored files in it. What the direct children are is then asked of the ignore rules (the same ones that the walk
-    /// used), and the ones they leave out are ignored, not untracked.
+    /// of the ignored files in it: see [`Quiet`].
     fn ignored_children(&mut self) -> Result<(), GitError> {
         if self.stop.is_stopped() || !self.marks.is_untracked_as_a_whole() {
             return Ok(());
         }
 
-        let explain = |error: gix::Error| self.stop.explain(&error);
-        let mut excludes = self
-            .repository
-            .excludes(
-                self.state,
-                None,
-                gix::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
-            )
-            .map_err(explain)?;
-
-        for entry in fs::read_dir(self.folder).map_err(|error| GitError::Folder(error.kind()))? {
-            let entry = entry.map_err(|error| GitError::Folder(error.kind()))?;
-            if !self.meter.spend(1) {
-                return Ok(());
-            }
-
-            let name = entry.file_name();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            let Ok(name) = gix::path::os_str_into_bstr(&name) else {
-                continue;
-            };
-            if name == ".git" {
-                continue;
-            }
-            let mode = if file_type.is_dir() {
-                gix::index::entry::Mode::DIR
-            } else if file_type.is_symlink() {
-                gix::index::entry::Mode::SYMLINK
-            } else {
-                gix::index::entry::Mode::FILE
-            };
-
-            let mut path = self.marks.prefix().to_vec();
-            path.extend_from_slice(name);
-            let path = BString::from(path);
-            let ignored = excludes
-                .at_entry(path.as_bstr(), Some(mode))
-                .map_err(explain)?
-                .is_excluded();
-            if ignored {
-                self.marks.note(path.as_bstr(), GitMark::Ignored);
-            }
+        Quiet {
+            repository: self.repository,
+            state: self.state,
+            folder: self.folder,
+            budget: self.budget,
+            marks: &mut *self.marks,
+            stop: self.stop,
+            meter: &mut *self.meter,
         }
-
-        Ok(())
+        .run()
     }
 }

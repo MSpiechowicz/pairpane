@@ -7,9 +7,9 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
-use super::cache::Cache;
-use super::fixture::{Repo, Staged, within};
-use super::tests::{clean, clean_paths};
+use super::fixture::{Repo, within};
+use super::testing::status;
+use super::tests::clean;
 use super::*;
 use crate::model::GitMark::Staged as Added;
 
@@ -58,7 +58,7 @@ fn a_tree_that_expands_into_billions_of_paths_is_too_big_after_the_cap_and_quick
             &root,
             Limits {
                 entries: 20_000,
-                time: Duration::from_secs(100),
+                time: Duration::from_secs(50),
                 ..Limits::default()
             },
         )
@@ -101,35 +101,6 @@ fn trees_nested_deeper_than_the_walk_goes_are_too_big() {
     let answer = within(20, move || read(&root, Limits::default()));
 
     assert!(matches!(answer, Err(GitError::TooBig)), "{answer:?}");
-}
-
-#[test]
-fn a_status_of_folders_of_one_repository_decodes_its_index_once() {
-    let paths: Vec<String> = (0..30).map(|index| format!("dir{index:02}/f.txt")).collect();
-    let repo = clean_paths(&paths);
-    // An index that is not old enough is not kept (it could have been written again within the same tick), so the cache of
-    // this test takes any.
-    let cache = Cache::new(Duration::ZERO);
-
-    for index in 0..30 {
-        let folder = repo.path(&format!("dir{index:02}"));
-        let answer =
-            scan::status_with(&folder, None, Limits::default(), &AtomicBool::new(false), &cache).expect("a status");
-        assert!(answer.repo);
-    }
-    assert_eq!(cache.decoded(), 1);
-
-    // The index of the repository changed: it is decoded again.
-    repo.write_index(&[Staged::file("dir00/f.txt", b"x")]);
-    scan::status_with(
-        &repo.path("dir00"),
-        None,
-        Limits::default(),
-        &AtomicBool::new(false),
-        &cache,
-    )
-    .expect("a status");
-    assert_eq!(cache.decoded(), 2);
 }
 
 #[test]

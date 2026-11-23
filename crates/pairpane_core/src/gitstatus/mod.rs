@@ -1,12 +1,17 @@
-//! The git status column: the state of the direct children of a folder that is inside a git repository, read in process
-//! by `gix` (gitoxide, pure Rust). The `git` program is never run, and no shell is.
+//! The git status column: the state of the direct children of a folder that is inside a git repository, read by `gix`
+//! (gitoxide, pure Rust) in a helper process of its own, which is confined to read the repository's own folders and is held
+//! to a memory and a time limit. The `git` program is never run, and no shell is.
 //!
-//! # Trust model: nothing the repository says can run anything
+//! # Trust model: nothing the repository says can run anything, and what it makes gix read is bounded
 //!
 //! The folders a user browses are untrusted: a download or an unpacked archive can hold a `.git` folder that was made to
 //! start a program the moment a tool "just reads its status" (`core.fsmonitor`, a filter driver, a hook, a credential
-//! helper, `core.sshCommand`, an external diff, an `include` of a config file elsewhere). Reading a status here is built so
-//! that none of these can happen, in layers, each of which is enough by itself for the part it covers:
+//! helper, `core.sshCommand`, an external diff, an `include` of a config file elsewhere), or to make the reader wait for ever,
+//! spend its memory or read what is not the repository's (a pipe or `/dev/zero` where a file is expected, a link to `/proc`,
+//! a rules file that is a gigabyte). Three audits found a new way through gix each, so the defence is in layers, each of which
+//! holds when the one above it does not: the parent looks at the repository bluntly before anything reads it (points 8 and
+//! 9), gix runs in a process that can read only the folders it was told and can write nothing (the helper, below), and that
+//! process is killed at a deadline and held to a memory limit whatever gix does.
 //!
 //! 1. **The configuration is the repository's own file only** (`open::open_options`). The options start from
 //!    `gix::open::Options::isolated()`, whose `Permissions::isolated()` has the config sources `git_binary`, `system`,
@@ -14,7 +19,7 @@
 //!    elsewhere is never read) and every environment permission denied (`Environment::isolated()`: no `GIT_*`, `HOME`,
 //!    `XDG_CONFIG_HOME`, `SSH_*` and so on are read). `git_binary: false` also means gix never starts `git` to find its
 //!    installation config. As a result no setting of the user's own git configuration applies either, and the global
-//!    ignore file (`core.excludesFile`, `$XDG_CONFIG_HOME/git/ignore`) is not read: only `.gitignore` files in the work
+//!    ignore file (`core.excludesFile`, `$XDG_CONFIG_HOME/git/ignore`) is not applied: only `.gitignore` files in the work
 //!    tree and `.git/info/exclude` give the `ignored` mark.
 //! 2. **The repository is opened as not owned, with reduced trust.** `Options::with_enforced_trust(Trust::Reduced)` sets
 //!    the final trust level to `gix::sec::Trust::Reduced` whoever owns the folder, and discovery runs with
@@ -44,7 +49,8 @@
 //!    `merge` or `worktree-mutation`. gix has no hook runner (hooks are only written, as samples, when it creates a
 //!    repository), and a status never reads `core.fsmonitor`. The crates in the build that can start a process
 //!    (`gix-filter` for drivers, `gix-diff` for an external diff or `textconv`, `gix-command`, and `gix-path` for the `git`
-//!    program) are given nothing to start by points 1, 3 and 4, and no code of ours calls them otherwise.
+//!    program) are given nothing to start by points 1, 3 and 4, and no code of ours calls them otherwise; and the helper
+//!    process may start no program whatever (below).
 //! 6. **Submodules are never opened.** The submodule status of the gix status (which opens the submodule's own repository
 //!    and runs a status there, with that repository's own trust) is replaced by `compare::NoSubmodules`, which answers "no
 //!    change" without reading `.gitmodules` or touching the submodule. A submodule folder therefore has a mark only for
@@ -59,54 +65,106 @@
 //!    A `.git` file (a linked worktree or a submodule) that points elsewhere is read like a `.git` folder; the work tree is
 //!    the folder that holds the `.git` file, and it must contain the folder asked for, or the folder is reported as not in
 //!    a repository (a `core.worktree` pointing at another checkout is ignored anyway by point 3).
-//! 8. **What the repository names is looked at before it is read** (`locate`, `inspect`, `locality`, `links`, `files`). The
-//!    repository is found by a walk of our own, with `lstat` and small reads that neither wait for a writer nor follow a
-//!    link, before gix is let to read anything of it, and what is read is read as gix reads it: a `.git` file with gix's own
-//!    `gitdir:` parser (`gix::discover::parse::gitdir`: leading spaces and every line are part of the path), a `commondir`
-//!    with its trailing white space cut off and nothing else, the lists of alternates with gix's parser
-//!    (`gix::odb::alternate::parse`, where every relative entry of every list is joined to the objects folder of the
-//!    repository itself, and a `\r` stays in a name), and a `.git` folder with both a `commondir` and a `gitdir` (the folder of a
-//!    linked work tree, whose work tree gix takes from the content of the `gitdir` file) only when that file names this very
-//!    `.git`. A `gitdir:` line, a `commondir` file, and every line of `objects/info/alternates` (and the alternates' own lists,
-//!    to a depth) must name a local place: a network path (`\\host\share`, `//host/share`, `\\?\UNC\...`, a device path) would
-//!    make Windows connect to the host and hand it the user's credentials, and a path under `/net` makes macOS mount a share;
-//!    such a repository is "not a repository" (`repo: false`), and nothing at the other end is touched. A path is resolved hop
-//!    by hop (`lstat` and `readlink`, at most 40 links, on every system; `platform::resolve_local` on Windows) with each hop
-//!    checked before it is followed, after its `..` are read away too, and not only the path as it was written: that goes for
-//!    the pointers, for the `.git` itself, for every place gix is given and for the files that are links (see below). The
-//!    files gix reads next (`HEAD`, `config`, `config.worktree`, `commondir`, `gitdir`, `index` and `sharedindex.*`,
-//!    `packed-refs`, `info/exclude`, `info/attributes`, the alternates lists, the files of each `objects/pack`, and the loose
-//!    files of the refs `HEAD` leads to, through up to five symbolic refs) must be regular files, not links, within a size
-//!    (4 KiB for a `HEAD`, a ref or a pointer, 1 MiB for a config, 64 MiB for an index or `packed-refs`), or the repository is
-//!    `repo: false`; an index over its cap is [`GitError::TooBig`]. The exceptions are the files gix reads through a link
-//!    (`HEAD`, `info/exclude` and `info/attributes`): a link there is followed hop by hop to a local place, and has to lead to a
-//!    regular file within the cap (or nowhere, which gix reads as no file). One that leads elsewhere cannot be skipped, as gix
-//!    opens it by itself, and so makes the repository `repo: false`. The folders gix goes through (`refs`, `objects`,
-//!    `objects/info`, `objects/pack` and each present `objects/xx`, of every object folder) must be real folders: a link or a
-//!    reparse point there is `repo: false`. A named pipe, a device, or a link to `/dev/zero` where one of them is expected
-//!    does not hold the status up. The refs below `refs/replace` are not read (`core.useReplaceRefs` is off). A folder is
-//!    taken for a git folder only when its `HEAD` holds a symbolic ref below `refs/` or an object id, otherwise the search
-//!    goes on to the parent, as git does. Last, once gix has opened the repository, its git folder, common folder and work
-//!    tree must be those that were looked at (`Layout::is_opened`), or the folder is `repo: false`.
-//! 9. **A file of the work tree is only read when it is one.** A tracked file that was changed (by its stat) is read to be
-//!    compared with its blob only when it is a regular file within [`Limits::compare_bytes`] (and a link where the index
-//!    has a link), and its folders' `.gitattributes` are fine to read; otherwise it counts as modified, unopened. A folder
-//!    whose `.gitignore` is a named pipe, a device or over 256 KiB is not entered by the directory walk, and the rules files
-//!    of the folder and its parents must be such files too (or the folder is `repo: false`). The rules files of the folder, its
-//!    parents and every folder the walk enters add up to at most 4 MiB, or the status is [`GitError::TooBig`] (gix holds the
-//!    patterns of all of them).
+//! 8. **What the repository names is looked at before it is read, bluntly** (`locate`, `inspect`, `locality`, `links`,
+//!    `files`; in the parent, before the helper is started). The repository is found by a walk of our own, with `lstat` and
+//!    small reads that neither wait for a writer nor follow a link, and what is read is read as gix reads it: a `.git` file
+//!    with gix's own `gitdir:` parser, a `commondir` with its trailing white space cut off and nothing else, the lists of
+//!    alternates with gix's parser (every relative entry of every list joined to the objects folder of the repository
+//!    itself), a `HEAD` with gix's own parser of a loose reference (`locate::is_head`, which is what decides that a folder is a
+//!    git folder at all), and a `.git` folder with both a `commondir` and a `gitdir` only when that file names this very
+//!    `.git`. Then the rules are these, and each failure is `repo: false` (an index or rules over their size is
+//!    [`GitError::TooBig`]):
+//!    - **Physical equals lexical.** Every place a pointer names (the `gitdir:` of a `.git` file, a `commondir`, each entry of
+//!      the alternates) and every folder of the [`Layout`](layout::Layout) must be a path with no link anywhere on it
+//!      (`links::is_physical`: `resolve(path) == normalise(path)`), so that what a program that takes the `..` out by reading
+//!      the path (gix does) means is what the system opens. `..` is allowed where it follows real folders only (a submodule's
+//!      `gitdir: ../.git/modules/x`). A `.git` that is a link to a folder is followed, and what it leads to must pass that and
+//!      the locality checks. A place that is no local one (a network or device path, an automounted folder, `\\host\share`,
+//!      `/net`) is refused, hop by hop (`links::resolve`: `lstat` and `readlink`, at most 40 links, on every system), and so
+//!      is a magic link (`/proc/self/fd/N`: `pipe:[..]`, `socket:[..]`, `anon_inode:..`, a deleted file) that the walk cannot
+//!      follow and the system can. `Layout::is_opened`, which says whether the repository gix opened is the one that was
+//!      looked at, compares the places as the system resolves them.
+//!    - **No links among git's own files.** `HEAD`, `info/exclude`, `info/attributes`, `config`, `config.worktree`,
+//!      `commondir`, `gitdir`, the `index` and `sharedindex.*`, `packed-refs`, the loose files of the refs `HEAD` leads to
+//!      (up to five symbolic refs), the alternates' lists and the files of each `objects/pack` must be regular files, and
+//!      `refs`, `info`, `objects`, `objects/info`, `objects/pack` and each present `objects/xx`, of every object folder, real
+//!      folders: a link or a reparse point is `repo: false`. This is a deliberate trade, which reverts the follow of a link to
+//!      a local regular file that an earlier version had (git itself follows one, and a repository whose `HEAD` is a link, or
+//!      whose `info/exclude` is shared by a link, has no status here).
+//!    - **Real sizes.** What is looked at is the opened file (`files::read`, `files::seen`): `lstat` first (nothing that is not
+//!      a regular file is opened), then an open that does not wait and does not follow, then `fstat` of what was opened, and on
+//!      Linux a file of procfs, sysfs, debugfs, cgroup or tracefs is refused (it says it is 0 bytes and reads without an end).
+//!      Within their caps (4 KiB for a `HEAD`, a ref or a pointer, 1 MiB for a config, 256 KiB for `info/exclude` and
+//!      `info/attributes`, 64 MiB for an index or `packed-refs`) the small ones are read whole, one byte over the cap
+//!      included.
+//! 9. **One budget for every rules source** (`budget`). gix reads an ignore or attributes file for every folder it goes
+//!    through and holds all their patterns in memory. Every such source is counted before gix reads it, in one budget of 4
+//!    MiB for a status, a single source being 256 KiB at most: the `.gitignore` and `.gitattributes` of the work tree on the
+//!    way from its root to the folder, in each folder the directory walk enters and in the folder of each file that is
+//!    compared, the repository's own `info/exclude` and `info/attributes`, and the blob of an index entry that stands in for a
+//!    rules file that is not in the work tree (deleted, or skip-worktree), sized by its header (`find_header`). A folder
+//!    whose rules are over their size, or a pipe, is not entered by the walk and is `modified`, which is the safe thing to
+//!    say of what was not looked at; one on the way to the folder asked for is [`GitError::TooBig`] (a pipe there is
+//!    `repo: false`); a file whose rules cannot be read counts as `modified` without being opened; and past the total the
+//!    status is [`GitError::TooBig`]. A work-tree file that is changed is read only when it is a regular file within
+//!    [`Limits::compare_bytes`] (and a link where the index has a link).
+//!
+//! # The helper
+//!
+//! The parent (`helper`, called by the `columns_git` command) does the looks of points 8 and 9 that need no gix, and so
+//! settles `repo: false` and the folders the helper may read, without starting anything. Then it starts the app's own
+//! executable with [`CHILD_ARG`] through `process::spawn`, as the thumbnail helper is started (the cleared environment, one
+//! pipe each way, no standard error), gives it the request (`request`: the folder, the limits and the layout: work tree, git
+//! folder, common folder, alternates' object folders) and reads at most 8 MiB of its answer: a status or the kind of an
+//! error, never a path, and checked as it is decoded (every name one plain name, at most one entry for a name, nothing after
+//! the end). The child (`child`) closes what it inherited, reads the request, confines itself before gix opens anything,
+//! opens exactly the layout (and checks it again with `Layout::is_opened`) and answers.
+//!
+//! - **Linux**: it dies with the app (`PR_SET_PDEATHSIG`), gains no privileges (`PR_SET_NO_NEW_PRIVS`), has no core dump, 256
+//!   open files, the time limit and a second of processor time (`RLIMIT_CPU`) and a gigabyte of data (`RLIMIT_DATA`: the heap
+//!   and the private writable mappings; not the address space, which would refuse to map a pack as big as the repository is).
+//!   Landlock lets it read, and only read, below the layout's folders, and handles every network right and the abstract-socket
+//!   and signal scopes with none allowed, so `/proc`, the rest of the file system and the user's other files are out of its
+//!   reach. A seccomp filter on every thread, which is required, refuses sockets, io_uring, programs and processes (threads
+//!   stay), `ptrace` and the like, every call that writes or changes a file, and an open that would write (`Filter::ReadOnly`),
+//!   so where the kernel has no Landlock it is still a read-only file system (the parent logs it once). See
+//!   `view/heic/sandbox.rs` for what is stopped by what, and on which kernel.
+//! - **macOS**: the same descriptors and limits, and `sandbox_init` with `(deny default)` and the read of the layout's folders
+//!   (`seatbelt.rs`). It does not die with the app (macOS has no such signal): its standard input closes and it ends when it
+//!   writes, and at the latest at its processor-time limit. Written and unit-tested for its profile on every system, but
+//!   entered only on macOS, where the CI step "Git status helper, real executable" is what shows that it works.
+//! - **Windows**: no AppContainer (it would need a change of the access lists of the user's own repositories, which this must
+//!   not do). The parent puts the child in a Job Object that has a gigabyte of memory, one active process and kill-on-close
+//!   (it never outlives the app). What it may read is not bounded there; the parent's checks (point 8: no network or device
+//!   path, no link, nothing that is not a file where one is expected) are what the repository is held to.
+//! - **The deadline**: the parent waits for the time limit and half a second, then kills the child and answers
+//!   [`GitError::TimedOut`]; the exit flag of the app kills it too. So a read of a pipe, a chain of deltas that spends the
+//!   processor, or a mount that does not answer costs at most that, and no thread of the app is ever left behind. A child that
+//!   ends with no answer (a crash, the memory limit) is [`GitError::Repository`].
+//! - **No cache.** The decoded index is not kept between statuses: the process is made for one. A flat view over many
+//!   folders of one repository decodes the index once for each folder, and starts a helper for each, two at a time; the
+//!   page asks for a folder at a time, and this does not batch them.
 //!
 //! # Known residuals
 //!
-//! - A time-of-check/time-of-use race: the files and places of a repository are looked at, and gix opens them a moment later.
-//!   Someone who swaps one for a pipe or a link in between can still hold a read up, which only the deadline of the caller
-//!   (`columns_git`) answers for, and nothing stops. That needs write access to the folders of the repository.
+//! - A time-of-check/time-of-use race: the files and places of a repository are looked at in the parent, and opened a moment
+//!   later by gix in the helper. Someone who swaps one for a pipe or a link in between can hold a read up, which only the
+//!   deadline answers for (and the helper's confinement bounds what it may read); that needs write access to the folders of
+//!   the repository.
 //! - One read of one object cannot be interrupted, and gix has no hook for it: a long chain of deltas (or one made to repeat
-//!   its copies) spends the processor of its thread for as long as it takes, bounded in size (16 MiB) and not in time. The
-//!   caller lets at most two such threads run or be abandoned at once (`stuck::MAX_STUCK`).
+//!   its copies) spends the processor of the helper for as long as it takes, bounded in size (16 MiB) and in time by the
+//!   deadline and the limit on processor time, which kill the helper: the cost is one core for that long, for two helpers at
+//!   most.
 //! - On Windows a mapped network drive (`Z:`) is a drive letter like any other, and is taken for a local place: nothing in the
-//!   path says otherwise.
+//!   path says otherwise. Nothing there confines what the helper reads either.
 //! - A repository of the reftable format is `repo: false`: gix 0.91 cannot read it.
+//! - The global ignore file (`core.excludesFile`, `$XDG_CONFIG_HOME/git/ignore`) is not applied (point 1).
+//! - A nested repository (a folder with a `.git` of its own that is no submodule) is walked as the folder it is, and one whose
+//!   own `.gitignore` is `*` shows `!` for what it holds that the rules of the outer repository do not name, which is the
+//!   marks of a folder and not of a repository.
+//! - `objects`, `refs` or `info` that is a link, in the git folder or in the common folder, is `repo: false` (point 8).
+//! - The parent's own look at the files of a repository (`lstat`, small non-blocking reads) can still wait on a mount that does
+//!   not answer, as every other call of the app on such a mount can, holding its thread and one of the two places for a status.
 //!
 //! Left out: the dirtiness of submodules (point 6), the global ignore file (point 1), rename tracking (a renamed file is a
 //! deleted and an added file here) and the ahead/behind or branch state (never read). Bare repositories have no work tree
@@ -123,50 +181,59 @@
 //!   macOS, and without case on Windows (`path::prefix_of`).
 //! - The status is limited to the folder's own subtree: its index entries are the range of the index with that prefix, the
 //!   directory walk and the comparison with the work tree get the folder as a literal pathspec, the comparison with `HEAD`
-//!   walks only the folder's subtree of `HEAD`, and nothing outside it is stat-ed (apart from the ignore rules of its
-//!   parents).
+//!   walks only the folder's subtree of `HEAD`, and nothing outside it is stat-ed (apart from the rules of its parents).
 //! - Three results are merged into one mark per direct child (`marks::Marks`): the index against `HEAD` (`staged`,
 //!   `staged::staged`: our own walk of the subtree of `HEAD` against the index entries under the folder, not gix's
 //!   `tree_index_status`, which builds an index of the whole tree first, with no cap), the work tree against the index
 //!   (`modified`, `conflicted`), and the directory walk (`untracked`, `ignored`). A folder child gets the most severe mark
 //!   of anything below it (`conflicted`, then `modified`, then `staged`, then `untracked`); an ignored entry below it never
 //!   marks it, and it is `ignored` only when it is itself ignored. A folder that is untracked as a whole, or a nested
-//!   repository, is `untracked`; a staged gitlink is `staged`.
+//!   repository, is `untracked`; a staged gitlink is `staged`. A child folder of a folder that is untracked as a whole is
+//!   `ignored` when the rules name it or when it holds only ignored files, as in git (`ignored`: a look that is bounded by
+//!   the meter, the budget and a cap of its own).
 //! - The work is bounded by [`Limits`]: a time limit and a cap on the entries walked, which each of the three steps has for
 //!   itself (the index entries of the folder; the entries of the trees of `HEAD` walked or looked through; the directories
 //!   and entries the directory walk saw, and the changes found), so that a repository of 100,000 files is not too big for its
-//!   root because each file is counted three times. The time limit is the bound of the whole. A watchdog thread sets gix's interrupt flag when the time is up, and the app's exit flag does the same,
-//!   so a status stops at the next entry, not at the end. The walk of the trees of `HEAD` also bounds its depth (256), the
-//!   length of a path (64 KiB) and the bytes of the trees it holds open (64 MiB), and each object it reads is held to gix's
-//!   16 MiB limit for a repository of reduced trust. Some things cannot be interrupted once started, and are bounded by
-//!   size instead: reading one file's content (skipped for files over [`Limits::compare_bytes`], which show as `modified`
-//!   when their stat changed), decoding the index (at most 64 MiB), and reading one object (at most 16 MiB). A repository
-//!   that is over the cap is [`GitError::TooBig`], and one that took the time is [`GitError::TimedOut`].
-//! - The decoded index of a repository is kept for the next status of it (`cache`: four repositories at most, each for an
-//!   index file of a given length and time that is not younger than two seconds), so that a flat view of many folders of one
-//!   repository decodes it once.
-//! - Anything that still holds a read up (a file that was swapped for a pipe after it was looked at, a loose object or a
-//!   pack that is one) is not a bound of this module: the caller answers for the request at its deadline whether or not this
-//!   function returns (see `columns_git`).
+//!   root because each file is counted three times. The time limit is the bound of the whole. A watchdog thread of the helper
+//!   sets gix's interrupt flag when the time is up, so a status stops at the next entry, not at the end. The walk of the trees
+//!   of `HEAD` also bounds its depth (256), the length of a path (64 KiB) and the bytes of the trees it holds open (64 MiB),
+//!   and each object it reads is held to gix's 16 MiB limit for a repository of reduced trust. Some things cannot be
+//!   interrupted once started, and are bounded by size instead: reading one file's content (skipped for files over
+//!   [`Limits::compare_bytes`], which show as `modified` when their stat changed), decoding the index (at most 64 MiB), and
+//!   reading one object (at most 16 MiB). A repository that is over the cap is [`GitError::TooBig`], and one that took the
+//!   time is [`GitError::TimedOut`].
 //! - Errors carry no path ([`GitError`]); the details go to the log at debug level only.
 
-mod cache;
+mod budget;
+mod child;
 mod compare;
 mod files;
+mod helper;
+mod ignored;
 mod inspect;
+mod layout;
 mod links;
 mod locality;
 mod locate;
 mod marks;
 mod open;
 mod path;
+mod request;
 mod scan;
+#[cfg(any(target_os = "macos", test))]
+mod seatbelt;
 mod staged;
 mod visit;
 mod watch;
 
 #[cfg(test)]
+mod budget_tests;
+#[cfg(test)]
 mod compare_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod confine_tests;
+#[cfg(test)]
+mod files_tests;
 #[cfg(test)]
 mod fixture;
 #[cfg(test)]
@@ -181,6 +248,8 @@ mod nested_tests;
 mod security_tests;
 #[cfg(test)]
 mod sparse_tests;
+#[cfg(test)]
+mod testing;
 #[cfg(test)]
 mod tests;
 
@@ -256,8 +325,71 @@ impl fmt::Display for GitError {
 
 impl std::error::Error for GitError {}
 
+pub use child::{CHILD_ARG, child_main};
+
 /// The git status of the direct children of `folder`, or `repo: false` when the folder is not in the work tree of a
-/// repository. `cancel` is the app's exit flag. Blocks: run it on a blocking thread.
-pub fn status(folder: &Path, limits: Limits, cancel: &AtomicBool) -> Result<GitStatus, GitError> {
-    scan::status(folder, limits, cancel)
+/// repository, or in one that must not be read. `cancel` is the app's exit flag. The repository is read by the helper
+/// `program` (the app's own executable, which hands the process to [`child_main`] when it is started with [`CHILD_ARG`]): see
+/// the module docs. Blocks, for at most [`Limits::time`] and a short grace: run it on a blocking thread.
+pub fn status(folder: &Path, limits: Limits, cancel: &AtomicBool, program: &Path) -> Result<GitStatus, GitError> {
+    helper::status(folder, limits, cancel, program)
+}
+
+/// The same status as [`status`], read in this process instead of the helper: the process that calls it is the one that is not
+/// confined and has no memory or time limit but the time limit of the status. For the tests of what stands around the status
+/// (the shell's commands), which cannot start the app's own executable as the helper; the app never calls it.
+#[doc(hidden)]
+pub fn status_in_process(folder: &Path, limits: Limits, cancel: &AtomicBool) -> Result<GitStatus, GitError> {
+    in_process(
+        folder,
+        std::env::home_dir().and_then(|home| gix::path::realpath(home).ok()),
+        limits,
+        cancel,
+    )
+}
+
+/// The request that [`status`] gives the helper for `folder` (the bytes on its standard input), or `None` when the folder is in
+/// no repository that is read. For the tests of the real executable as the helper, which start it themselves to look at it
+/// while it works; the app never calls it.
+#[doc(hidden)]
+pub fn helper_request(folder: &Path, limits: Limits) -> Result<Option<Vec<u8>>, GitError> {
+    let home = std::env::home_dir().and_then(|home| gix::path::realpath(home).ok());
+    let request = helper::prepare(folder, home, limits, &AtomicBool::new(false))?;
+
+    request
+        .map(|request| request.encode().map_err(|_| GitError::Repository))
+        .transpose()
+}
+
+/// Like [`status`] for a request that was made by [`helper_request`] (and a repository that was changed since, which is how a
+/// test makes a file that was looked at a pipe: the one thing that the look at the files of a repository cannot see coming), with
+/// the helper supervised as it is: the deadline, the exit flag, the answer read. For the same tests.
+#[doc(hidden)]
+pub fn status_for_request(request: &[u8], cancel: &AtomicBool, program: &Path) -> Result<GitStatus, GitError> {
+    let request = request::Request::decode(request).map_err(|_| GitError::Repository)?;
+
+    helper::run(program, &request, cancel)
+}
+
+/// The result an answer of the helper (the bytes on its standard output) stands for, as the parent reads it. For the same tests.
+#[doc(hidden)]
+pub fn helper_answer(bytes: &[u8]) -> Result<GitStatus, GitError> {
+    request::decode_answer(bytes)
+}
+
+/// [`status_in_process`] with the folder the search for a repository must not go above given.
+fn in_process(
+    folder: &Path,
+    ceiling: Option<std::path::PathBuf>,
+    limits: Limits,
+    cancel: &AtomicBool,
+) -> Result<GitStatus, GitError> {
+    let Some(request) = helper::prepare(folder, ceiling, limits, cancel)? else {
+        return Ok(scan::not_a_repository());
+    };
+    // The request is what the helper is given, so it is what is read.
+    let request = request::Request::decode(&request.encode().map_err(|_| GitError::Repository)?)
+        .map_err(|_| GitError::Repository)?;
+
+    scan::read(&request, cancel)
 }

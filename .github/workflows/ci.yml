@@ -212,6 +212,14 @@ jobs:
       - name: Thumbnail helper, real executable
         if: runner.os != 'Linux'
         run: cargo test -p pairpane_app --test thumb_helper -- --test-threads=2
+      # The same for the git status helper: on macOS it reads a repository under `sandbox_init` with the read of the
+      # repository's own folders only (the profile is built and tried on every system, but only macOS can enter it, so this is
+      # what shows gix needs no more than that), and on Windows it reads in the job that bounds its memory and its processes.
+      # The Linux sandbox (Landlock, seccomp, limits) is tried by `gitstatus::confine_tests` and by this test program in the
+      # step after this one.
+      - name: Git status helper, real executable
+        if: runner.os != 'Linux'
+        run: cargo test -p pairpane_app --test git_helper -- --test-threads=2
       - run: cargo test -p pairpane_app
       # Always build through `tauri build` so the custom-protocol feature is on; a plain cargo build would load
       # the dev server URL.

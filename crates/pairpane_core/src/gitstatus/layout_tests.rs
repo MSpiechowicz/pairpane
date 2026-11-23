@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use super::fixture::{Repo, pairs, within};
-use super::locate::{Layout, is_head};
+use super::layout::Layout;
+use super::locate::is_head;
+use super::testing::status;
 use super::tests::clean;
 use super::*;
 use crate::model::GitMark::Untracked;
@@ -31,20 +33,17 @@ fn the_content_of_a_head_is_a_symbolic_ref_below_refs_or_an_object_id() {
     let id40 = "0123456789abcdef0123456789abcdef01234567";
     let id64 = id40.repeat(2)[..64].to_owned();
 
-    for good in [
-        "ref: refs/heads/main\n",
-        "ref:refs/heads/x",
-        "ref:   refs/tags/v1\r\n",
-        id40,
-        &id64,
-    ] {
+    for good in ["ref: refs/heads/main\n", "ref:   refs/tags/v1\r\n", id40, &id64] {
         assert!(is_head(good.as_bytes()), "{good:?}");
     }
+    // What gix's own parser of a loose reference refuses: no space after `ref:`, a name that is no reference name.
     for bad in [
         "",
         "garbage\n",
-        "ref: HEAD",
-        "ref: heads/main",
+        "ref:refs/heads/x",
+        "ref: refs/heads/a..b",
+        "ref: refs/heads/a b",
+        "ref: refs/heads/x.lock",
         "ref: ",
         "0123456789abcdef",
         "0123456789abcdef0123456789abcdef0123456g",
@@ -82,11 +81,25 @@ fn what_gix_opened_must_be_what_was_looked_at() {
         git_dir: repo.path(git_dir),
         common_dir: repo.path(common_dir),
         workdir: workdir.to_path_buf(),
+        alternates: Vec::new(),
+        info_rules: 0,
     };
+    fs::create_dir(repo.path("x")).expect("a folder");
 
     assert!(layout(".git", ".git", ".git", repo.root()).is_opened(&opened));
-    // Dots are read away.
+    // Dots are read away where they follow real folders.
     assert!(layout(".git", "x/../.git", ".git/.", &repo.path("x/..")).is_opened(&opened));
+    // A place is what the system resolves it to: a link on the way makes a `..` lead elsewhere, a link to the same folder is
+    // the same folder.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("x/y", repo.path("l")).expect("a link");
+        std::os::unix::fs::symlink(".git", repo.path("to-git")).expect("a link");
+
+        assert!(!layout(".git", "l/../.git", ".git", repo.root()).is_opened(&opened));
+        assert!(layout(".git", "to-git", ".git", repo.root()).is_opened(&opened));
+    }
+    assert!(!layout(".git", "x/none/../.git", ".git", repo.root()).is_opened(&opened));
 
     assert!(!layout(".git", "other.git", ".git", repo.root()).is_opened(&opened));
     assert!(!layout(".git", ".git", "other.git", repo.root()).is_opened(&opened));
@@ -246,7 +259,8 @@ mod unix {
             ("second/repo.git", false),
             ("/srv/../net/host/repo.git", false),
             ("/net/host/repo.git", false),
-            ("away/repo.git", true),
+            // A link anywhere on the way is a repository that is not read, even one that leads nowhere.
+            ("away/repo.git", false),
             ("../does-not-exist", true),
         ] {
             fs::write(sub.join(".git"), format!("gitdir: {pointer}\n")).expect("a git file");
@@ -255,61 +269,87 @@ mod unix {
         }
     }
 
+    /// A link among the files of a repository itself (a deliberate trade: git follows one, and a repository whose `HEAD` or
+    /// `info/exclude` is one has no status here) is a repository that is not read, whatever it leads to.
     #[test]
-    fn a_link_for_info_exclude_or_attributes_is_followed_to_a_regular_local_file_and_otherwise_refused() {
+    fn a_link_for_info_exclude_or_attributes_or_head_is_no_repository_whatever_it_leads_to() {
         let elsewhere = tempfile::tempdir().expect("a folder");
         fs::write(elsewhere.path().join("rules"), "*.tmp\n").expect("rules");
+        fs::write(elsewhere.path().join("head"), "ref: refs/heads/main\n").expect("HEAD");
         fifo(elsewhere.path(), "pipe");
-        fs::write(elsewhere.path().join("big"), vec![b'#'; 2 * 1024 * 1024]).expect("a big file");
 
-        for name in ["exclude", "attributes"] {
-            for (target, repo) in [
-                (elsewhere.path().join("rules"), true),
-                (elsewhere.path().join("missing"), true),
-                (elsewhere.path().join("pipe"), false),
-                (elsewhere.path().join("big"), false),
-                (PathBuf::from("/dev/zero"), false),
-                (PathBuf::from("/net/host/exclude"), false),
+        for name in [
+            "info/exclude",
+            "info/attributes",
+            "HEAD",
+            "config",
+            "index",
+            "packed-refs",
+        ] {
+            for target in [
+                elsewhere.path().join("rules"),
+                elsewhere.path().join("head"),
+                elsewhere.path().join("missing"),
+                elsewhere.path().join("pipe"),
+                PathBuf::from("/dev/zero"),
+                PathBuf::from("/net/host/exclude"),
             ] {
                 let repo_under_test = clean(&[("a.txt", b"a")]);
-                repo_under_test.put("x.tmp", b"x");
-                let info = repo_under_test.git_dir().join("info");
-                fs::create_dir_all(&info).expect("a folder");
-                let _ = fs::remove_file(info.join(name));
-                symlink(&target, info.join(name)).expect("a link");
+                let file = repo_under_test.git_dir().join(name);
+                fs::create_dir_all(file.parent().expect("a folder")).expect("a folder");
+                let _ = fs::remove_file(&file);
+                symlink(&target, &file).expect("a link");
 
-                let answer = in_time(repo_under_test.root());
-
-                assert_eq!(answer.repo, repo, "{name} -> {}", target.display());
+                assert!(!in_time(repo_under_test.root()).repo, "{name} -> {}", target.display());
             }
         }
+    }
 
-        // What the link leads to is read as the rules.
+    #[test]
+    fn info_exclude_is_rules_as_a_file_and_one_over_the_size_of_a_rules_file_is_too_big() {
         let repo = clean(&[("a.txt", b"a")]);
         repo.put("x.tmp", b"x");
         fs::create_dir_all(repo.git_dir().join("info")).expect("a folder");
-        let _ = fs::remove_file(repo.git_dir().join("info/exclude"));
-        symlink(elsewhere.path().join("rules"), repo.git_dir().join("info/exclude")).expect("a link");
+        fs::write(repo.git_dir().join("info/exclude"), "*.tmp\n").expect("rules");
+
         assert_eq!(
             pairs(&in_time(repo.root()).marks),
             vec![("x.tmp", crate::model::GitMark::Ignored)]
         );
+
+        fs::write(repo.git_dir().join("info/exclude"), vec![b'#'; 300 * 1024]).expect("rules");
+        let too_big = status(repo.root(), Limits::default(), &AtomicBool::new(false));
+        assert!(matches!(too_big, Err(GitError::TooBig)), "{too_big:?}");
     }
 
+    /// The auditor's `lexical` fixture: `gitdir: l/../real` with `l` a link to `x/y`. The system reads it as `x/real`, and gix
+    /// takes the `..` out by reading the path and opens `real` beside the link, where a pipe is for `config`: what was looked
+    /// at is not what is opened. A link before a `..` is a repository that is not read, and nothing waits.
     #[test]
-    fn a_head_that_is_a_link_to_a_local_file_is_followed_as_gix_follows_it() {
-        let elsewhere = tempfile::tempdir().expect("a folder");
-        fs::write(elsewhere.path().join("head"), "ref: refs/heads/main\n").expect("HEAD");
-        let repo = clean(&[("a.txt", b"a")]);
-        fs::remove_file(repo.git_dir().join("HEAD")).expect("removed");
-        symlink(elsewhere.path().join("head"), repo.git_dir().join("HEAD")).expect("a link");
+    fn a_gitdir_that_climbs_out_of_a_link_is_no_repository_and_nothing_waits_for_the_pipe_it_hides() {
+        let folder = tempfile::tempdir().expect("a folder");
+        let root = gix::path::realpath(folder.path()).expect("its real path");
+        let work = root.join("w");
+        fs::create_dir_all(work.join("x/y")).expect("folders");
+        symlink("x/y", work.join("l")).expect("a link");
+        git_folder(&work.join("x/real"));
+        git_folder(&work.join("real"));
+        fifo(&work.join("real"), "config");
 
-        assert!(is_repo(repo.root()));
+        for pointer in ["l/../real", "x/y/../real"] {
+            fs::write(work.join(".git"), format!("gitdir: {pointer}\n")).expect("a git file");
 
-        fs::remove_file(repo.git_dir().join("HEAD")).expect("removed");
-        fifo(elsewhere.path(), "pipe");
-        symlink(elsewhere.path().join("pipe"), repo.git_dir().join("HEAD")).expect("a link");
-        assert!(!is_repo(repo.root()));
+            // The second is the same place with no link before its dots, `x/real`, a repository; the first is refused for its
+            // link, though the system would read it as that place too.
+            assert_eq!(is_repo(&work), pointer != "l/../real", "{pointer}");
+        }
+
+        // The same through a `commondir`, which names the pipe's folder.
+        fs::write(work.join(".git"), "gitdir: real\n").expect("a git file");
+        assert!(!is_repo(&work), "a pipe for config is no repository");
+        fs::remove_file(work.join("real/config")).expect("removed");
+        fs::write(work.join("real/commondir"), "../l/../x/real\n").expect("commondir");
+        assert!(!is_repo(&work), "a commondir with a link before its dots");
     }
 
     #[test]

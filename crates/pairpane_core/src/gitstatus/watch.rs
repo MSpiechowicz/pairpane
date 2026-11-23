@@ -36,6 +36,12 @@ impl Stop {
         self.interrupt.load(Ordering::Acquire)
     }
 
+    /// Something is over its bound: the status stops as too big. Callable from any thread.
+    pub(super) fn exhaust(&self) {
+        self.over_cap.store(true, Ordering::Release);
+        self.interrupt.store(true, Ordering::Release);
+    }
+
     /// What an interrupted or failed read is told as: a raised flag is its own answer, an object over gix's allocation limit
     /// is a repository too big to read here, and anything else is an unreadable repository (the details are only logged).
     pub(super) fn explain(&self, error: &gix::Error) -> GitError {
@@ -97,8 +103,7 @@ impl<'a> Meter<'a> {
     /// of entries.
     pub(super) fn exhaust(&mut self) {
         self.left = 0;
-        self.stop.over_cap.store(true, Ordering::Release);
-        self.stop.interrupt.store(true, Ordering::Release);
+        self.stop.exhaust();
     }
 }
 

@@ -16,6 +16,7 @@ use std::process::Command;
 use std::sync::atomic::AtomicBool;
 
 use super::fixture::Repo;
+use super::testing::status;
 use super::*;
 use crate::model::GitMark::{Modified, Untracked};
 
