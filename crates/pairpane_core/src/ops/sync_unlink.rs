@@ -11,8 +11,9 @@ use super::held::{Held, Node};
 use super::plan::Kind;
 #[cfg(unix)]
 use super::report::refusal;
+use super::sync_remove::Since;
 #[cfg(unix)]
-use super::sync_remove::{HOLDS_A_MOUNT, Since, is_mount};
+use super::sync_remove::{HOLDS_A_MOUNT, is_mount};
 #[cfg(unix)]
 use super::transfer::MAX_DEPTH;
 use super::transfer::{Run, Stop};

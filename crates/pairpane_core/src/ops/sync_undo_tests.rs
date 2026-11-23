@@ -6,7 +6,9 @@ use std::path::Path;
 
 use pretty_assertions::assert_eq;
 
-use crate::model::{Outcome, SyncDirection};
+#[cfg(unix)]
+use crate::model::Outcome;
+use crate::model::SyncDirection;
 
 use super::sync_tests::{Pair, file, is_done, plan};
 use super::testing::{Ended, Rig, read, task, tree};
