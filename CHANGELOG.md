@@ -1,3 +1,10 @@
+# [0.23.0](https://github.com/MSpiechowicz/pairpane/compare/v0.22.0...v0.23.0) (2026-11-23)
+
+
+### Features
+
+* **sync:** undo a synchronize (#47) ([8ff77c0](https://github.com/MSpiechowicz/pairpane/commit/8ff77c09af5c721df4109c83c9770b25cde4c783)), closes [#41](https://github.com/MSpiechowicz/pairpane/issues/41)
+
 # [0.22.0](https://github.com/MSpiechowicz/pairpane/compare/v0.21.0...v0.22.0) (2026-11-23)
 
 
