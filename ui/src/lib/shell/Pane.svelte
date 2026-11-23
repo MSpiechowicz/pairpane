@@ -10,9 +10,12 @@
   import type { InlineRename } from '$lib/panes/inlineRename.svelte';
   import PaneFooter from '$lib/panes/PaneFooter.svelte';
   import PaneRow from '$lib/panes/PaneRow.svelte';
+  import type { Range } from '$lib/panes/scroll';
   import type { PaneTabs } from '$lib/panes/tabs.svelte';
+  import { targetOf, wantedBy } from '$lib/panes/thumbs';
   import type { Volumes } from '$lib/panes/volumes.svelte';
   import VirtualColumns from '$lib/panes/VirtualColumns.svelte';
+  import VirtualGrid from '$lib/panes/VirtualGrid.svelte';
   import VirtualRows from '$lib/panes/VirtualRows.svelte';
 
   import DriveMenu from './DriveMenu.svelte';
@@ -52,10 +55,16 @@
   const tracks = $derived(columnTracks(preferences.value));
   const view = $derived(tabs.view);
   const brief = $derived(view.layout === 'brief');
+  const thumbnails = $derived(view.layout === 'thumbnails');
+  const thumbs = $derived(tabs.thumbs);
   const listing = $derived(view.listing);
   const uid = $props.id();
   let list = $state<HTMLElement>();
   let pageSize = $state(1);
+  /** The tiles in a row of the thumbnails layout, and the items in view and near it (what is worth a thumbnail). */
+  let perRow = $state(1);
+  let visible = $state<Range>({ first: 0, last: 0 });
+  let near = $state<Range>({ first: 0, last: 0 });
   /** The row of this pane that is being renamed in place. */
   const editing = $derived(rename?.current?.view === view ? rename.current : undefined);
 
@@ -64,6 +73,11 @@
     if (editing !== undefined && (editing.path !== listing.path || editing.tab !== tabs.active)) {
       rename?.cancel();
     }
+  });
+
+  // The thumbnails to fetch are those of the pictures in view, then those near it; none when the pane shows no tiles.
+  $effect(() => {
+    thumbs.want(thumbnails ? wantedBy(view, visible, near, thumbs.size) : []);
   });
 
   // The active pane's list holds the keyboard focus (Tab, a click or the start of the app make a pane active),
@@ -85,7 +99,7 @@
   }
 
   function onkeydown(event: KeyboardEvent) {
-    if (handleKey(view, event, pageSize)) {
+    if (handleKey(view, event, pageSize, undefined, perRow)) {
       event.preventDefault();
     }
   }
@@ -168,7 +182,7 @@
     <HotlistMenu {tabs} {hotlist} onClose={closeMenu} />
   {/if}
 
-  {#if !brief}
+  {#if view.layout === 'detailed'}
     <ColumnHeader {view} />
   {/if}
 
@@ -195,6 +209,8 @@
             {index}
             {entry}
             {brief}
+            tile={thumbnails}
+            thumb={thumbnails ? thumbs.get(targetOf(listing, entry, thumbs.size)) : undefined}
             up={view.isUp(index)}
             cursor={index === view.cursor}
             selected={entry !== undefined && view.isSelected(entry.name)}
@@ -206,7 +222,9 @@
 
         <!-- A new folder starts at the top; a reload of the same folder keeps the scroll position. -->
         {#key listing.location}
-          {#if brief}
+          {#if thumbnails}
+            <VirtualGrid count={view.count} active={view.cursor} bind:pageSize bind:perRow bind:visible bind:near tile={row} />
+          {:else if brief}
             <VirtualColumns count={view.count} active={view.cursor} bind:pageSize {row} />
           {:else}
             <VirtualRows count={view.count} active={view.cursor} bind:pageSize {row} />

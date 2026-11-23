@@ -30,7 +30,8 @@ pub struct SavedTab {
     pub layout: Option<PaneLayout>,
 }
 
-/// How a pane shows its folder: one row per item with its columns, or the names alone in several columns. One this
+/// How a pane shows its folder: one row per item with its columns, the names alone in several columns, or a grid of
+/// thumbnails. One this
 /// version does not know (a newer version's, a file edited by hand) reads as the detailed view, so that it never makes
 /// the rest of the state unreadable.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, TS)]
@@ -40,6 +41,8 @@ pub enum PaneLayout {
     #[default]
     Detailed,
     Brief,
+    /// A grid of small previews of the pictures (icons for the rest).
+    Thumbnails,
 }
 
 impl<'de> Deserialize<'de> for PaneLayout {
@@ -48,6 +51,7 @@ impl<'de> Deserialize<'de> for PaneLayout {
 
         Ok(match value.as_str() {
             Some("brief") => Self::Brief,
+            Some("thumbnails") => Self::Thumbnails,
             _ => Self::Detailed,
         })
     }

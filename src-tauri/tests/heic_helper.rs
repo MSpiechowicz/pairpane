@@ -6,13 +6,16 @@
     reason = "`set_var` and `fcntl` in the test of what the helper inherits; see there"
 )]
 
-use std::io::{Read, Write};
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::process::Child;
 
 use pairpane_core::view::{HEIC_CHILD_ARG, heic_helper_command};
+
+mod common;
+
+use common::finish;
 
 /// A 16 by 8 picture of one colour, `#3080c0`, made by `heif-enc` (the fixture of the core crate's tests).
 const TINY: &[u8] = include_bytes!("../../crates/pairpane_core/src/view/heic_testdata/tiny.heic");
@@ -31,25 +34,6 @@ fn start() -> Child {
     heic_helper_command(Path::new(env!("CARGO_BIN_EXE_pairpane")), &[HEIC_CHILD_ARG])
         .spawn()
         .expect("the helper starts")
-}
-
-/// The answer of `child` to `input`: what it wrote to the standard output, and whether it exited with 0.
-fn finish(mut child: Child, input: &[u8]) -> (Vec<u8>, bool) {
-    // The inputs here are small enough for the pipe, so writing everything first cannot block.
-    let mut stdin = child.stdin.take().expect("stdin");
-    stdin.write_all(input).expect("the input is written");
-    drop(stdin);
-
-    let mut answer = Vec::new();
-    child
-        .stdout
-        .take()
-        .expect("stdout")
-        .read_to_end(&mut answer)
-        .expect("the answer is read");
-    let status = child.wait().expect("the helper ends");
-
-    (answer, status.success())
 }
 
 /// The answer of a helper to `input`.
@@ -98,47 +82,6 @@ fn the_helper_decodes_the_fixture_where_the_system_has_a_decoder() {
     is_the_picture(&answer);
 }
 
-/// The limits of the process at `proc` (`/proc/<pid>`) once its address space is limited, which is the last limit it sets,
-/// right before Landlock and the seccomp filter; the helper then waits for its input.
-#[cfg(target_os = "linux")]
-fn wait_until_confined(proc: &str) -> String {
-    let limits = || std::fs::read_to_string(format!("{proc}/limits")).unwrap_or_default();
-    let limited = |text: &str| {
-        text.lines()
-            .any(|line| line.starts_with("Max address space") && !line.contains("unlimited"))
-    };
-
-    let mut text = limits();
-    for _ in 0..500 {
-        if limited(&text) {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        text = limits();
-    }
-    assert!(limited(&text), "the helper limits its address space: {text}");
-
-    // The seccomp filter is the last step of the confinement: wait until every thread of the helper has it.
-    let filtered = || {
-        let Ok(tasks) = std::fs::read_dir(format!("{proc}/task")) else {
-            return false;
-        };
-
-        tasks.filter_map(Result::ok).all(|task| {
-            std::fs::read_to_string(task.path().join("status")).is_ok_and(|status| status.contains("Seccomp:\t2"))
-        })
-    };
-    for _ in 0..500 {
-        if filtered() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    assert!(filtered(), "every thread of the helper has the seccomp filter");
-
-    limits()
-}
-
 /// The helper is confined before it reads a byte (see `sandbox.rs` of the core crate), and the picture is still
 /// decoded under that: the codecs are loaded before the file system is given up, and need no file after.
 #[cfg(target_os = "linux")]
@@ -146,18 +89,9 @@ fn wait_until_confined(proc: &str) -> String {
 fn the_helper_confines_itself_before_it_reads_and_decodes_under_the_limits() {
     let child = start();
     let proc = format!("/proc/{}", child.id());
-    let text = wait_until_confined(&proc);
+    let text = common::wait_until_confined(&proc);
 
-    assert!(text.contains("Max cpu time              60 "), "{text}");
-    assert!(text.contains("Max core file size        0 "), "{text}");
-    assert!(text.contains("Max open files            64 "), "{text}");
-    assert!(
-        text.lines()
-            .any(|line| line.starts_with("Max address space") && !line.contains("unlimited")),
-        "{text}"
-    );
-    let status = std::fs::read_to_string(format!("{proc}/status")).expect("status");
-    assert!(status.contains("NoNewPrivs:\t1"), "{status}");
+    common::assert_limited(&proc, &text);
 
     let (answer, exited_well) = finish(child, TINY);
     assert!(exited_well);
@@ -200,13 +134,9 @@ fn the_helper_inherits_no_descriptor_and_no_environment() {
 
     let child = start();
     let proc = format!("/proc/{}", child.id());
-    wait_until_confined(&proc);
+    common::wait_until_confined(&proc);
 
-    let mut open: Vec<u32> = std::fs::read_dir(format!("{proc}/fd"))
-        .expect("the descriptors")
-        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
-        .collect();
-    open.sort_unstable();
+    let open = common::open_descriptors(&proc);
     assert_eq!(open, [0, 1, 2], "the helper holds only its standard streams");
 
     let environment = std::fs::read(format!("{proc}/environ")).expect("the environment");

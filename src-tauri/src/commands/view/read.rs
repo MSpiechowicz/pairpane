@@ -142,10 +142,10 @@ pub async fn view_archive(viewer: State<'_, Viewer>, session: u32) -> CommandRes
     viewer.archive(session).await
 }
 
-/// The executable that is started as the HEIC helper: the app itself. On Linux that is `/proc/self/exe`, which names
+/// The executable that is started as the HEIC helper and as the thumbnail helper: the app itself. On Linux that is `/proc/self/exe`, which names
 /// the running program itself and not the path it was started from, so a package upgrade that replaces the file at that
 /// path (or a swap of it) cannot make the helper another program; elsewhere the path the system reports.
-fn helper_program() -> io::Result<PathBuf> {
+pub(in crate::commands) fn helper_program() -> io::Result<PathBuf> {
     if cfg!(target_os = "linux") {
         return Ok(PathBuf::from("/proc/self/exe"));
     }

@@ -1,4 +1,5 @@
-//! The decoding in a child process, both ends of it.
+//! The decoding in a child process, both ends of it. The thumbnail helper (`view::thumb`) shares the framing and the
+//! parent's end ([`run_within`], [`read_picture`], [`write_answer`]); it is another child argument with another child.
 //!
 //! The child is the app's own executable started with the argument `--pairpane-decode-heic`; the shell hands it to
 //! [`child_main`] before anything else starts. The child reads the file from its standard input (at most
@@ -31,7 +32,7 @@ use std::time::Duration;
 
 use crate::process::{self, GRACE, Wait};
 
-use super::{HEADER, MAX_IMAGE_BYTES, cancelled, check_size, no_decoder, too_big, undecodable};
+use super::{HEADER, MAX_IMAGE_BYTES, MAX_IMAGE_SIDE, cancelled, check_size, no_decoder, too_big, undecodable};
 
 const STATUS_OK: u8 = 0;
 const STATUS_NO_DECODER: u8 = 1;
@@ -40,7 +41,7 @@ const STATUS_TOO_BIG: u8 = 3;
 
 /// How long the child may take, from its start to its end. The biggest picture decodes in seconds; a child that is
 /// still at it after this is hung, and is killed.
-pub(super) const DEADLINE: Duration = Duration::from_secs(60);
+pub(in crate::view) const DEADLINE: Duration = Duration::from_secs(60);
 
 /// The environment variables the helper is given on top of the ones every child gets ([`process::command`]: a Windows
 /// process needs its system directory and its temporary folder, the Imaging Component reads them); it starts with no
@@ -61,7 +62,7 @@ pub fn child_main() -> i32 {
 
     #[cfg(target_os = "linux")]
     if let Err(error) = super::sandbox::limit() {
-        tracing::debug!(%error, "the heic helper cannot limit itself");
+        tracing::debug!(%error, "the helper cannot limit itself");
 
         return 1;
     }
@@ -72,8 +73,10 @@ pub fn child_main() -> i32 {
     }
 
     #[cfg(target_os = "linux")]
-    if let Err(error) = super::sandbox::single_threaded().and_then(|()| super::sandbox::confine()) {
-        tracing::debug!(%error, "the heic helper cannot confine itself");
+    if let Err(error) =
+        super::sandbox::single_threaded().and_then(|()| super::sandbox::confine(super::sandbox::ADDRESS_SPACE))
+    {
+        tracing::debug!(%error, "the helper cannot confine itself");
 
         return 1;
     }
@@ -82,7 +85,18 @@ pub fn child_main() -> i32 {
 }
 
 /// [`child_main`] over any input and output.
-pub(super) fn run_child(input: impl Read, mut output: impl Write) -> i32 {
+pub(super) fn run_child(input: impl Read, output: impl Write) -> i32 {
+    serve(input, output, convert)
+}
+
+/// The work of every helper: reads the file from `input` (at most [`MAX_IMAGE_BYTES`]), turns it into an answer with
+/// `convert` and writes the answer to `output` (see the module). Returns the exit code of the process, 0 when an answer
+/// was written, which a failed conversion is too.
+pub(in crate::view) fn serve(
+    input: impl Read,
+    mut output: impl Write,
+    convert: impl FnOnce(&[u8]) -> io::Result<Vec<u8>>,
+) -> i32 {
     let mut bytes = Vec::new();
     let read = input.take(MAX_IMAGE_BYTES + 1).read_to_end(&mut bytes);
 
@@ -133,7 +147,7 @@ fn status_of(error: &io::Error) -> u8 {
 }
 
 /// Writes the answer for `result`: the status byte and, for a picture, the buffer.
-pub(super) fn write_answer(output: &mut impl Write, result: &io::Result<Vec<u8>>) -> io::Result<()> {
+pub(in crate::view) fn write_answer(output: &mut impl Write, result: &io::Result<Vec<u8>>) -> io::Result<()> {
     match result {
         Ok(picture) => {
             output.write_all(&[STATUS_OK])?;
@@ -144,11 +158,19 @@ pub(super) fn write_answer(output: &mut impl Write, result: &io::Result<Vec<u8>>
     }
 }
 
+/// The result an answer read from `input` stands for, for a picture of any size [`check_size`] allows: [`read_picture`]
+/// with the side cap of the viewer (the tests read the answers of the HEIC helper with it).
+#[cfg(test)]
+pub(super) fn read_answer(input: impl Read) -> io::Result<Vec<u8>> {
+    read_picture(input, MAX_IMAGE_SIDE)
+}
+
 /// The result an answer read from `input` stands for. A picture is taken only when the header is a size [`check_size`]
-/// allows and the answer is exactly as long as it says; a failure status must stand alone; anything else is
+/// allows, no side of it is over `max_side` (a thumbnail is small, and nothing is reserved for a bigger one) and the
+/// answer is exactly as long as it says; a failure status must stand alone; anything else is
 /// undecodable. The buffer for the picture is reserved at its exact size (and one byte more, to tell a longer answer
 /// from an exact one) before the pixels are read, and what is returned is that buffer: the header and the pixels.
-pub(super) fn read_answer(mut input: impl Read) -> io::Result<Vec<u8>> {
+pub(in crate::view) fn read_picture(mut input: impl Read, max_side: u32) -> io::Result<Vec<u8>> {
     let mut status = [0_u8; 1];
     input.read_exact(&mut status).map_err(|_| undecodable())?;
 
@@ -173,6 +195,9 @@ pub(super) fn read_answer(mut input: impl Read) -> io::Result<Vec<u8>> {
     let width = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
     let height = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
     let (width, height) = check_size(i64::from(width), i64::from(height)).map_err(|_| undecodable())?;
+    if width > max_side || height > max_side {
+        return Err(undecodable());
+    }
 
     let pixels = u64::from(width) * u64::from(height) * 4;
     let total = usize::try_from(pixels)
@@ -214,6 +239,18 @@ pub(super) fn run(
     cancel: &AtomicBool,
     deadline: Duration,
 ) -> io::Result<Vec<u8>> {
+    run_within(program, args, bytes, cancel, deadline, MAX_IMAGE_SIDE)
+}
+
+/// [`run`] for a helper whose picture has no side over `max_side` (see [`read_picture`]).
+pub(in crate::view) fn run_within(
+    program: &Path,
+    args: &[&str],
+    bytes: Vec<u8>,
+    cancel: &AtomicBool,
+    deadline: Duration,
+    max_side: u32,
+) -> io::Result<Vec<u8>> {
     if cancel.load(Ordering::Relaxed) {
         return Err(cancelled());
     }
@@ -222,10 +259,10 @@ pub(super) fn run(
     super::sandbox::note_kernel();
 
     let mut child = command(program, args).spawn().map_err(|error| {
-        tracing::debug!(%error, "the heic helper did not start");
+        tracing::debug!(%error, "the helper did not start");
 
         // Not our text and not a kind the page maps to a message (a missing helper is not a missing file).
-        io::Error::other("the heic helper did not start")
+        io::Error::other("the helper did not start")
     })?;
 
     // The job is made before a byte is sent, so the helper has nothing to run that is not in it. It is kept until the
@@ -234,14 +271,14 @@ pub(super) fn run(
     let _job = match super::job::contain(&child) {
         Ok(job) => job,
         Err(error) => {
-            tracing::debug!(%error, "the heic helper cannot be contained");
+            tracing::debug!(%error, "the helper cannot be contained");
             process::stop(&mut child);
 
-            return Err(io::Error::other("the heic helper cannot be contained"));
+            return Err(io::Error::other("the helper cannot be contained"));
         }
     };
 
-    let answer = supervise(&mut child, bytes, cancel, deadline);
+    let answer = supervise(&mut child, bytes, cancel, deadline, max_side);
 
     // Whatever happened above, the child is stopped and reaped here; harmless for one that has ended.
     process::stop(&mut child);
@@ -251,7 +288,13 @@ pub(super) fn run(
 
 /// Feeds the child, collects its answer and stops the child (it is reaped by the caller). The answer is the result of
 /// the reading thread, taken only when the child has ended well too.
-fn supervise(child: &mut Child, bytes: Vec<u8>, cancel: &AtomicBool, deadline: Duration) -> io::Result<Vec<u8>> {
+fn supervise(
+    child: &mut Child,
+    bytes: Vec<u8>,
+    cancel: &AtomicBool,
+    deadline: Duration,
+    max_side: u32,
+) -> io::Result<Vec<u8>> {
     let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
         return Err(undecodable());
     };
@@ -259,15 +302,15 @@ fn supervise(child: &mut Child, bytes: Vec<u8>, cancel: &AtomicBool, deadline: D
     // The writer ends when everything is written (the pipe is closed with it) or when the child is gone. It is never
     // waited for: a child that does not read is killed, which ends the writer too.
     thread::Builder::new()
-        .name("heic-stdin".to_owned())
+        .name("helper-stdin".to_owned())
         .spawn(move || {
             let _ = stdin.write_all(&bytes);
         })
         .map_err(|_| undecodable())?;
 
     let reader = thread::Builder::new()
-        .name("heic-stdout".to_owned())
-        .spawn(move || read_answer(stdout))
+        .name("helper-stdout".to_owned())
+        .spawn(move || read_picture(stdout, max_side))
         .map_err(|_| undecodable())?;
 
     let waited = wait_for_answer(child, &reader, cancel, deadline);
@@ -295,7 +338,7 @@ fn wait_for_answer(
         Ok(status) if status.success() => Ok(()),
         Err(Wait::Cancelled) => Err(cancelled()),
         Err(Wait::Deadline) => {
-            tracing::debug!("the heic helper took too long");
+            tracing::debug!("the helper took too long");
 
             Err(undecodable())
         }

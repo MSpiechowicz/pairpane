@@ -1,10 +1,10 @@
 import { CompareMarks } from '$lib/compare/marks.svelte';
 import type { Entry } from '$lib/ipc/bindings/Entry';
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
-import type { PaneLayout } from '$lib/ipc/bindings/PaneLayout';
 import type { Transport } from '$lib/ipc/transport';
 
 import { archiveFile, above } from './archive';
+import type { Layout } from './layout';
 import { Listing } from './listing.svelte';
 import { type MaskMode, maskedFiles } from './mask';
 import { type SortColumn, viewOrder } from './order';
@@ -54,8 +54,8 @@ export class PaneView {
 
   readonly #selected = new Selection();
 
-  /** How the rows are drawn: one per line with its columns, or the names alone in several columns. A tab brings its own. */
-  layout = $state<PaneLayout>('detailed');
+  /** How the rows are drawn: one per line with its columns, the names alone in several columns, or tiles with thumbnails. A tab brings its own. */
+  layout = $state<Layout>('detailed');
 
   maskMode = $state<MaskMode | undefined>();
   maskText = $state('*');

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { type Snippet, untrack } from 'svelte';
 
-  import { revealed, span } from './scroll';
+  import { fits, reveal, span, windowOf } from './scroll';
 
   /**
    * A scrolling list of `count` fixed-height rows that renders only the rows in view (plus `overscan` above and
@@ -30,10 +30,9 @@
   let height = $state(0);
   let viewport = $state<HTMLElement>();
 
-  const first = $derived(Math.max(0, Math.floor(scrollTop / rowHeight) - overscan));
-  const last = $derived(Math.min(count, Math.ceil((scrollTop + height) / rowHeight) + overscan));
+  const shown = $derived(windowOf(scrollTop, height, rowHeight, overscan, count));
   $effect(() => {
-    pageSize = Math.max(1, Math.floor(height / rowHeight));
+    pageSize = fits(height, rowHeight);
   });
 
   // Scrolls when `active` changes, not when the user scrolls: only `active` is tracked.
@@ -45,17 +44,11 @@
     const top = active * rowHeight;
     const bottom = top + rowHeight;
     untrack(() => {
-      const view = viewport;
-      if (view === undefined || view.clientHeight === 0) {
-        return;
-      }
-
-      view.scrollTop = revealed(view.scrollTop, view.clientHeight, top, bottom);
-      scrollTop = view.scrollTop;
+      scrollTop = reveal(viewport, 'y', top, bottom) ?? scrollTop;
     });
   });
 
-  const indices = $derived(span(first, last));
+  const indices = $derived(span(shown.first, shown.last));
 </script>
 
 <div
@@ -66,7 +59,7 @@
   onscroll={(event) => (scrollTop = event.currentTarget.scrollTop)}
 >
   <div class="spacer" style:height="{count * rowHeight}px">
-    <div class="window" style:transform="translateY({first * rowHeight}px)">
+    <div class="window" style:transform="translateY({shown.first * rowHeight}px)">
       {#each indices as index (index)}
         {@render row(index)}
       {/each}

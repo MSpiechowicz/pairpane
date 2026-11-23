@@ -37,14 +37,15 @@ pub(super) mod libheif;
 pub(super) mod wic;
 
 mod items;
-mod process;
+// The thumbnail helper (`view::thumb`) is another child of the same kind and shares the process and its confinement.
+pub(super) mod process;
 
 #[cfg(windows)]
 mod job;
 #[cfg(target_os = "linux")]
 mod kernel;
 #[cfg(target_os = "linux")]
-mod sandbox;
+pub(super) mod sandbox;
 
 pub use process::child_main;
 
@@ -127,7 +128,7 @@ pub(super) fn decode_isolated(
 /// as the major brand or among the compatible ones. HEIF holds other codecs too (AVIF, JPEG, uncompressed) that the
 /// system's decoder would also take; only HEVC is what this is for. A box that is short, truncated, has a size of 0 or
 /// 1 (to the end of the file, a 64-bit size) or is not `ftyp` is refused; at most the first 1 KiB of the box is read.
-fn is_hevc_heif(bytes: &[u8]) -> bool {
+pub(super) fn is_hevc_heif(bytes: &[u8]) -> bool {
     const HEVC: [[u8; 4]; 6] = [*b"heic", *b"heix", *b"heim", *b"heis", *b"hevc", *b"hevx"];
     const MAX_BOX: usize = 1024;
 

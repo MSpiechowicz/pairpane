@@ -17,5 +17,16 @@ fn main() -> ExitCode {
         return ExitCode::from(u8::try_from(code).unwrap_or(1));
     }
 
+    // The same for the thumbnail helper (the next argument is the side of the thumbnail), which decodes a picture that
+    // is not to be trusted in a process of its own.
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == pairpane_core::view::thumb::CHILD_ARG)
+    {
+        let code = pairpane_core::view::thumb::child_main();
+
+        return ExitCode::from(u8::try_from(code).unwrap_or(1));
+    }
+
     pairpane_app_lib::run()
 }

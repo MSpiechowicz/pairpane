@@ -28,6 +28,7 @@ export const ACTIONS = [
   'flatView',
   'layoutBrief',
   'layoutDetailed',
+  'layoutThumbnails',
   'transfers',
   'view',
   'edit',
@@ -59,7 +60,7 @@ export interface Binding extends Chord {
  * Alt + a key, and a function key or Delete on its own or with Shift. F3 views the file, F4 edits it, F5 copies, F6
  * moves, Shift+F6 renames, F2 renames in place, Shift+F2 compares two files, F7 makes a folder, Shift+F4 a file, F8 and
  * Delete move to the Trash, Shift+F8 and Shift+Delete delete for good, Ctrl+B lists every file below the folder, Ctrl+F1
- * shows the pane in brief and Ctrl+F2 in detail. An action may have more than one key; the first is the one shown.
+ * shows the pane in brief, Ctrl+F2 in detail and Ctrl+Shift+F1 in thumbnails. An action may have more than one key; the first is the one shown.
  * These are the defaults: the user may set others (see `keymap`).
  */
 export const BINDINGS: readonly Binding[] = [
@@ -75,6 +76,7 @@ export const BINDINGS: readonly Binding[] = [
   { action: 'flatView', key: 'b', ctrl: true },
   { action: 'layoutBrief', key: 'F1', ctrl: true },
   { action: 'layoutDetailed', key: 'F2', ctrl: true },
+  { action: 'layoutThumbnails', key: 'F1', ctrl: true, shift: true },
   { action: 'back', key: 'ArrowLeft', alt: true },
   { action: 'forward', key: 'ArrowRight', alt: true },
   { action: 'driveMenuLeft', key: 'F1', alt: true },

@@ -9,6 +9,7 @@ use pretty_assertions::assert_eq;
 use super::process::{read_answer, run_child, write_answer};
 use super::{HEADER, MAX_IMAGE_BYTES, is_hevc_heif};
 use crate::view::is_refusal;
+use crate::view::testing::ftyp;
 
 /// A 16 by 8 picture of one colour, `#3080c0`, made by `heif-enc` from a PNG.
 const TINY: &[u8] = include_bytes!("../heic_testdata/tiny.heic");
@@ -27,21 +28,6 @@ fn answer(width: u32, height: u32, pixels: usize) -> Vec<u8> {
     bytes.extend_from_slice(&width.to_le_bytes());
     bytes.extend_from_slice(&height.to_le_bytes());
     bytes.resize(1 + HEADER + pixels, 7);
-
-    bytes
-}
-
-/// An `ftyp` box of the given brands (major, minor version 0, then the compatible ones).
-fn ftyp(major: &[u8; 4], compatible: &[&[u8; 4]]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(&u32::try_from(16 + 4 * compatible.len()).expect("small").to_be_bytes());
-    bytes.extend_from_slice(b"ftyp");
-    bytes.extend_from_slice(major);
-    bytes.extend_from_slice(&[0; 4]);
-    for brand in compatible {
-        bytes.extend_from_slice(*brand);
-    }
-    bytes.extend_from_slice(&[0; 40]);
 
     bytes
 }

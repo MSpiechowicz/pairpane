@@ -1,4 +1,5 @@
 //! The confinement of the helper process on Linux, done by the helper itself (the parent cannot do it before the exec).
+//! The thumbnail helper (`view::thumb`) takes the same three steps with a smaller address space and loads no codec first.
 //!
 //! Done in three steps (see [`child_main`](super::child_main)):
 //!
@@ -63,10 +64,15 @@ const MAX_FILES: u64 = 64;
 /// RGBA (256 MiB, up to 512 MiB in a block of the decoder) and the answer (256 MiB), and the decoder's threads reserve
 /// 64 MiB of arena each: well under 2 GiB. 3 GiB is that and room to spare; a library that wants a lot more than a
 /// picture of the cap needs is stopped (its allocation fails) instead of growing without end.
-const ADDRESS_SPACE: u64 = 3 * 1024 * 1024 * 1024;
+pub(in crate::view) const ADDRESS_SPACE: u64 = 3 * 1024 * 1024 * 1024;
+
+/// The address space of the thumbnail helper above what it has mapped when it starts: the input (64 MiB), the decoded
+/// picture (at most 256 MiB, see `view::thumb`) and what the decoder keeps beside it (never more than the 512 MiB its
+/// allocation limit allows), which is under 1 GiB; 1.5 GiB is that and room to spare.
+pub(in crate::view) const THUMBNAIL_ADDRESS_SPACE: u64 = 1536 * 1024 * 1024;
 
 /// Step 1 (see the module). Whatever cannot be closed stays open.
-pub(super) fn close_inherited_fds() {
+pub(in crate::view) fn close_inherited_fds() {
     kernel::close_inherited_fds();
 }
 
@@ -90,7 +96,7 @@ pub(in crate::view) fn note_kernel() {
 
 /// Step 2 (see the module). Fails when the process cannot be tied to its parent or cannot be limited; the helper then
 /// exits and the parent counts it as a file that cannot be decoded.
-pub(super) fn limit() -> io::Result<()> {
+pub(in crate::view) fn limit() -> io::Result<()> {
     let parent = getppid();
     set_parent_process_death_signal(Signal::KILL)?;
 
@@ -111,12 +117,12 @@ pub(super) fn limit() -> io::Result<()> {
     Ok(())
 }
 
-/// Step 3 (see the module). The address-space limit and Landlock are best effort (what the kernel cannot do is left
-/// undone); the seccomp filter is not: where this architecture has one and it cannot be installed, this fails and the
-/// helper exits without reading the picture.
-pub(super) fn confine() -> io::Result<()> {
+/// Step 3 (see the module), with the address space limited to `address_space` bytes above what is mapped now. The
+/// limit and Landlock are best effort (what the kernel cannot do is left undone); the seccomp filter is not: where
+/// this architecture has one and it cannot be installed, this fails and the helper exits without reading the picture.
+pub(in crate::view) fn confine(address_space: u64) -> io::Result<()> {
     if let Some(mapped) = mapped_bytes()
-        && let Err(error) = lower(Resource::As, mapped.saturating_add(ADDRESS_SPACE))
+        && let Err(error) = lower(Resource::As, mapped.saturating_add(address_space))
     {
         tracing::debug!(%error, "the address space of the helper is not limited");
     }
@@ -138,7 +144,7 @@ pub(super) fn confine() -> io::Result<()> {
 
 /// Fails unless the process has one thread: Landlock holds only the thread that sets it (the seccomp filter takes every
 /// thread), so a thread a plugin started before [`confine`] would be outside it. The helper calls this right before it.
-pub(super) fn single_threaded() -> io::Result<()> {
+pub(in crate::view) fn single_threaded() -> io::Result<()> {
     // Unreadable `/proc` cannot show it: that fails too.
     let threads = std::fs::read_dir("/proc/self/task")?.count();
     if threads != 1 {

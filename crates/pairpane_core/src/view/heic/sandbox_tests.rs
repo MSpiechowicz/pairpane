@@ -10,7 +10,7 @@ use std::process::Command;
 use rustix::process::{Resource, getrlimit};
 
 use super::kernel::{io_uring_setup_errno, refused_errnos};
-use super::sandbox::{confine, limit};
+use super::sandbox::{ADDRESS_SPACE, confine, limit};
 
 /// Set in the test program that plays the helper.
 const PROBE: &str = "PAIRPANE_SANDBOX_PROBE";
@@ -34,7 +34,7 @@ fn probe() -> String {
         .expect("status")
         .lines()
         .any(|line| line.starts_with("NoNewPrivs:") && line.ends_with('1'));
-    confine().expect("the helper confines itself");
+    confine(ADDRESS_SPACE).expect("the helper confines itself");
 
     let limits = [Resource::Core, Resource::Cpu, Resource::Nofile].map(|resource| getrlimit(resource).current);
     let space = getrlimit(Resource::As).current.expect("a limit on the address space");

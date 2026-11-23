@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { parseDecoded } from './decoded';
+import { drawDecoded, parseDecoded } from './decoded';
 
 /** A `view_image_decode` answer: the header, then `pixels` bytes. */
 function answer(width: number, height: number, pixels: number[]): ArrayBuffer {
@@ -43,5 +43,42 @@ describe('parseDecoded', () => {
 
   it('refuses an answer shorter than its header', () => {
     expect(() => parseDecoded(new ArrayBuffer(7))).toThrow();
+  });
+});
+
+describe('drawDecoded', () => {
+  /** A canvas whose 2D context records what is drawn; `context` is what it gives. */
+  function canvasWith(context: unknown) {
+    const canvas = document.createElement('canvas');
+    canvas.getContext = (() => context) as never;
+
+    return canvas;
+  }
+
+  it('puts the pixels of a crafted answer on the canvas, as one image of the picture`s size', () => {
+    const pixels = [255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0];
+    const decoded = parseDecoded(answer(3, 1, pixels));
+    const put = vi.fn<(image: { data: Uint8ClampedArray }, x: number, y: number) => void>();
+    const context = { createImageData: (w: number, h: number) => ({ data: new Uint8ClampedArray(w * h * 4) }), putImageData: put };
+
+    expect(drawDecoded(canvasWith(context), decoded)).toBe('drawn');
+
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(Array.from(put.mock.calls[0][0].data)).toEqual(pixels);
+    expect(put.mock.calls[0].slice(1)).toEqual([0, 0]);
+  });
+
+  it('says so when there is no 2D context', () => {
+    expect(drawDecoded(canvasWith(null), parseDecoded(answer(1, 1, [1, 2, 3, 4])))).toBe('no-context');
+  });
+
+  it('says so when the webview refuses a picture this big', () => {
+    const context = {
+      createImageData: () => {
+        throw new Error('out of memory');
+      },
+    };
+
+    expect(drawDecoded(canvasWith(context), parseDecoded(answer(1, 1, [1, 2, 3, 4])))).toBe('too-big');
   });
 });

@@ -26,3 +26,24 @@ export function parseDecoded(buffer: ArrayBuffer): Decoded {
 
   return { width, height, pixels: new Uint8ClampedArray(buffer, HEADER) };
 }
+
+/** How a drawing went: the picture is on the canvas, or there is no 2D context, or the webview refused a picture this big. */
+export type Drawn = 'drawn' | 'no-context' | 'too-big';
+
+/** Draws `decoded` on `canvas`, which is as large as the picture. */
+export function drawDecoded(canvas: HTMLCanvasElement, decoded: Decoded): Drawn {
+  const context = canvas.getContext('2d');
+  if (context === null) {
+    return 'no-context';
+  }
+
+  try {
+    const image = context.createImageData(decoded.width, decoded.height);
+    image.data.set(decoded.pixels);
+    context.putImageData(image, 0, 0);
+  } catch {
+    return 'too-big';
+  }
+
+  return 'drawn';
+}

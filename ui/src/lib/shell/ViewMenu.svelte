@@ -1,16 +1,17 @@
 <script lang="ts">
-  import type { PaneLayout } from '$lib/ipc/bindings/PaneLayout';
+  import type { Layout } from '$lib/panes/layout';
   import { keysFor } from '$lib/palette/commands';
 
   import type { Action } from './shortcuts';
 
   /** The menu's items: how the active pane shows its folder; the key shown next to an item does the same without the menu. */
-  const ITEMS: readonly { layout: PaneLayout; action: Action; label: string }[] = [
+  const ITEMS: readonly { layout: Layout; action: Action; label: string }[] = [
     { layout: 'detailed', action: 'layoutDetailed', label: 'Detailed' },
     { layout: 'brief', action: 'layoutBrief', label: 'Brief' },
+    { layout: 'thumbnails', action: 'layoutThumbnails', label: 'Thumbnails' },
   ];
 
-  let { layout, onChoose }: { layout: PaneLayout; onChoose: (layout: PaneLayout) => void } = $props();
+  let { layout, onChoose }: { layout: Layout; onChoose: (layout: Layout) => void } = $props();
 </script>
 
 <div class="popup" role="menu" aria-label="View">

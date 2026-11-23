@@ -17,6 +17,9 @@
 //!   Imaging Component on Windows) and never by a codec of the app; it fails with `Unsupported` when there is none. The
 //!   decoding runs in a short-lived child process (the app itself, started with [`HEIC_CHILD_ARG`] and handed to
 //!   [`heic_child_main`]), so a crash of a system codec on a hostile file cannot take the app down.
+//! - [`thumb`]: a small preview of a PNG, JPEG, GIF, WebP, BMP or HEIC file as RGBA pixels, made by a sandboxed helper
+//!   process (the app itself, started with [`thumb::CHILD_ARG`]) so that no untrusted picture is ever decoded in the app's
+//!   own process; HEIC goes through the HEIC helper above and is shrunk in the parent.
 //! - [`range`]: the pure parsing of a `Range: bytes=` header for the media scheme.
 //!
 //! # Rules
@@ -41,6 +44,7 @@ pub mod range;
 mod search;
 mod sniff;
 mod text;
+pub mod thumb;
 
 #[cfg(test)]
 mod archive_limit_tests;

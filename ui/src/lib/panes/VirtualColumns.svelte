@@ -1,7 +1,7 @@
 <script lang="ts">
   import { type Snippet, untrack } from 'svelte';
 
-  import { revealed, span } from './scroll';
+  import { fits, reveal, span, windowOf } from './scroll';
 
   /**
    * The same list as {@link VirtualRows}, laid out in columns: item 0 is at the top of the first column and the items
@@ -37,15 +37,15 @@
   let height = $state(0);
   let viewport = $state<HTMLElement>();
 
-  const rows = $derived(Math.max(1, Math.floor(height / rowHeight)));
-  const columnWidth = $derived(width > 0 ? width / Math.max(1, Math.floor(width / minColumnWidth)) : minColumnWidth);
+  const rows = $derived(fits(height, rowHeight));
+  const columnWidth = $derived(width > 0 ? width / fits(width, minColumnWidth) : minColumnWidth);
   // Not laid out yet (no height, or under one row): no columns, rather than one per item, whose spacer would be
   // millions of pixels wide.
   const columns = $derived(height < rowHeight ? 0 : Math.ceil(count / rows));
-  const firstColumn = $derived(Math.max(0, Math.floor(scrollLeft / columnWidth) - overscan));
-  const lastColumn = $derived(Math.min(columns, Math.ceil((scrollLeft + width) / columnWidth) + overscan));
+  const shown = $derived(windowOf(scrollLeft, width, columnWidth, overscan, columns));
+  const firstColumn = $derived(shown.first);
   const first = $derived(firstColumn * rows);
-  const last = $derived(Math.min(count, lastColumn * rows));
+  const last = $derived(Math.min(count, shown.last * rows));
   $effect(() => {
     pageSize = rows;
   });
@@ -59,13 +59,7 @@
     const left = Math.floor(active / rows) * columnWidth;
     const right = left + columnWidth;
     untrack(() => {
-      const view = viewport;
-      if (view === undefined || view.clientWidth === 0) {
-        return;
-      }
-
-      view.scrollLeft = revealed(view.scrollLeft, view.clientWidth, left, right);
-      scrollLeft = view.scrollLeft;
+      scrollLeft = reveal(viewport, 'x', left, right) ?? scrollLeft;
     });
   });
 

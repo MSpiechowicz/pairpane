@@ -127,6 +127,7 @@ export const commands = {
   diff_next_difference: cmd<{ left: number; right: number; from: number; forward: boolean }, ByteDifference>(),
   view_bytes: cmd<{ session: number; offset: number; length: number }, ArrayBuffer>(),
   view_image_decode: cmd<{ session: number }, ArrayBuffer>(),
+  thumb_get: cmd<{ path: string; name: string; size: number }, ArrayBuffer>(),
   view_text: cmd<{ session: number; query: TextQuery }, TextWindow>(),
   view_search: cmd<{ session: number; query: SearchQuery; onProgress: EventSink<number> }, SearchHit | null>(),
   view_search_cancel: cmd<{ session: number }, null>(),

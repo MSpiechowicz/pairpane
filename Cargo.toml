@@ -95,6 +95,11 @@ pulldown-cmark = { version = "0.13.6", default-features = false }
 tar = { version = "0.4.46", default-features = false }
 flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }
 memchr = "2.8.3"
+# Thumbnails (pairpane_core::view::thumb): the pure Rust decoders of the formats the web knows, run only in the sandboxed
+# helper process that answers a thumbnail, never in the app's own process (the picture is untrusted), and the box
+# filter that shrinks a picture. No default features: no threads (`rayon`), no other format (AVIF, TIFF, EXR and the
+# rest are never decoded), and the decoders are `png`, `zune-jpeg`, `gif` and `image-webp`.
+image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
 # Random bytes from the system's generator, a safe API that returns an error instead of panicking: the tokens of the
 # viewer's media scheme (pairpane-media, src-tauri/src/commands/view; 128 bits, so a page cannot guess one) and the salts
 # and initialisation vectors of an encrypted archive that is written (pairpane_core::archive::write). Already in the

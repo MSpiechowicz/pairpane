@@ -59,6 +59,7 @@
     "allow-view-archive",
     "allow-view-image-decode",
     "allow-view-media",
+    "allow-thumb-get",
     "allow-edit-open",
     "allow-edit-save",
     "allow-edit-external",

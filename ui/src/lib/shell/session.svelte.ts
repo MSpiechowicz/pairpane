@@ -6,6 +6,7 @@ import type { SavedState } from '$lib/ipc/bindings/SavedState';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
 import type { SavedSearches } from '$lib/find/saved.svelte';
 import type { Hotlist } from '$lib/panes/hotlist.svelte';
+import { savedLayout } from '$lib/panes/layout';
 import type { PaneTabs } from '$lib/panes/tabs.svelte';
 import type { SavedRenames } from '$lib/rename/saved.svelte';
 
@@ -162,7 +163,7 @@ export class Session {
       }
 
       // The detailed layout is the one a tab has when none is saved.
-      saved.push({ path, sort: sort.column, desc: sort.desc, ...(layout === 'detailed' ? {} : { layout }) });
+      saved.push({ path, sort: sort.column, desc: sort.desc, ...(layout === 'detailed' ? {} : { layout: savedLayout(layout) }) });
     }
 
     return { tabs: saved, active: tabs.active };

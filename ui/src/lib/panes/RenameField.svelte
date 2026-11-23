@@ -47,16 +47,16 @@
 />
 
 <style>
-  /* Spans the name and extension columns (just the name when the extension is not shown: see Pane). */
+  /* Spans the name and extension columns (just the name when the extension is not shown: see Pane); the only column of a tile. */
   input {
-    grid-column: 2 / var(--rename-end, 4);
+    grid-column: var(--rename-start, 2) / var(--rename-end, 4);
     min-width: 0;
     user-select: text;
   }
 
   @media (max-width: 760px) {
     input {
-      grid-column: 2;
+      grid-column: var(--rename-start, 2);
     }
   }
 </style>

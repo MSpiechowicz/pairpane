@@ -68,3 +68,19 @@ pub(crate) fn fifo(folder: &Path, name: &str) {
         .expect("mkfifo runs");
     assert!(status.success());
 }
+
+/// An `ftyp` box (the start of a HEIF file) with the major brand `major`, minor version 0 and the compatible brands
+/// `compatible`, followed by zeroes.
+pub(super) fn ftyp(major: &[u8; 4], compatible: &[&[u8; 4]]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&u32::try_from(16 + 4 * compatible.len()).expect("small").to_be_bytes());
+    bytes.extend_from_slice(b"ftyp");
+    bytes.extend_from_slice(major);
+    bytes.extend_from_slice(&[0; 4]);
+    for brand in compatible {
+        bytes.extend_from_slice(*brand);
+    }
+    bytes.extend_from_slice(&[0; 40]);
+
+    bytes
+}

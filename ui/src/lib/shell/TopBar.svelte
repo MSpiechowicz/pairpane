@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
 
-  import type { PaneLayout } from '$lib/ipc/bindings/PaneLayout';
   import { displayName } from '$lib/panes/format';
+  import type { Layout } from '$lib/panes/layout';
 
   import FilesMenu from './FilesMenu.svelte';
   import type { FilesChoice } from './menu';
@@ -36,9 +36,9 @@
     /** Whether the panes list hidden files. */
     showHidden: boolean;
     /** How the active pane shows its folder. */
-    layout: PaneLayout;
+    layout: Layout;
     /** An item of the View menu was chosen; it does what its key does. */
-    onLayout: (layout: PaneLayout) => void;
+    onLayout: (layout: Layout) => void;
     onCheckForUpdates: () => void;
     /** "Settings…": the settings dialog (the palette opens it too). */
     onSettings: () => void;
@@ -83,7 +83,7 @@
     onFiles(action);
   }
 
-  function chooseLayout(choice: PaneLayout) {
+  function chooseLayout(choice: Layout) {
     open = undefined;
     onLayout(choice);
   }
