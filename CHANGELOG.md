@@ -1,3 +1,10 @@
+# [0.32.0](https://github.com/MSpiechowicz/pairpane/compare/v0.31.0...v0.32.0) (2026-11-23)
+
+
+### Features
+
+* **view:** dimensions and checksum columns (#65) ([6addaac](https://github.com/MSpiechowicz/pairpane/commit/6addaac946b81a2069f1b3b4e2d8022c13be1087))
+
 # [0.31.0](https://github.com/MSpiechowicz/pairpane/compare/v0.30.0...v0.31.0) (2026-11-23)
 
 

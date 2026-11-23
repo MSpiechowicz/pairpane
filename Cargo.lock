@@ -3317,7 +3317,7 @@ dependencies = [
 
 [[package]]
 name = "pairpane_app"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "getrandom 0.4.3",
  "image",
@@ -3339,7 +3339,7 @@ dependencies = [
 
 [[package]]
 name = "pairpane_core"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "aes",
  "base64 0.23.1",
