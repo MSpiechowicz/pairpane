@@ -68,3 +68,54 @@ pub(crate) fn fifo(folder: &Path, name: &str) {
         .expect("mkfifo runs");
     assert!(status.success());
 }
+
+/// An `ftyp` box (the start of a HEIF file) with the major brand `major`, minor version 0 and the compatible brands
+/// `compatible`, followed by zeroes.
+pub(super) fn ftyp(major: &[u8; 4], compatible: &[&[u8; 4]]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&u32::try_from(16 + 4 * compatible.len()).expect("small").to_be_bytes());
+    bytes.extend_from_slice(b"ftyp");
+    bytes.extend_from_slice(major);
+    bytes.extend_from_slice(&[0; 4]);
+    for brand in compatible {
+        bytes.extend_from_slice(*brand);
+    }
+    bytes.extend_from_slice(&[0; 40]);
+
+    bytes
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// What a probe, the test program started again to confine itself and report (see [`run_probe`]), said and how it ended.
+pub(crate) struct Probe {
+    /// Whether the process ended with success.
+    pub(crate) success: bool,
+    /// What it wrote to its standard output and to its standard error, for the message of a failed assertion.
+    pub(crate) output: String,
+    /// The one line it reported after `PROBE `, or nothing.
+    pub(crate) report: String,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// Starts this test program again to run the single test `test` as a probe: with the environment variable `variable`
+/// set, the test is to confine its process and print one line that starts with `PROBE `. (Confining the process of the
+/// test itself would confine the other tests with it.)
+pub(crate) fn run_probe(variable: &str, test: &str) -> Probe {
+    let output = std::process::Command::new(std::env::current_exe().expect("the test program"))
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(variable, "1")
+        .output()
+        .expect("the probe starts");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    // The report follows the name of the test on its line.
+    let report = stdout
+        .lines()
+        .find_map(|line| line.split_once("PROBE "))
+        .map_or(String::new(), |(_, report)| report.to_owned());
+
+    Probe {
+        success: output.status.success(),
+        output: format!("{stdout} {}", String::from_utf8_lossy(&output.stderr)),
+        report,
+    }
+}

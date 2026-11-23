@@ -245,7 +245,7 @@ fn open_terminal(shells: &Shells, folder: &Path, place: Permit, ask: impl FnOnce
         command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     }
 
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = pairpane_core::process::spawn(&mut command).map_err(|error| {
         tracing::warn!(%error, "cannot start the terminal");
 
         CommandError::new(IpcErrorCode::Process, "the terminal could not be started")

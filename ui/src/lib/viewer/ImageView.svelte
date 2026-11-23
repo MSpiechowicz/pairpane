@@ -4,7 +4,7 @@
 
   import { retryBusy } from './busy';
   import { IMAGE_CAP, readWhole, TooBig } from './bytes';
-  import { type Decoded, parseDecoded } from './decoded';
+  import { type Decoded, drawDecoded, parseDecoded } from './decoded';
   import type { PreviewProps } from './previews';
   import ViewNotice from './ViewNotice.svelte';
 
@@ -135,18 +135,11 @@
       return;
     }
 
-    const context = canvas.getContext('2d');
-    if (context === null) {
+    const drawn = drawDecoded(canvas, decoded);
+    if (drawn === 'no-context') {
       error = 'This image cannot be shown here';
-      return;
-    }
-
-    // A very big picture can be refused by the webview (out of memory): say so instead of failing silently.
-    try {
-      const image = context.createImageData(decoded.width, decoded.height);
-      image.data.set(decoded.pixels);
-      context.putImageData(image, 0, 0);
-    } catch {
+    } else if (drawn === 'too-big') {
+      // A very big picture can be refused by the webview (out of memory): say so instead of failing silently.
       decoded = undefined;
       error = 'This image is too big to show here';
     }

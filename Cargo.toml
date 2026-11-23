@@ -72,10 +72,11 @@ same-file = "1.0.6"
 # `same-file` already locks.
 winapi-util = "0.1.11"
 # Windows only: setting the hidden, system and archive attributes through a handle (`SetFileInformationByHandle`, an
-# `unsafe` block in pairpane_core::ops::win_attrs) and the Job Object that holds the HEIC helper process
-# (pairpane_core::view::heic::job). Only the features those calls need; already in the lockfile through other
-# dependencies.
-windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading"] }
+# `unsafe` block in pairpane_core::ops::win_attrs), the Job Object that holds the HEIC helper process
+# (pairpane_core::view::heic::job) and the AppContainer the thumbnail helper runs in (pairpane_core::view::thumb::
+# appcontainer: the container's profile and SID, the access list entry for it on the executable, `CreateProcessW` with an
+# attribute list and the pipes). Only the features those calls need; already in the lockfile through other dependencies.
+windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Isolation", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading"] }
 # Move to the Trash or Recycle Bin and put back (pairpane_core::ops::trash): the shell's IFileOperation on Windows,
 # Finder on macOS (which has no list or restore here, so no undo). A safe API. Not built on Linux and the BSDs, which
 # do the freedesktop Trash themselves (the crate follows links, copies across disks and panics on odd mount names).
@@ -95,6 +96,11 @@ pulldown-cmark = { version = "0.13.6", default-features = false }
 tar = { version = "0.4.46", default-features = false }
 flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }
 memchr = "2.8.3"
+# Thumbnails (pairpane_core::view::thumb): the pure Rust decoders of the formats the web knows, run only in the sandboxed
+# helper process that answers a thumbnail, never in the app's own process (the picture is untrusted), and the box
+# filter that shrinks a picture. No default features: no threads (`rayon`), no other format (AVIF, TIFF, EXR and the
+# rest are never decoded), and the decoders are `png`, `zune-jpeg`, `gif` and `image-webp`.
+image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
 # Random bytes from the system's generator, a safe API that returns an error instead of panicking: the tokens of the
 # viewer's media scheme (pairpane-media, src-tauri/src/commands/view; 128 bits, so a page cannot guess one) and the salts
 # and initialisation vectors of an encrypted archive that is written (pairpane_core::archive::write). Already in the
@@ -113,8 +119,9 @@ windows = { version = "0.62.2", default-features = false, features = ["std", "Wi
 # (`libc`, `enumflags2`, `thiserror`) are in the lockfile already. `rustix` (above) sets the other limits.
 landlock = "0.4.8"
 # The same helper's seccomp filter, the descriptors it closes at its start and the probe of Landlock's version are raw
-# system calls (pairpane_core::view::heic::kernel, Linux only, `unsafe` with a `SAFETY` comment on every block). The
-# version the lockfile has already through `landlock` (one copy, not two).
+# system calls (pairpane_core::view::heic::kernel, Linux only, `unsafe` with a `SAFETY` comment on every block); on macOS
+# the thumbnail helper closes its descriptors with it (pairpane_core::view::thumb::macos). The version the lockfile has
+# already through `landlock` (one copy, not two).
 libc = "0.2.191"
 # Archives (pairpane_core::archive), all safe APIs, none of them reading a file by itself: the archive code hands each
 # decoder a bounded reader, and bytes that come from an archive are decoded by pure Rust only. `bzip2` (the libbz2-rs-sys

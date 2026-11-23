@@ -138,10 +138,13 @@ describe('shortcutFor', () => {
     }
   });
 
-  it('Ctrl+F1 shows the pane in brief and Ctrl+F2 in detail; the plain, Shift and Alt keys are the others', () => {
+  it('Ctrl+F1 shows the pane in brief, Ctrl+F2 in detail and Ctrl+Shift+F1 in thumbnails; the plain, Shift and Alt keys are the others', () => {
     expect(press('F1', { ctrlKey: true })).toBe('layoutBrief');
     expect(press('F2', { ctrlKey: true })).toBe('layoutDetailed');
-    expect(press('F1', { ctrlKey: true, shiftKey: true })).toBeUndefined();
+    expect(press('F1', { ctrlKey: true, shiftKey: true })).toBe('layoutThumbnails');
+    expect(press('F2', { ctrlKey: true, shiftKey: true })).toBeUndefined();
+    expect(refusalOf({ key: 'F1', ctrl: true, shift: true })).toBeUndefined();
+    expect(keysOf('layoutThumbnails')).toBe('Ctrl+Shift+F1');
     expect(press('F1', { altKey: true })).toBe('driveMenuLeft');
     expect(press('F2')).toBe('renameInline');
     expect(refusalOf({ key: 'F1', ctrl: true })).toBeUndefined();

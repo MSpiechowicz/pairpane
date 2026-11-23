@@ -63,6 +63,7 @@ const COMMANDS: &[&str] = &[
     "view_archive",
     "view_image_decode",
     "view_media",
+    "thumb_get",
     "edit_open",
     "edit_save",
     "edit_external",

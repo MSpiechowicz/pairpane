@@ -344,18 +344,18 @@ impl Launcher {
         }
 
         let (program, args) = settings::argv(editor, file);
-        let mut child = Command::new(program)
+        let mut command = Command::new(program);
+        command
             .args(args)
             .current_dir(start_folder())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| {
-                tracing::warn!(%error, "cannot start the external editor");
+            .stderr(Stdio::null());
+        let mut child = pairpane_core::process::spawn(&mut command).map_err(|error| {
+            tracing::warn!(%error, "cannot start the external editor");
 
-                pairpane_core::view::refusal(io::ErrorKind::Other, "the external editor could not be started")
-            })?;
+            pairpane_core::view::refusal(io::ErrorKind::Other, "the external editor could not be started")
+        })?;
 
         let waiter = std::thread::Builder::new()
             .name("pairpane-editor-wait".to_owned())

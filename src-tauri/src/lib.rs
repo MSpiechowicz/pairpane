@@ -50,6 +50,7 @@ pub fn run() -> ExitCode {
             app.manage(commands::items::Items::default());
             app.manage(commands::renames::Renames::default());
             app.manage(commands::view::Viewer::default());
+            app.manage(commands::thumbs::Thumbs::default());
             app.manage(commands::archives::Archives::default());
             app.manage(commands::find::Finder::default());
             app.manage(commands::compare::Comparer::default());
@@ -141,6 +142,7 @@ pub fn run() -> ExitCode {
             commands::view::search::view_search_cancel,
             commands::view::diff::diff_next_difference,
             commands::view::media::view_media,
+            commands::thumbs::thumb_get,
             commands::edit::edit_open,
             commands::edit::edit_save,
             commands::edit::edit_external,
@@ -176,6 +178,10 @@ pub fn run() -> ExitCode {
                     }
                     if let Some(ops) = app.try_state::<commands::ops::Ops>() {
                         ops.shutdown();
+                    }
+                    // A thumbnail that is being made stops its helper process, and none starts after this.
+                    if let Some(thumbs) = app.try_state::<commands::thumbs::Thumbs>() {
+                        thumbs.shut_down();
                     }
                     // A HEIC decode that runs stops its helper process when its session ends.
                     if let Some(viewer) = app.try_state::<commands::view::Viewer>() {

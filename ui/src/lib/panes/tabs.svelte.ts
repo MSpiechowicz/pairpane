@@ -1,9 +1,10 @@
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
-import type { PaneLayout } from '$lib/ipc/bindings/PaneLayout';
 import type { SavedTab } from '$lib/ipc/bindings/SavedTab';
 import type { Transport } from '$lib/ipc/transport';
 
+import type { Layout } from './layout';
 import type { SortColumn } from './order';
+import { Thumbs } from './thumbs.svelte';
 import { PaneView, type ViewHooks } from './view.svelte';
 
 /** Tabs per pane. */
@@ -21,7 +22,7 @@ export interface Tab {
   /** Where the tab was last left; `null`: the home folder. For the active tab the live folder is `view.listing.folder`. */
   path: string | null;
   sort: TabSort;
-  layout: PaneLayout;
+  layout: Layout;
   back: string[];
   forward: string[];
 }
@@ -30,7 +31,7 @@ export interface Tab {
 export interface TabState {
   path: string | null;
   sort: TabSort;
-  layout: PaneLayout;
+  layout: Layout;
 }
 
 /** How the pane got to the folder that is being opened, so that only real navigation is added to the history. */
@@ -44,6 +45,8 @@ type Move = 'back' | 'forward' | 'switch';
  */
 export class PaneTabs {
   readonly view: PaneView;
+  /** The thumbnails the pane shows in its thumbnails layout; they outlive a change of folder or tab (a tab brings its folder back). */
+  readonly thumbs: Thumbs;
 
   /** Plain array (not proxied); readers track `#revision`, bumped on every change. */
   #tabs: Tab[];
@@ -66,6 +69,7 @@ export class PaneTabs {
   #homing = false;
 
   constructor(ipc: Transport, pane: PaneId, hooks: Pick<ViewHooks, 'onFail' | 'showHidden'> = {}) {
+    this.thumbs = new Thumbs(ipc);
     this.view = new PaneView(ipc, pane, {
       onOpen: () => {
         this.#pending = undefined;
@@ -86,7 +90,7 @@ export class PaneTabs {
     this.#tabs = [this.#create(null, { column: 'name', desc: false }, 'detailed')];
   }
 
-  #create(path: string | null, sort: TabSort, layout: PaneLayout): Tab {
+  #create(path: string | null, sort: TabSort, layout: Layout): Tab {
     return { id: this.#nextId++, path, sort, layout, back: [], forward: [] };
   }
 

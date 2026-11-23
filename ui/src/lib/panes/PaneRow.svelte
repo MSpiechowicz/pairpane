@@ -2,6 +2,7 @@
   import { type Mark, MARK_TEXT } from '$lib/compare/quick';
   import type { Entry } from '$lib/ipc/bindings/Entry';
   import { preferences } from '$lib/shell/preferences.svelte';
+  import { type Decoded, drawDecoded } from '$lib/viewer/decoded';
 
   import { displayName, formatDate, iconClass, splitName } from './format';
   import type { InlineRename } from './inlineRename.svelte';
@@ -18,6 +19,8 @@
     edit,
     mark,
     brief = false,
+    tile = false,
+    thumb,
   }: {
     id: string;
     /** The row number, for the list that handles the mouse for all its rows. */
@@ -35,23 +38,29 @@
     mark?: Mark;
     /** The brief layout: the icon and the name alone, the extension written after the name, no other column. */
     brief?: boolean;
+    /** The thumbnails layout: a tile with the picture (or the icon) above the name, no other column. */
+    tile?: boolean;
+    /** The thumbnail to show in a tile in place of the icon. */
+    thumb?: Decoded;
   } = $props();
 
   const parts = $derived(entry ? splitName(entry) : undefined);
-  /** The columns the row has besides the name; the brief layout has none. */
+  /** The brief layout and the tiles show nothing but the name (and its picture). */
+  const plain = $derived(brief || tile);
+  /** The columns the row has besides the name; the brief and thumbnails layouts have none. */
   const columns = $derived({
-    ext: !brief && preferences.value.showExt,
-    size: !brief && preferences.value.showSize,
-    modified: !brief && preferences.value.showModified,
+    ext: !plain && preferences.value.showExt,
+    size: !plain && preferences.value.showSize,
+    modified: !plain && preferences.value.showModified,
   });
 
-  /** The tooltip of a name: where a link points; in the brief layout the whole name, which its column may cut short. */
+  /** The tooltip of a name: where a link points; in the brief and thumbnails layouts the whole name, which may be cut short. */
   function tip(of: Entry): string | undefined {
     if (of.linkTarget) {
       return displayName(`${of.name} → ${of.linkTarget}`);
     }
 
-    return brief ? displayName(of.name) : undefined;
+    return plain ? displayName(of.name) : undefined;
   }
 </script>
 
@@ -59,6 +68,7 @@
   {id}
   class="row {mark ? `mark-${mark}` : ''}"
   class:brief
+  class:tile
   class:cursor
   class:selected
   class:d={entry?.kind === 'dir'}
@@ -75,7 +85,19 @@
   {#if up}
     <span class="ic up">↰</span><span class="nm">..</span>
   {:else if entry && parts}
-    <span class="ic {iconClass(entry)}"></span>
+    {#if tile && thumb}
+      {@const picture = thumb}
+      <!-- The name is under the picture, which only repeats it. -->
+      <canvas
+        class="pic"
+        width={picture.width}
+        height={picture.height}
+        aria-hidden="true"
+        {@attach (canvas) => void drawDecoded(canvas, picture)}
+      ></canvas>
+    {:else}
+      <span class="ic {iconClass(entry)}"></span>
+    {/if}
     {#if edit}
       <RenameField rename={edit} />
     {:else}
@@ -117,6 +139,54 @@
   .row.brief {
     --rename-end: 3;
     grid-template-columns: 20px minmax(0, 1fr);
+  }
+
+  /* The picture or icon above the name, both centered; the name is cut to two lines. */
+  .row.tile {
+    --rename-start: 1;
+    --rename-end: 2;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 128px auto;
+    align-content: start;
+    justify-items: center;
+    gap: 4px;
+    height: auto;
+    padding: 2px;
+    border: 2px solid transparent;
+    border-radius: 6px;
+  }
+
+  .row.tile.cursor {
+    border-color: var(--cursor-line);
+  }
+
+  /* The icons are drawn for a line of text: they are scaled up to fill the picture's place. */
+  .row.tile .ic {
+    align-self: center;
+    transform: scale(3.5);
+  }
+
+  .row.tile .ic.up {
+    transform: scale(4);
+  }
+
+  /* The picture is as large as the backend made it (it fits its size, perhaps a bucket above the one asked): it is scaled into the tile. */
+  .pic {
+    align-self: center;
+    object-fit: contain;
+    max-width: 100%;
+    max-height: 128px;
+  }
+
+  .row.tile .nm {
+    display: -webkit-box;
+    max-width: 100%;
+    line-clamp: 2;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: center;
   }
 
   .row:hover {

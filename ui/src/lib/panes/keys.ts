@@ -41,15 +41,38 @@ function onPrintable(view: PaneView, key: string) {
   }
 }
 
-/** `pageSize` is the rows the list shows at once: in the brief layout, the items of a column. */
-function onNamed(view: PaneView, key: string, pageSize: number): boolean {
+/**
+ * The cursor one tile row up or down. It stays where it is when there is no row that way; moving down into a last row
+ * that is not full puts it on the last tile.
+ */
+function moveByRow(view: PaneView, direction: -1 | 1, perRow: number) {
+  const row = Math.floor(view.cursor / perRow) + direction;
+  if (row < 0 || row > Math.floor((view.count - 1) / perRow)) {
+    return;
+  }
+
+  view.moveCursor(direction * perRow);
+}
+
+/**
+ * `pageSize` is the items the list shows at once: the rows in the detailed layout, the items of a column in the brief
+ * one, the tiles in view in the thumbnails one, whose rows hold `perRow` tiles.
+ */
+function onNamed(view: PaneView, key: string, pageSize: number, perRow: number): boolean {
+  const tiles = view.layout === 'thumbnails';
+
   switch (key) {
     case 'ArrowUp':
-      view.moveCursor(-1);
+    case 'ArrowDown': {
+      const direction = key === 'ArrowUp' ? -1 : 1;
+      if (tiles) {
+        moveByRow(view, direction, Math.max(1, perRow));
+      } else {
+        view.moveCursor(direction);
+      }
+
       return true;
-    case 'ArrowDown':
-      view.moveCursor(1);
-      return true;
+    }
     case 'PageUp':
       view.moveCursor(-Math.max(1, pageSize));
       return true;
@@ -58,8 +81,13 @@ function onNamed(view: PaneView, key: string, pageSize: number): boolean {
       return true;
     case 'ArrowLeft':
     case 'ArrowRight': {
-      // The brief layout runs its items down columns: a column to the side is a column's worth of items away. In the
-      // detailed layout the keys are not the pane's.
+      // The tiles run along rows: one to the side is the next item. The brief layout runs its items down columns: a
+      // column to the side is a column's worth of items away. In the detailed layout the keys are not the pane's.
+      if (tiles) {
+        view.moveCursor(key === 'ArrowLeft' ? -1 : 1);
+        return true;
+      }
+
       if (view.layout !== 'brief') {
         return false;
       }
@@ -107,13 +135,15 @@ function onNamed(view: PaneView, key: string, pageSize: number): boolean {
 
 /**
  * Runs a key press on the pane's list; `true` when it was a pane key (the caller then prevents the default).
- * Keys typed into something else (the mask prompt), composition and Tab (it switches panes) are not ours.
+ * Keys typed into something else (the mask prompt), composition and Tab (it switches panes) are not ours. `perRow`
+ * is the tiles in a row of the thumbnails layout.
  */
 export function handleKey(
   view: PaneView,
   event: KeyboardEvent,
   pageSize: number,
   mac: boolean = isMacPlatform(),
+  perRow = 1,
 ): boolean {
   if (event.isComposing || event.key === 'Tab' || event.target !== event.currentTarget) {
     return false;
@@ -133,5 +163,5 @@ export function handleKey(
     return false;
   }
 
-  return onNamed(view, event.key, pageSize);
+  return onNamed(view, event.key, pageSize, perRow);
 }

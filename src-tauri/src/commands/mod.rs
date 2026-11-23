@@ -14,6 +14,7 @@ pub mod renames;
 pub mod shell;
 pub mod sizes;
 pub mod state;
+pub mod thumbs;
 pub mod updates;
 pub mod view;
 pub mod volumes;

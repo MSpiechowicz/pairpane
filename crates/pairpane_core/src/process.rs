@@ -77,6 +77,64 @@ where
     command
 }
 
+/// Held while a process is started, on Windows: a handle that is inheritable while it is made (the pipes of the thumbnail
+/// helper in its container, see `view::thumb::appcontainer`) is inherited by any process that is started at the same time
+/// by the standard library, which inherits every handle that is inheritable. So every start of a process by this app's own
+/// code goes through [`spawn`] (the HEIC helper, `unrar`, the command line, the external editor, the terminal), and none
+/// runs while that helper's pipes are made inheritable. What is outside the lock: Tauri's restart (`app_relaunch`), the
+/// `ShellExecute` calls of the opener and the updater, and WebView2's own processes. They can start a process in the few
+/// microseconds the pipes are inheritable and inherit them; the helper's `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` keeps the
+/// sandbox safe regardless, as it names the only handles the helper itself gets.
+#[cfg(windows)]
+pub(crate) static SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Starts `command`, under [`SPAWN_LOCK`] on Windows.
+pub fn spawn(command: &mut Command) -> io::Result<Child> {
+    #[cfg(windows)]
+    let _held = SPAWN_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    command.spawn()
+}
+
+/// A process this module can wait for and stop: the standard library's [`Child`], and on Windows the helper that is started
+/// in an AppContainer with `CreateProcessW` (`view::thumb::windows`), which `Command` cannot do on stable Rust.
+pub trait Started {
+    /// The exit status when the process has ended, `None` while it runs.
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>>;
+
+    /// Ends the process.
+    fn kill(&mut self) -> io::Result<()>;
+
+    /// Waits for the process to end (after [`Started::kill`], which makes that quick) and reaps it.
+    fn wait(&mut self) -> io::Result<ExitStatus>;
+}
+
+impl Started for Child {
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        Child::try_wait(self)
+    }
+
+    fn kill(&mut self) -> io::Result<()> {
+        Child::kill(self)
+    }
+
+    fn wait(&mut self) -> io::Result<ExitStatus> {
+        Child::wait(self)
+    }
+}
+
+/// Sets the soft and the hard limit of `resource` for the calling process to `value`: what the helper processes do to
+/// themselves before they read a byte (`view::heic::sandbox`, `view::thumb::macos`).
+#[cfg(unix)]
+pub(crate) fn lower_limit(resource: rustix::process::Resource, value: u64) -> io::Result<()> {
+    let limit = rustix::process::Rlimit {
+        current: Some(value),
+        maximum: Some(value),
+    };
+
+    Ok(rustix::process::setrlimit(resource, limit)?)
+}
+
 /// Why [`wait_for`] gave up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Wait {
@@ -107,7 +165,7 @@ pub enum Exit {
 /// not stopped here: the caller does it with [`stop`], on every path. A child whose output nobody reads is waited for
 /// with [`wait_for_exit`].
 pub fn wait_for(
-    child: &mut Child,
+    child: &mut impl Started,
     cancel: &AtomicBool,
     deadline: Duration,
     mut output_done: impl FnMut() -> bool,
@@ -123,7 +181,7 @@ pub fn wait_for(
 /// runs `watch` every half second meanwhile; a check that fails gives up with its error. There is no [`GRACE`]: the child
 /// may run until the deadline. The child is not stopped here either.
 pub fn wait_for_exit(
-    child: &mut Child,
+    child: &mut impl Started,
     cancel: &AtomicBool,
     deadline: Duration,
     mut watch: impl FnMut() -> io::Result<()>,
@@ -133,7 +191,7 @@ pub fn wait_for_exit(
 
 /// The loop of both waits; `output` is the reader's end, when there is a reader.
 fn drive(
-    child: &mut Child,
+    child: &mut impl Started,
     cancel: &AtomicBool,
     deadline: Duration,
     mut output: Option<&mut dyn FnMut() -> bool>,
@@ -192,7 +250,7 @@ fn drive(
 }
 
 /// Kills and reaps the child; harmless for one that has ended.
-pub fn stop(child: &mut Child) {
+pub fn stop(child: &mut impl Started) {
     let _ = child.kill();
     let _ = child.wait();
 }

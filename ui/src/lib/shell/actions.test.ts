@@ -47,6 +47,9 @@ describe('runAction', () => {
     runAction('layoutBrief', actions);
     expect(tabs.view.layout).toBe('brief');
 
+    runAction('layoutThumbnails', actions);
+    expect(tabs.view.layout).toBe('thumbnails');
+
     runAction('layoutDetailed', actions);
     expect(tabs.view.layout).toBe('detailed');
     expect(actions.files).not.toHaveBeenCalled();

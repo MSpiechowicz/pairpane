@@ -37,6 +37,8 @@ time.workspace = true
 tracing = { workspace = true, features = ["log"] }
 
 [dev-dependencies]
+# Pictures to make thumbnails of (tests/thumb_helper.rs), encoded by the same crate that decodes them.
+image.workspace = true
 tempfile.workspace = true
 
 [lints]

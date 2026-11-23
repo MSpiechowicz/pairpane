@@ -44,10 +44,9 @@ impl fmt::Display for Version {
 
 /// The version `program` prints, or `None` when it prints none this code reads.
 fn banner_version(program: &Path) -> Option<Version> {
-    let mut child = process::command(program, [""; 0], &[])
-        .env("LC_ALL", LOCALE)
-        .spawn()
-        .ok()?;
+    let mut command = process::command(program, [""; 0], &[]);
+    command.env("LC_ALL", LOCALE);
+    let mut child = process::spawn(&mut command).ok()?;
     let stdout = child.stdout.take()?;
     let reader = thread::Builder::new()
         .name("unrar-banner".to_owned())

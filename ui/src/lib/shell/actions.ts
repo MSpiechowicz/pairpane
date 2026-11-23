@@ -83,6 +83,9 @@ export function runAction(action: Action, context: ActionContext) {
     case 'layoutDetailed':
       tabs.view.layout = 'detailed';
       break;
+    case 'layoutThumbnails':
+      tabs.view.layout = 'thumbnails';
+      break;
     case 'terminal':
       context.terminal();
       break;
