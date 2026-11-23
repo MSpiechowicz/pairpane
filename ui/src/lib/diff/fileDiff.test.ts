@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { EditOpened } from '$lib/ipc/bindings/EditOpened';
 import type { EditSaved } from '$lib/ipc/bindings/EditSaved';
 
-import { answer, world } from '../../../tests/diff';
+import { answer, PICKED, world } from '../../../tests/diff';
 import { editDocument } from '../../../tests/editor';
 
 describe('opening a comparison', () => {
@@ -39,6 +39,27 @@ describe('opening a comparison', () => {
       { path: '/two', name: 'b.txt' },
     ]);
     expect(diff.hex?.left.name).toBe('a.txt');
+  });
+
+  it('reads a file inside an archive read-only, as text or as bytes', async () => {
+    const archived = { path: '/w/a.zip', name: 'in.txt', inside: 'docs' };
+    const text = { kind: 'text', document: editDocument({ name: 'in.txt', text: 'archived\n', readOnly: true }) } satisfies EditOpened;
+    const { diff, sent } = world({}, { archive_edit_open: (() => text) as never }, { pick: () => ({ left: PICKED.left, right: archived }) });
+
+    diff.open();
+    await vi.waitFor(() => expect(diff.mode).toBe('text'));
+
+    expect(sent('archive_edit_open')).toEqual([{ archive: '/w/a.zip', dir: 'docs', name: 'in.txt', encoding: null }]);
+    expect(diff.pair?.right.readOnly).toBe(true);
+    expect(diff.pair?.right.text()).toBe('archived\n');
+    expect(await diff.save('right')).toBe(false);
+    expect(sent('edit_save')).toEqual([]);
+    diff.close();
+
+    const bytes = world({}, { archive_edit_open: (() => ({ kind: 'binary' })) as never, archive_view_open: (() => ({ session: 7, name: 'in.txt', size: 3, modified: null, kind: { kind: 'binary' }, encoding: '' })) as never }, { pick: () => ({ left: PICKED.left, right: archived }) });
+    bytes.diff.open();
+    await vi.waitFor(() => expect(bytes.diff.mode).toBe('hex'));
+    expect(bytes.sent('archive_view_open')).toEqual([{ archive: '/w/a.zip', dir: 'docs', name: 'in.txt' }]);
   });
 
   it('says why nothing opens when the panes pick nothing, and opens nothing', () => {

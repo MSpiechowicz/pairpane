@@ -30,8 +30,9 @@ export interface TextPair {
 
 /**
  * Shift+F2: two files side by side in an overlay of the whole window. Two text files are edited in place with the
- * diff following every keystroke (each side is saved on its own); if either is binary, too large to edit or not
- * text in any encoding, both are shown as bytes, read-only. Asks before anything throws changes away.
+ * diff following every keystroke (each side is saved on its own); a file inside an archive is read-only. If either is
+ * binary, too large to edit or not text in any encoding, both are shown as bytes, read-only. Asks before anything throws
+ * changes away.
  */
 export class FileDiff {
   /** The two files of a text diff. */
@@ -142,7 +143,8 @@ export class FileDiff {
   }
 
   #session(target: Target): EditSession {
-    return new EditSession(this.#ipc, target.path, target.name, () => this.#unsaved.report('diff', this.#sessions.some((session) => session.dirty)));
+    const dirty = () => this.#unsaved.report('diff', this.#sessions.some((session) => session.dirty));
+    return new EditSession(this.#ipc, target.path, target.name, dirty, target.inside);
   }
 
   /** Writes one side (Ctrl+S, or its Save button); resolves to whether the file was written. A file that changed on disk is asked about first. */

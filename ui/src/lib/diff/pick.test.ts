@@ -5,7 +5,6 @@ import type { PaneView } from '$lib/panes/view.svelte';
 
 import { arrive, entry, fakeBackend } from '../../../tests/panes';
 import {
-  ARCHIVE_NOTICE,
   FOLDER_NOTICE,
   LINK_NOTICE,
   NEED_TWO_NOTICE,
@@ -143,7 +142,7 @@ describe('picking the two files of a comparison', () => {
     expect(pick(left, right)).toEqual({ left: { path: '/left/docs/deep', name: 'a.txt' }, right: { path: '/left', name: 'b.txt' } });
   });
 
-  it('refuses a pane inside an archive, whether it is the active one or the other', async () => {
+  it('takes a file inside an archive as a target of the archive, on either side, and the same entry twice is refused', async () => {
     const { backend, left, right } = await panes();
     await right.listing.openArchive({ archive: '/right/a.zip', dir: '' });
     const channel = backend.opens.at(-1)!;
@@ -160,9 +159,10 @@ describe('picking the two files of a comparison', () => {
     left.pointAt('a.txt');
     right.pointAt('inner.txt');
 
-    expect(pick(left, right)).toBe(ARCHIVE_NOTICE);
-    expect(pickFiles({ active: right, other: left, side: 'right', quick: false })).toBe(ARCHIVE_NOTICE);
+    const inner = { path: '/right/a.zip', name: 'inner.txt', inside: '' };
+    expect(pick(left, right)).toEqual({ left: { path: '/left', name: 'a.txt' }, right: inner });
+    expect(pickFiles({ active: right, other: left, side: 'right', quick: false })).toEqual({ left: { path: '/left', name: 'a.txt' }, right: inner });
     right.select(['inner.txt']);
-    expect(pickFiles({ active: right, other: left, side: 'right', quick: false })).toBe(ARCHIVE_NOTICE);
+    expect(pickFiles({ active: right, other: left, side: 'right', quick: false })).toBe(NEED_TWO_NOTICE);
   });
 });

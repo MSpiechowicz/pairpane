@@ -47,7 +47,7 @@ mod testing;
 #[cfg(test)]
 mod text_tests;
 
-pub use open::{check_regular, open};
+pub use open::{check_regular, open, open_bytes};
 pub use save::save;
 
 /// Whether the paths `a` and `b` are one file (a hard link, or a link to it, counts): the shell refuses a save into a
