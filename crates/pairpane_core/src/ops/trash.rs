@@ -92,3 +92,39 @@ pub(super) fn trash(folder: &std::path::Path, names: &[String]) -> (Trashed, Res
 pub(super) fn untrash(record: &Trashed) -> Result<usize, UntrashFailure> {
     system::untrash(record)
 }
+
+/// Moves the item `name` of the folder `folder`, held open as `held` (Unix), to the Trash, and fails it when the Trash
+/// refuses (nothing is deleted for good instead).
+///
+/// On Linux and the other freedesktop systems the item is renamed from the held folder, which the path must still name. On
+/// macOS the system takes a path: the path must lead to the held folder right before, and a swap after that still wins.
+/// On Windows the path is all there is.
+pub(super) fn trash_held(folder: &std::path::Path, held: &super::held::Held, name: &str) -> std::io::Result<()> {
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
+    {
+        freedesktop::trash_held(folder, &held.dir, name)
+    }
+
+    #[cfg(all(unix, any(target_os = "macos", target_os = "ios", target_os = "android")))]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        let named = std::fs::metadata(std::fs::canonicalize(folder)?)?;
+        let here = held.dir.metadata()?;
+        if (named.dev(), named.ino()) != (here.dev(), here.ino()) {
+            return Err(super::report::refusal(
+                std::io::ErrorKind::Other,
+                "the folder changed while it was being walked",
+            ));
+        }
+
+        shell::trash_named(folder, name)
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = held;
+
+        shell::trash_named(folder, name)
+    }
+}

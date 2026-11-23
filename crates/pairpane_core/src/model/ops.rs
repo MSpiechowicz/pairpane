@@ -69,6 +69,8 @@ pub enum JobPhase {
     Extracting,
     /// Reading the items and writing them into a new archive (pack jobs) or into the rewritten one (add jobs).
     Packing,
+    /// Removing the items a synchronization mirrors away (to the Trash, or for good).
+    Removing,
     /// Stopped on a conflict question until [`Answer`] arrives (see [`OpsEvent::Conflict`]).
     Waiting,
     /// Cancel was requested; the job is stopping and removing what it created.

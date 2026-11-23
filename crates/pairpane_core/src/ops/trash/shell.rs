@@ -58,6 +58,11 @@ pub(super) fn trash(folder: &Path, names: &[String]) -> (Trashed, Result<(), Ite
 }
 
 /// Moves one item to the Trash. A link goes as the link (only the folder holding it is resolved), never its target.
+/// Moves the item `name` of `folder` to the Trash, by path: the system takes a path, not a handle (see `sync_remove`).
+pub(super) fn trash_named(folder: &Path, name: &str) -> io::Result<()> {
+    trash_one(folder, name)
+}
+
 fn trash_one(folder: &Path, name: &str) -> io::Result<()> {
     if !platform::is_plain_name(name) {
         return Err(refusal(

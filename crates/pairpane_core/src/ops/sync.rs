@@ -4,7 +4,7 @@
 //! copied: the source must still be what the scan saw (its kind, and for a file its size and its time to the
 //! millisecond), and so must the target (the same file, or still not there; a folder that is copied whole must still not
 //! exist at the target). An item that fails the look is skipped and counted, never copied over a change the user did not
-//! see. Nothing is ever deleted, a link is never followed (one on the way to an item is a refusal, and a link inside a
+//! see. Nothing is deleted by a copy, a link is never followed (one on the way to an item is a refusal, and a link inside a
 //! folder that is copied whole is copied as a link, as a copy does), and a special file is skipped.
 //!
 //! Every folder on the way to an item is entered one name at a time with no link followed, in the source and in the target,
@@ -21,14 +21,15 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::listing::{modified_millis, platform};
-use crate::model::{EntryKind, JobPhase, SyncDirection, SyncFacts};
+use crate::model::{EntryKind, JobPhase, PaneId, SyncDirection, SyncFacts};
 
 use super::extract::ArchiveJob;
 use super::plan::{Child, Kind, is_inside, real};
 use super::report::refusal;
+use super::sync_remove::Removal;
 use super::sync_terms::{Terms, seen_at};
 use super::transfer::{Run, Stop};
-use super::{SyncPlan, SyncRoot};
+use super::{SyncPlan, SyncRemove, SyncRoot};
 
 /// An archive that items are copied from, and where it is.
 pub(super) struct ArchiveSide<'a> {
@@ -61,8 +62,16 @@ impl<'a> Side<'a> {
 }
 
 impl Run<'_> {
-    /// Runs the synchronization of the job: see the module's text.
-    pub(super) fn sync(&mut self, left: &SyncRoot, right: &SyncRoot, plans: &[SyncPlan]) -> Result<(), Stop> {
+    /// Runs the synchronization of the job: see the module's text. The removals (see `sync_remove`) come after every copy,
+    /// so a job that is cancelled or fails has removed nothing it had not copied first.
+    pub(super) fn sync(
+        &mut self,
+        left: &SyncRoot,
+        right: &SyncRoot,
+        plans: &[SyncPlan],
+        removals: &[SyncRemove],
+        permanent: bool,
+    ) -> Result<(), Stop> {
         let job = self.job;
         let request = &job.request;
 
@@ -124,7 +133,35 @@ impl Run<'_> {
             self.sync_from_archive(archive, target, &rows)?;
         }
 
-        Ok(())
+        let removed: Vec<Removal<'_>> = request.names[plans.len().min(request.names.len())..]
+            .iter()
+            .zip(removals)
+            .filter_map(|(rel, removal)| {
+                let (side, other) = match removal.side {
+                    PaneId::Left => (&left, &right),
+                    PaneId::Right => (&right, &left),
+                };
+                let Side::Disk(root) = side else { return None };
+                let source = match other {
+                    Side::Disk(folder) => Some(folder.as_path()),
+                    Side::Archive(_) => None,
+                };
+
+                Some(Removal {
+                    rel: rel.as_str(),
+                    removal,
+                    root: root.as_path(),
+                    source,
+                })
+            })
+            .collect();
+
+        let archive = [&left, &right].into_iter().find_map(|side| match side {
+            Side::Archive(archive) => Some(archive.folder.join(archive.name)),
+            Side::Disk(_) => None,
+        });
+
+        self.sync_removals(&removed, permanent, archive.as_deref())
     }
 
     /// The folder `path` a side is in: it must pass the folder rules and be a folder now.
@@ -263,7 +300,7 @@ pub(super) fn split_item(rel: &str) -> (&str, &str) {
 
 /// The item `rel` below `root`, found by entering each folder on the way with no link followed. `None` when the item or
 /// a folder on the way is gone, or the way is a link or a file now.
-fn lookup_below(root: &Path, rel: &str) -> io::Result<Option<Child>> {
+pub(super) fn lookup_below(root: &Path, rel: &str) -> io::Result<Option<Child>> {
     let (parents, name) = split_item(rel);
     let mut folder = root.to_owned();
 

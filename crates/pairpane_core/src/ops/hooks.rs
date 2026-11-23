@@ -66,6 +66,8 @@ pub(super) struct Hooks {
     /// The new archive of an add job cannot be given the old one's group, as when the user is not in it (Unix).
     #[cfg(unix)]
     pub(super) refuse_group: bool,
+    /// Every move to the Trash is refused, as on a disk with no Trash.
+    pub(super) refuse_trash: bool,
     /// The most entries and the most bytes of names a pack job takes, in place of the limits of the archive readers.
     pub(super) pack_limits: Option<(usize, usize)>,
 }

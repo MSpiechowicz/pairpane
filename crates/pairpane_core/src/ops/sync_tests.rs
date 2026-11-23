@@ -60,6 +60,8 @@ pub(super) fn with_plans(left: &Path, right: &Path, rels: &[&str], plans: Vec<Sy
             left: SyncRoot::Folder,
             right: SyncRoot::Folder,
             plans,
+            removals: Vec::new(),
+            permanent: false,
         },
     )
 }

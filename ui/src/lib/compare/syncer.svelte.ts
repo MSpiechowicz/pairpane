@@ -3,6 +3,7 @@ import type { CompareId } from '$lib/ipc/bindings/CompareId';
 import type { CompareRoot } from '$lib/ipc/bindings/CompareRoot';
 import type { CompareStatus } from '$lib/ipc/bindings/CompareStatus';
 import type { SyncItem } from '$lib/ipc/bindings/SyncItem';
+import type { SyncRemoval } from '$lib/ipc/bindings/SyncRemoval';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
 import { parseMask } from '$lib/panes/mask';
 
@@ -10,8 +11,13 @@ import {
   type Archives,
   baseName,
   defaultAction,
+  itemCount,
   itemsOf,
+  mirrorAction,
+  removalsOf,
+  removedPaths,
   type SyncAction,
+  type SyncCopy,
   type SyncRow,
   totalsOf,
   type Totals,
@@ -77,6 +83,8 @@ export class Syncer {
   notice = $state<string | undefined>();
   /** The copies wait for a yes. */
   confirming = $state(false);
+  /** The removals are deleted for good rather than moved to the Trash (asked again before the job is queued). */
+  permanent = $state(false);
 
   readonly #ipc: Transport;
   /** A plain array filled in place (100 000 rows must not be proxied); readers track `#revision`. */
@@ -87,6 +95,8 @@ export class Syncer {
   /** The options the rows on the table were scanned with; `undefined` before the first scan. */
   #scanned = $state.raw<ScanOptions | undefined>();
   #id: CompareId | undefined;
+  /** When the scan of the rows began (milliseconds since the epoch). */
+  #startedAt = 0;
   /** Tells the events of the latest scan from those of one that was dropped. */
   #run = 0;
 
@@ -132,8 +142,7 @@ export class Syncer {
 
   readonly #withheld = $derived.by(() => {
     void this.#revision;
-    const { toRight, toLeft } = totalsOf(this.#split.hidden);
-    return toRight.items + toLeft.items;
+    return itemCount(totalsOf(this.#split.hidden));
   });
 
   constructor(ipc: Transport) {
@@ -209,6 +218,18 @@ export class Syncer {
     return itemsOf(this.#split.shown);
   }
 
+  /** The removals that are asked for: those of the rows shown. */
+  get removals(): SyncRemoval[] {
+    void this.#revision;
+    return removalsOf(this.#split.shown, this.#startedAt);
+  }
+
+  /** The paths the removals take away, with their side, for the confirmation to list. */
+  get removed(): { side: 'left' | 'right'; path: string }[] {
+    void this.#revision;
+    return removedPaths(this.#split.shown);
+  }
+
   /** What is to be done about `entry` (reactive: the rows are plain objects). */
   actionOf(entry: SyncRow): SyncAction {
     void this.#revision;
@@ -244,6 +265,7 @@ export class Syncer {
     this.#clear();
     this.roots = undefined;
     this.confirming = false;
+    this.permanent = false;
   }
 
   /** Scans the two folders; the rows stream into the table. */
@@ -256,6 +278,7 @@ export class Syncer {
     this.#drop();
     this.#clear();
     this.#scanned = this.#options();
+    this.#startedAt = Date.now();
     this.status = 'running';
     const run = this.#run;
     const id = await this.#launch(roots, run);
@@ -340,21 +363,47 @@ export class Syncer {
       }
     }
 
+    this.#refusedNotice(refused);
+  }
+
+  /**
+   * Sets every row shown to what a mirror `toward` that side does (see `mirrorAction`): the side then matches the other,
+   * what only it has being removed. The rows that cannot go that way keep theirs, and the notice says how many.
+   */
+  mirror(toward: SyncCopy) {
+    let refused = 0;
+    for (const slot of this.#view) {
+      const entry = this.#rows[slot];
+      const action = mirrorAction(entry.row, toward, this.#archives);
+      if (action === undefined) {
+        refused += 1;
+      } else {
+        entry.action = action;
+      }
+    }
+
+    this.#revision += 1;
+    this.#refusedNotice(refused);
+  }
+
+  #refusedNotice(refused: number) {
     this.notice = refused === 0 ? undefined : `${refused.toLocaleString('en-US')} of the rows cannot go that way.`;
   }
 
-  /** Asks for the confirmation of the copies; nothing is asked when there are none, or when the rows are of other options. */
+  /** Asks for the confirmation of the job; nothing is asked when there is nothing to do, or when the rows are of other options. */
   ask(): boolean {
-    this.confirming = !this.stale && this.#totals.toRight.items + this.#totals.toLeft.items > 0;
+    this.permanent = false;
+    this.confirming = !this.stale && itemCount(this.#totals) > 0;
     return this.confirming;
   }
 
-  /** Queues the one job that makes the copies; a refusal rejects, so that the dialog can show it and stay. */
+  /** Queues the one job that makes the copies and the removals; a refusal rejects, so that the dialog can show it and stay. */
   async apply(): Promise<void> {
     const roots = this.roots;
     const items = this.items;
-    if (roots !== undefined && items.length > 0) {
-      await this.#ipc.invoke('ops_sync', { left: roots.left, right: roots.right, items });
+    const removals = this.removals;
+    if (roots !== undefined && items.length + removals.length > 0) {
+      await this.#ipc.invoke('ops_sync', { left: roots.left, right: roots.right, items, removals, permanent: this.permanent });
     }
   }
 

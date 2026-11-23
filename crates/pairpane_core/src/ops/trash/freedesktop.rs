@@ -115,6 +115,14 @@ fn trash_one(context: &Context, session: &mut Option<Session>, folder: &Path, na
     })
 }
 
+/// Moves the item `name` of the folder held open as `held` (which `folder` names) to the Trash, renamed from that handle:
+/// a folder on the way swapped for a link cannot send another item there.
+pub(super) fn trash_held(folder: &Path, held: &std::fs::File, name: &str) -> io::Result<()> {
+    let mut session = Some(Session::of_held(folder, std::os::fd::OwnedFd::from(held.try_clone()?))?);
+
+    trash_one(&Context::system(), &mut session, folder, name).map(|_| ())
+}
+
 /// Puts the items of `record` back where they were (see [`crate::ops::untrash`]).
 pub(super) fn untrash(record: &Trashed) -> Result<usize, UntrashFailure> {
     restore::untrash(&Context::system(), record)

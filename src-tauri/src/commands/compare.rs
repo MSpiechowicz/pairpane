@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use pairpane_core::compare::{self, Side};
 use pairpane_core::model::{
-    CompareEvent, CompareId, CompareOptions, CompareRoot, IpcError, IpcErrorCode, JobId, SyncItem,
+    CompareEvent, CompareId, CompareOptions, CompareRoot, IpcError, IpcErrorCode, JobId, SyncItem, SyncRemoval,
 };
 use tauri::State;
 use tauri::async_runtime;
@@ -297,9 +297,9 @@ pub async fn compare_forget(comparer: State<'_, Comparer>, id: CompareId) -> Com
     comparer.forget(id)
 }
 
-/// Queues the one job that copies `items` between `left` and `right`, each the way its direction says, and returns its id at
-/// once. Nothing is deleted, and an item that is not as the scan saw it by then is skipped and counted. An archive may only be
-/// copied from, and only one side may be one.
+/// Queues the one job that copies `items` between `left` and `right`, each the way its direction says, then removes
+/// `removals` (a mirror: to the Trash, or for good when `permanent`), and returns its id at once. An item that is not as the
+/// scan saw it by then is skipped and counted. An archive may only be copied from, and only one side may be one.
 #[tauri::command]
 pub async fn ops_sync(
     ops: State<'_, Ops>,
@@ -307,6 +307,8 @@ pub async fn ops_sync(
     left: CompareRoot,
     right: CompareRoot,
     items: Vec<SyncItem>,
+    removals: Vec<SyncRemoval>,
+    permanent: bool,
 ) -> CommandResult<JobId> {
-    ops.sync(&archives, (left, right), items).await
+    ops.sync(&archives, (left, right), items, (removals, permanent)).await
 }

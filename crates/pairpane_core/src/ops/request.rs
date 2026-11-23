@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use crate::archive::Password;
 use crate::model::{
-    AttributeChange, HashAlgorithm, IpcError, IpcErrorCode, OpKind, PackFormat, PackLevel, SyncDirection, SyncFacts,
+    AttributeChange, HashAlgorithm, IpcError, IpcErrorCode, OpKind, PackFormat, PackLevel, PaneId, SyncDirection,
+    SyncFacts,
 };
 
 use super::{ArchiveJob, RenameLog};
@@ -56,9 +57,10 @@ pub enum Task {
         undo: bool,
         log: RenameLog,
     },
-    /// Copies the items between two folders that are compared, each the way its [`SyncPlan`] says (`plans` is one for each
-    /// name, in order; the names are paths below the two roots, see [`super::is_item_path`], none inside another). Nothing
-    /// is ever deleted, an item that is not as the scan saw it is skipped, and only a folder can be copied onto.
+    /// Copies the items between two folders that are compared, each the way its [`SyncPlan`] says, then removes the items
+    /// of `removals` (a mirror). The names are paths below the two roots (see [`super::is_item_path`], none inside
+    /// another): first one for each plan, in order, then one for each removal. An item that is not as the scan saw it is
+    /// skipped, only a folder can be copied onto or removed from, and a removal goes to the Trash unless `permanent`.
     ///
     /// Where the folders are: for two folders `from` is the left and `to` the right one. When one side is an archive
     /// (the other is then written to), `from` is the folder that holds the archive file and `to` the other folder.
@@ -66,6 +68,8 @@ pub enum Task {
         left: SyncRoot,
         right: SyncRoot,
         plans: Vec<SyncPlan>,
+        removals: Vec<SyncRemove>,
+        permanent: bool,
     },
 }
 
@@ -90,6 +94,20 @@ pub struct SyncPlan {
     pub direction: SyncDirection,
     pub source: SyncFacts,
     pub target: Option<SyncFacts>,
+}
+
+/// One removal of a synchronization: the item only `side` has, as the scan saw it. It is removed only while it still is
+/// (for a folder: the same files and bytes in its whole subtree too).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncRemove {
+    pub side: PaneId,
+    pub seen: SyncFacts,
+    /// For a folder: the files in its subtree; 0 for a file.
+    pub files: u64,
+    /// For a folder: the bytes of those files; 0 for a file.
+    pub bytes: u64,
+    /// When the scan began, in milliseconds since the Unix epoch: nothing in a folder that is removed may be newer.
+    pub scanned: i64,
 }
 
 /// How a pack job writes its archive. The format is the one the archive's `name` must have the extension of.
