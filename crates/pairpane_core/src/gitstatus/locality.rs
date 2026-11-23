@@ -200,9 +200,14 @@ mod tests {
         ] {
             assert_eq!(pointer_target(&base(), Path::new(text)), None, "{text}");
         }
-        for text in ["/network/x", "/netx/y", "/System/Library", "/srv/net/x"] {
+        for text in ["/netx/y", "/System/Library", "/srv/net/x"] {
             assert!(pointer_target(&base(), Path::new(text)).is_some(), "{text}");
         }
+        // On macOS names are compared without regard to case, so `/network` is `/Network`.
+        assert_eq!(
+            pointer_target(&base(), Path::new("/network/x")).is_none(),
+            cfg!(target_os = "macos")
+        );
     }
 
     #[cfg(target_os = "macos")]

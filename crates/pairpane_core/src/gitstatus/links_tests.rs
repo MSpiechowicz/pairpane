@@ -29,9 +29,11 @@ fn an_automounted_folder_is_found_whatever_dots_lead_to_it() {
         assert!(is_automount(Path::new(text)), "{text}");
         assert!(!is_local(Path::new(text)), "{text}");
     }
-    for text in ["/srv/net/x", "/net2", "/network"] {
+    for text in ["/srv/net/x", "/net2"] {
         assert!(!is_automount(Path::new(text)), "{text}");
     }
+    // On macOS names are compared without regard to case, so `/network` is `/Network`.
+    assert_eq!(is_automount(Path::new("/network")), cfg!(target_os = "macos"));
     // `/home` is an automount point on macOS (autofs), and an ordinary folder elsewhere.
     for text in ["/home/x", "/srv/../home", "/System/Volumes/Data/home"] {
         assert_eq!(is_automount(Path::new(text)), cfg!(target_os = "macos"), "{text}");
@@ -240,9 +242,11 @@ fn a_name_that_is_an_automount_point_on_macos_is_refused_in_any_case_before_anyt
         let (answer, asked) = walked(text, true, &[]);
 
         assert_eq!(answer.expect_err(text).kind(), io::ErrorKind::InvalidInput, "{text}");
-        // Nothing below the refused name was looked up; of the names above it only real folders were (`/`, `/System`...).
+        // Nothing at or below the refused name was looked up; only real folders above it were (`/`, `/System`...).
         assert!(
-            asked.iter().all(|folder| folder.components().count() <= 2),
+            !asked
+                .iter()
+                .any(|folder| crate::gitstatus::automount::is_automount_with(folder, true)),
             "{text}: {asked:?}"
         );
         assert!(!asked.iter().any(|folder| folder.ends_with("evilhost")), "{text}");
