@@ -5,7 +5,7 @@
 
   import FilesMenu from './FilesMenu.svelte';
   import type { FilesChoice } from './menu';
-  import { shortcutFor } from './shortcuts';
+  import { keymap } from './keymap.svelte';
   import type { Theme } from './theme.svelte';
 
   let {
@@ -16,6 +16,7 @@
     showHidden,
     onCheckForUpdates,
     onEditSettings,
+    onKeyboardShortcuts,
     onToggleHidden,
     onFiles,
     onFind,
@@ -32,6 +33,8 @@
     onCheckForUpdates: () => void;
     /** "Edit Settings…": the settings file opens in the system's editor for it. */
     onEditSettings: () => void;
+    /** "Keyboard Shortcuts…": the dialog that changes the keys (the palette opens it too). */
+    onKeyboardShortcuts: () => void;
     onToggleHidden: () => void;
     /** An item of the Files menu was chosen; it does what its key does. */
     onFiles: (action: FilesChoice) => void;
@@ -77,7 +80,7 @@
 
   /** Escape closes the popup, and so does a shortcut: its action (a dialog, a pane change) takes over. */
   function closeOnKey(event: KeyboardEvent) {
-    if (open && (event.key === 'Escape' || shortcutFor(event) !== undefined)) {
+    if (open && (event.key === 'Escape' || keymap.shortcutFor(event) !== undefined)) {
       open = undefined;
     }
   }
@@ -101,6 +104,7 @@
 {#snippet settings()}
   <div class="popup" role="menu">
     <button class="popup-item" type="button" role="menuitem" onclick={editSettings}>Edit Settings…</button>
+    <button class="popup-item" type="button" role="menuitem" onclick={() => ((open = undefined), onKeyboardShortcuts())}>Keyboard Shortcuts…</button>
     {#if !nativeMenu}
       <button class="popup-item" type="button" role="menuitem" onclick={checkForUpdates}>Check for Updates…</button>
     {/if}

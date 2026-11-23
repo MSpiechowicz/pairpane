@@ -48,6 +48,7 @@ pub(super) fn state() -> SavedState {
         hotlist: vec![folder("fav"), folder("other")],
         searches: Vec::new(),
         renames: Vec::new(),
+        keys: Vec::new(),
     }
 }
 

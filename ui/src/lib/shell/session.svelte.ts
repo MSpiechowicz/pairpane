@@ -9,6 +9,8 @@ import type { Hotlist } from '$lib/panes/hotlist.svelte';
 import type { PaneTabs } from '$lib/panes/tabs.svelte';
 import type { SavedRenames } from '$lib/rename/saved.svelte';
 
+import type { Keymap } from './keymap.svelte';
+
 /** The load is given this long; a config folder on a dead share must not keep the panes empty. */
 export const LOAD_TIMEOUT_MS = 2000;
 /** A change is saved this long after the last one, so a burst of navigation is one write. */
@@ -24,13 +26,15 @@ export interface SessionParts {
   hotlist: Hotlist;
   searches: SavedSearches;
   renames: SavedRenames;
+  /** The keys the user set for actions. */
+  keymap: Keymap;
   /** The pane that has the keyboard focus. */
   active: { get: () => PaneId; set: (pane: PaneId) => void };
 }
 
 /**
  * What survives a restart: both panes' tabs (folder and sort), their active tabs, the active pane and the
- * hotlist, the saved searches and the saved rename rules. {@link restore} runs once at startup, before any folder is opened; {@link watch} then saves every change
+ * hotlist, the saved searches, the saved rename rules and the keys the user set. {@link restore} runs once at startup, before any folder is opened; {@link watch} then saves every change
  * a moment after it, and once more when the page goes away.
  */
 export class Session {
@@ -58,7 +62,7 @@ export class Session {
   async restore(): Promise<void> {
     const loaded = await this.#load();
     const saved = loaded === UNKNOWN ? null : loaded;
-    const { panes, hotlist, searches, renames, active } = this.#parts;
+    const { panes, hotlist, searches, renames, keymap, active } = this.#parts;
 
     for (const side of ['left', 'right'] as const) {
       const pane: SavedPane = saved?.[side] ?? { tabs: [], active: 0 };
@@ -68,6 +72,7 @@ export class Session {
     hotlist.restore(saved?.hotlist ?? []);
     searches.restore(saved?.searches ?? []);
     renames.restore(saved?.renames ?? []);
+    keymap.restore(saved?.keys ?? []);
     if (saved !== null) {
       active.set(saved.active);
       // What was loaded is what the backend has: starting up is not a change to save.
@@ -117,7 +122,7 @@ export class Session {
 
   /** The state as it is now; `undefined` while a folder has not been listed yet (there is no path to save). */
   #snapshot(): { state: SavedState; text: string } | undefined {
-    const { panes, hotlist, searches, renames, active } = this.#parts;
+    const { panes, hotlist, searches, renames, keymap, active } = this.#parts;
     const left = this.#pane(panes.left);
     const right = this.#pane(panes.right);
     if (left === undefined || right === undefined) {
@@ -132,6 +137,7 @@ export class Session {
       hotlist: [...hotlist.paths],
       searches: [...searches.list],
       renames: [...renames.list],
+      keys: keymap.overrides,
     };
     return { state, text: JSON.stringify(state) };
   }

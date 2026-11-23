@@ -160,6 +160,7 @@ mod tests {
             hotlist: Vec::new(),
             searches: Some(Vec::new()),
             renames: None,
+            keys: None,
         }
     }
 

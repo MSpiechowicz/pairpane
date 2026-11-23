@@ -15,6 +15,7 @@ import { SavedRenames } from '$lib/rename/saved.svelte';
 
 import { arrive, fakeBackend } from '../../../tests/panes';
 import SessionHost from '../../../tests/SessionHost.svelte';
+import { Keymap } from './keymap.svelte';
 import { BUSY_SAVE_MS, LOAD_TIMEOUT_MS, SAVE_DELAY_MS, Session } from './session.svelte';
 
 const saved: SavedState = {
@@ -37,12 +38,14 @@ function setup(answers: Parameters<typeof fakeBackend>[0] = {}) {
   const hotlist = new Hotlist();
   const searches = new SavedSearches();
   const renames = new SavedRenames();
+  const keymap = new Keymap();
   const focus = { side: 'left' as PaneId };
   const session = new Session(backend.ipc, {
     panes,
     hotlist,
     searches,
     renames,
+    keymap,
     active: { get: () => focus.side, set: (side) => (focus.side = side) },
   });
 
@@ -59,7 +62,7 @@ function setup(answers: Parameters<typeof fakeBackend>[0] = {}) {
     flushSync();
   };
 
-  return { backend, panes, hotlist, searches, renames, focus, session, calls, saves, opened, list };
+  return { backend, panes, hotlist, searches, renames, keymap, focus, session, calls, saves, opened, list };
 }
 
 type Setup = ReturnType<typeof setup>;
@@ -205,8 +208,19 @@ describe('Session saving', () => {
         hotlist: [],
         searches: [],
         renames: [],
+        keys: [],
       },
     ]);
+  });
+
+  it('brings back the keys the user set, and every save carries them', async () => {
+    const keys = [{ action: 'copy', keys: [{ key: 'c', ctrl: true, alt: false, shift: false }] }];
+    const s = setup({ state_load: () => ({ ...saved, keys }) });
+    await started(s);
+
+    expect(s.keymap.keysOf('copy')).toBe('Ctrl+C');
+    s.keymap.reset('copy');
+    await vi.waitFor(() => expect(s.saves().at(-1)?.keys).toEqual([]));
   });
 
   it('brings back the saved searches, and every save carries them, a delete included', async () => {
