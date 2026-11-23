@@ -30,14 +30,27 @@ pub struct SavedTab {
     pub layout: Option<PaneLayout>,
 }
 
-/// How a pane shows its folder: one row per item with its columns, or the names alone in several columns.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+/// How a pane shows its folder: one row per item with its columns, or the names alone in several columns. One this
+/// version does not know (a newer version's, a file edited by hand) reads as the detailed view, so that it never makes
+/// the rest of the state unreadable.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum PaneLayout {
     #[default]
     Detailed,
     Brief,
+}
+
+impl<'de> Deserialize<'de> for PaneLayout {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+
+        Ok(match value.as_str() {
+            Some("brief") => Self::Brief,
+            _ => Self::Detailed,
+        })
+    }
 }
 
 /// The tabs of one pane. After loading, `tabs` is empty when nothing usable was saved (the pane starts with its

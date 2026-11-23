@@ -39,7 +39,9 @@
 
   const rows = $derived(Math.max(1, Math.floor(height / rowHeight)));
   const columnWidth = $derived(width > 0 ? width / Math.max(1, Math.floor(width / minColumnWidth)) : minColumnWidth);
-  const columns = $derived(Math.ceil(count / rows));
+  // Not laid out yet (no height, or under one row): no columns, rather than one per item, whose spacer would be
+  // millions of pixels wide.
+  const columns = $derived(height < rowHeight ? 0 : Math.ceil(count / rows));
   const firstColumn = $derived(Math.max(0, Math.floor(scrollLeft / columnWidth) - overscan));
   const lastColumn = $derived(Math.min(columns, Math.ceil((scrollLeft + width) / columnWidth) + overscan));
   const first = $derived(firstColumn * rows);

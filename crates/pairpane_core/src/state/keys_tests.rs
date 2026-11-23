@@ -184,3 +184,18 @@ fn a_tab_keeps_its_layout_and_one_from_before_layouts_has_none() {
     assert_eq!(loaded.left.tabs[1].layout, None);
     assert!(!std::fs::read_to_string(&file).expect("read").contains("null"));
 }
+
+#[test]
+fn a_layout_this_version_does_not_know_is_the_detailed_one_and_the_state_is_kept() {
+    use crate::model::PaneLayout;
+
+    let mut value = serde_json::to_value(state()).expect("json");
+    value["left"]["tabs"][0]["layout"] = serde_json::json!("icons");
+    value["left"]["tabs"][1]["layout"] = serde_json::json!(7);
+
+    let read: SavedState = serde_json::from_value(value).expect("read");
+
+    assert_eq!(read.left.tabs[0].layout, Some(PaneLayout::Detailed));
+    assert_eq!(read.left.tabs[1].layout, Some(PaneLayout::Detailed));
+    assert_eq!(read.hotlist, state().hotlist);
+}

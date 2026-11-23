@@ -92,6 +92,15 @@ describe('Pane in the brief layout', () => {
     expect((document.querySelector('.spacer') as HTMLElement).style.width).toBe(`${Math.ceil((TOTAL + 1) / ROWS) * COLUMN}px`);
   });
 
+  it('lays out nothing before the pane has a height, rather than one column per item', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(0);
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(3 * COLUMN);
+    await brief();
+
+    expect((document.querySelector('.spacer') as HTMLElement).style.width).toBe('0px');
+    expect(document.querySelectorAll('.row')).toHaveLength(0);
+  });
+
   it('renders only the columns in view of a 100 000-entry folder, and the ones scrolled to', async () => {
     sized();
     await brief();
