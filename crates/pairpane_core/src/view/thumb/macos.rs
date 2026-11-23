@@ -73,7 +73,7 @@ pub(super) fn confine() -> io::Result<()> {
 }
 
 /// Step 1 (see the module). Whatever cannot be closed stays open.
-fn close_inherited_fds() {
+pub(crate) fn close_inherited_fds() {
     let limit = getrlimit(Resource::Nofile).current.unwrap_or(65_536).min(65_536);
 
     for fd in 3..c_int::try_from(limit).unwrap_or(65_536) {
@@ -91,27 +91,39 @@ fn close_inherited_fds() {
 
 /// Step 2 (see the module).
 fn limit() -> io::Result<()> {
+    limit_to(CPU_SECONDS, MAX_FILES, MEMORY)
+}
+
+/// [`limit`] with the processor time, the open files and the data segment the helper is given, for the helpers that are not
+/// a decoder (the git status helper, `gitstatus`).
+pub(crate) fn limit_to(cpu_seconds: u64, max_files: u64, data: u64) -> io::Result<()> {
     for (resource, value) in [
         (Resource::Core, 0),
-        (Resource::Cpu, CPU_SECONDS),
-        (Resource::Nofile, MAX_FILES),
+        (Resource::Cpu, cpu_seconds),
+        (Resource::Nofile, max_files),
     ] {
         lower_limit(resource, value)?;
     }
 
     // Not enforced on every system: what is not done is not an error.
-    let _ = lower_limit(Resource::Data, MEMORY);
+    let _ = lower_limit(Resource::Data, data);
 
     Ok(())
 }
 
 /// Step 3 (see the module).
 fn deny_all() -> io::Result<()> {
+    enter(PROFILE)
+}
+
+/// Enters the sandbox with the profile `profile` (see [`deny_all`]), which the helper has built from nothing but fixed text
+/// and paths that were looked at.
+pub(crate) fn enter(profile: &CStr) -> io::Result<()> {
     let mut error: *mut c_char = ptr::null_mut();
 
-    // SAFETY: `PROFILE` is a NUL-terminated string that lives through the call, the flags are 0 (the string is a profile),
+    // SAFETY: `profile` is a NUL-terminated string that lives through the call, the flags are 0 (the string is a profile),
     // and `error` is a place for the pointer to a message, which is set only when the call fails.
-    let result = unsafe { sandbox_init(PROFILE.as_ptr(), 0, &raw mut error) };
+    let result = unsafe { sandbox_init(profile.as_ptr(), 0, &raw mut error) };
     if result == 0 {
         return Ok(());
     }

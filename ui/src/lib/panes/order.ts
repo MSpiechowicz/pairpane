@@ -3,14 +3,14 @@ import type { SortColumn as SavedColumn } from '$lib/ipc/bindings/SortColumn';
 
 import { splitName } from './format';
 
-/** The columns whose values the listing does not have: they are asked for the rows in view, one at a time or in batches. */
-export type ExtraColumn = 'dimensions' | 'checksum';
+/** The columns whose values the listing does not have: they are asked for the rows in view, one at a time, in batches or a folder at a time. */
+export type ExtraColumn = 'dimensions' | 'checksum' | 'git';
 
 /** What a pane can be sorted by: the columns of a listing, and the extra ones. */
 export type SortColumn = SavedColumn | ExtraColumn;
 
 export function isExtra(column: SortColumn): column is ExtraColumn {
-  return column === 'dimensions' || column === 'checksum';
+  return column === 'dimensions' || column === 'checksum' || column === 'git';
 }
 
 /**

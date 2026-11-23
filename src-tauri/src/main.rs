@@ -28,5 +28,16 @@ fn main() -> ExitCode {
         return ExitCode::from(u8::try_from(code).unwrap_or(1));
     }
 
+    // And the helper that reads the git status of a folder, in a confined process of its own: the repository it reads is not to
+    // be trusted either. It reads its request from the standard input.
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == pairpane_core::gitstatus::CHILD_ARG)
+    {
+        let code = pairpane_core::gitstatus::child_main();
+
+        return ExitCode::from(u8::try_from(code).unwrap_or(1));
+    }
+
     pairpane_app_lib::run()
 }

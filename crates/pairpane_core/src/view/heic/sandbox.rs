@@ -43,13 +43,32 @@
 //! which allows the dozen calls it makes and refuses the rest, `PROT_EXEC` mappings included). Not done: a namespace of its own
 //! (needs privileges or user namespaces, which distributions switch off).
 //!
+//! The git status helper (`gitstatus`) takes the same steps with [`limit_to`] (its own processor time and open files),
+//! [`Memory::Data`] (a limit on the data it may write instead of the address space, as it maps the packs of a repository, which
+//! are as big as the repository is), a Landlock ruleset that allows the read of the folders of the repository and nothing
+//! else ([`Readable`]: each folder is opened and `fstat`ed, and one that is not the folder that was looked at fails the
+//! confinement), and the [`Filter::ReadOnly`] seccomp filter, which is the deny-list of the HEIC helper and refuses every call
+//! that writes or changes a file too (`flock` included), an `ioctl` that is not one of two questions, and every call numbered
+//! above the highest that was reviewed, so that where the kernel has no Landlock it is still a read-only file system.
+//! That helper asks for [`Landlock::Required`]: where the kernel has Landlock, a ruleset that is not made or not enforced fails
+//! the confinement and the helper exits without reading. The HEIC and thumbnail helpers keep [`Landlock::BestEffort`] (what the
+//! kernel cannot do is logged and left undone): they read a picture and no repository, and the filter and the limits hold.
+//!
+//! The processor time has a hard limit a second above the soft one (`process::lower_limit`): the kernel sends `SIGXCPU` at the
+//! soft limit, which nothing in a helper catches and which ends it, and `SIGKILL` at the hard one if it is still there. The
+//! parent of the git helper reads `SIGXCPU` as the time limit.
+//!
 //! The parent's death is seen by the kernel only if it is the thread that started the helper that ends: the decode runs
 //! on one blocking thread from the start of the helper to its reaping, so that thread is there throughout.
 
 use std::io;
+use std::path::Path;
 use std::sync::Once;
 
-use landlock::{ABI, Access, AccessFs, AccessNet, Ruleset, RulesetAttr, RulesetStatus, Scope};
+use landlock::{
+    ABI, Access, AccessFs, AccessNet, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus,
+    Scope,
+};
 use rustix::process::{Resource, Signal, getppid};
 use rustix::thread::set_no_new_privs;
 
@@ -57,7 +76,7 @@ use crate::process::lower_limit;
 
 use super::kernel;
 
-pub(in crate::view) use super::kernel::Filter;
+pub(crate) use super::kernel::Filter;
 
 /// The most CPU time of the helper, over all its threads. A 64-megapixel picture takes a few seconds of it.
 const CPU_SECONDS: u64 = 60;
@@ -79,7 +98,7 @@ pub(in crate::view) const ADDRESS_SPACE: u64 = 3 * 1024 * 1024 * 1024;
 pub(in crate::view) const THUMBNAIL_ADDRESS_SPACE: u64 = 1536 * 1024 * 1024;
 
 /// Step 1 (see the module). Whatever cannot be closed stays open.
-pub(in crate::view) fn close_inherited_fds() {
+pub(crate) fn close_inherited_fds() {
     kernel::close_inherited_fds();
 }
 
@@ -88,15 +107,24 @@ pub(in crate::view) fn close_inherited_fds() {
 pub(in crate::view) fn note_kernel() {
     static NOTED: Once = Once::new();
 
-    NOTED.call_once(|| {
+    note_kernel_once(&NOTED, "heic");
+}
+
+/// [`note_kernel`] for the helper `helper`, once for each `noted`.
+pub(crate) fn note_kernel_once(noted: &'static Once, helper: &'static str) {
+    noted.call_once(|| {
         if kernel::landlock_abi().is_none() {
             tracing::warn!(
-                "this kernel has no Landlock: the heic helper runs with limits and a seccomp filter only, and can read, \
-                 write and create the user's files"
+                helper,
+                "this kernel has no Landlock: the helper runs with limits and a seccomp filter only, and can read \
+                 files it should not (and, but for the filter, write them)"
             );
         }
         if !kernel::has_filter() {
-            tracing::warn!("no seccomp filter for this architecture: the heic helper runs without one");
+            tracing::warn!(
+                helper,
+                "no seccomp filter for this architecture: the helper runs without one"
+            );
         }
     });
 }
@@ -104,6 +132,12 @@ pub(in crate::view) fn note_kernel() {
 /// Step 2 (see the module). Fails when the process cannot be tied to its parent or cannot be limited; the helper then
 /// exits and the parent counts it as a file that cannot be decoded.
 pub(in crate::view) fn limit() -> io::Result<()> {
+    limit_to(CPU_SECONDS, MAX_FILES)
+}
+
+/// [`limit`] with the processor time and the open files the helper is given, for the helpers that are not a decoder (the git
+/// status helper, `gitstatus`).
+pub(crate) fn limit_to(cpu_seconds: u64, max_files: u64) -> io::Result<()> {
     let parent = getppid();
     set_parent_process_death_signal(Signal::KILL)?;
 
@@ -115,8 +149,8 @@ pub(in crate::view) fn limit() -> io::Result<()> {
     set_no_new_privs(true)?;
     for (resource, value) in [
         (Resource::Core, 0),
-        (Resource::Cpu, CPU_SECONDS),
-        (Resource::Nofile, MAX_FILES),
+        (Resource::Cpu, cpu_seconds),
+        (Resource::Nofile, max_files),
     ] {
         lower_limit(resource, value)?;
     }
@@ -124,21 +158,83 @@ pub(in crate::view) fn limit() -> io::Result<()> {
     Ok(())
 }
 
+/// How a helper's memory is bounded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Memory {
+    /// The address space, `bytes` above what is mapped when it is set: every mapping counts, the files that are mapped too.
+    AddressSpace(u64),
+    /// The data segment, `bytes` above what it is when set: the memory that the process may write, which is its heap and its
+    /// private writable mappings (since Linux 4.7), and not the files it maps to read. For a helper that maps the packs of a
+    /// repository, which are as big as the repository is.
+    Data(u64),
+}
+
 /// Step 3 (see the module), with the address space limited to `address_space` bytes above what is mapped now and the
 /// seccomp filter `filter`. The limit and Landlock are best effort (what the kernel cannot do is left undone); the
 /// seccomp filter is not: where this architecture has one and it cannot be installed, this fails and the helper exits
 /// without reading the picture.
 pub(in crate::view) fn confine(address_space: u64, filter: Filter) -> io::Result<()> {
-    if let Some(mapped) = mapped_bytes()
-        && let Err(error) = lower_limit(Resource::As, mapped.saturating_add(address_space))
-    {
-        tracing::debug!(%error, "the address space of the helper is not limited");
+    confine_with(Memory::AddressSpace(address_space), filter, None, Landlock::BestEffort)
+}
+
+/// A folder that Landlock is to allow the read of, and which folder it is (the device and the inode it had when it was looked
+/// at): one that is another folder when it is opened is not allowed, and the confinement fails (see [`confine_with`]).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Readable<'a> {
+    pub(crate) path: &'a Path,
+    /// `(device, inode)`; `None`: not checked.
+    pub(crate) identity: Option<(u64, u64)>,
+}
+
+/// What a failure of Landlock is to the helper that is confined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Landlock {
+    /// It is a best effort: what the kernel cannot do is left undone, and the helper goes on (the HEIC and the thumbnail
+    /// helpers: they hold no repository's files, and the seccomp filter and the limits still apply).
+    BestEffort,
+    /// On a kernel that has Landlock, a ruleset that cannot be made or is not enforced at all is a failure (the git status
+    /// helper, whose reading is bounded by it): the helper exits without reading. A kernel without Landlock is the best effort
+    /// the parent logs once ([`note_kernel`]), and the filter is a read-only file system still.
+    Required,
+}
+
+/// [`confine`] with the memory bounded as `memory` says, and with Landlock allowing the read of the files below `readable`
+/// (`Some`: read only, nothing is written, created or removed) instead of nothing at all (`None`). A folder of `readable` that is
+/// not the one that was looked at (`Readable::identity`) always fails; `landlock` says what the other failures of Landlock are.
+pub(crate) fn confine_with(
+    memory: Memory,
+    filter: Filter,
+    readable: Option<&[Readable]>,
+    landlock: Landlock,
+) -> io::Result<()> {
+    let limited = match memory {
+        Memory::AddressSpace(bytes) => {
+            mapped_bytes("VmSize:").map(|mapped| lower_limit(Resource::As, mapped.saturating_add(bytes)))
+        }
+        Memory::Data(bytes) => {
+            mapped_bytes("VmData:").map(|mapped| lower_limit(Resource::Data, mapped.saturating_add(bytes)))
+        }
+    };
+    if let Some(Err(error)) = limited {
+        tracing::debug!(%error, "the memory of the helper is not limited");
     }
 
-    match deny_all() {
-        Ok(RulesetStatus::FullyEnforced) => {}
-        Ok(status) => tracing::debug!(?status, "the helper is only partly confined by Landlock"),
-        Err(error) => tracing::debug!(%error, "the helper is not confined by Landlock"),
+    let required = landlock == Landlock::Required && kernel::landlock_abi().is_some();
+    match deny_all(readable) {
+        Ok(RulesetStatus::FullyEnforced | RulesetStatus::PartiallyEnforced) => {}
+        Ok(RulesetStatus::NotEnforced) if required => {
+            return Err(io::Error::other("Landlock is on this kernel and was not enforced"));
+        }
+        Ok(status) => tracing::debug!(?status, "the helper is not confined by Landlock"),
+        Err(Fault::Swapped) => {
+            return Err(io::Error::other(
+                "a folder of the repository is not the one that was looked at",
+            ));
+        }
+        Err(Fault::Landlock(error)) if required => {
+            return Err(io::Error::other(format!("Landlock cannot confine the helper: {error}")));
+        }
+        Err(Fault::Landlock(error)) => tracing::debug!(%error, "the helper is not confined by Landlock"),
     }
 
     // The filter is the last thing set, so nothing above needs a call it refuses.
@@ -152,7 +248,7 @@ pub(in crate::view) fn confine(address_space: u64, filter: Filter) -> io::Result
 
 /// Fails unless the process has one thread: Landlock holds only the thread that sets it (the seccomp filter takes every
 /// thread), so a thread a plugin started before [`confine`] would be outside it. The helper calls this right before it.
-pub(in crate::view) fn single_threaded() -> io::Result<()> {
+pub(crate) fn single_threaded() -> io::Result<()> {
     // Unreadable `/proc` cannot show it: that fails too.
     let threads = std::fs::read_dir("/proc/self/task")?.count();
     if threads != 1 {
@@ -169,28 +265,59 @@ fn set_parent_process_death_signal(signal: Signal) -> io::Result<()> {
     Ok(rustix::process::set_parent_process_death_signal(Some(signal))?)
 }
 
-/// The size of the address space the process has mapped now (`VmSize` of `/proc/self/status`), in bytes.
-fn mapped_bytes() -> Option<u64> {
+/// The size of the memory the process has now, in bytes: the line `label` of `/proc/self/status` (`VmSize:` for the address
+/// space, `VmData:` for the data segment).
+fn mapped_bytes(label: &str) -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    let line = status.lines().find_map(|line| line.strip_prefix("VmSize:"))?;
+    let line = status.lines().find_map(|line| line.strip_prefix(label))?;
     let kib: u64 = line.trim().strip_suffix("kB")?.trim().parse().ok()?;
 
     kib.checked_mul(1024)
 }
 
-/// Landlock with everything handled and nothing allowed, for the calling thread and every thread it starts later (the
-/// helper decodes on its main thread, and the codecs' own threads are started from it after this).
-fn deny_all() -> Result<RulesetStatus, landlock::RulesetError> {
+/// Why [`deny_all`] did not make its ruleset.
+enum Fault {
+    /// A folder is not the one that was looked at.
+    Swapped,
+    Landlock(landlock::RulesetError),
+}
+
+impl From<landlock::RulesetError> for Fault {
+    fn from(error: landlock::RulesetError) -> Self {
+        Self::Landlock(error)
+    }
+}
+
+/// Landlock with everything handled and nothing allowed but the read of the files below `readable`, for the calling thread
+/// and every thread it starts later (the helper works on its main thread, and the threads it starts come from it after this).
+/// A folder that cannot be opened is left out: nothing is allowed there either. One that is opened is the folder that was looked
+/// at, or the whole ruleset is refused: the descriptor Landlock takes is `fstat`ed, so that it is the very folder allowed and not
+/// a path that leads elsewhere by the time it is opened.
+fn deny_all(readable: Option<&[Readable]>) -> Result<RulesetStatus, Fault> {
     // The newest ABI the crate knows (it includes `AccessFs::ResolveUnix` from ABI 9): a kernel that has less handles what
     // it knows (best effort, the crate's default).
     let abi = ABI::V10;
 
-    let status = Ruleset::default()
+    let mut ruleset = Ruleset::default()
         .handle_access(AccessFs::from_all(abi))?
         .handle_access(AccessNet::from_all(abi))?
         .scope(Scope::AbstractUnixSocket | Scope::Signal)?
-        .create()?
-        .restrict_self()?;
+        .create()?;
 
-    Ok(status.ruleset)
+    for folder in readable.unwrap_or_default() {
+        let Ok(fd) = PathFd::new(folder.path) else {
+            continue;
+        };
+        if let Some(identity) = folder.identity {
+            let stat = rustix::fs::fstat(&fd).map_err(|_| Fault::Swapped)?;
+
+            if (stat.st_dev as u64, stat.st_ino as u64) != identity {
+                return Err(Fault::Swapped);
+            }
+        }
+
+        ruleset = ruleset.add_rule(PathBeneath::new(fd, AccessFs::ReadFile | AccessFs::ReadDir))?;
+    }
+
+    Ok(ruleset.restrict_self()?.ruleset)
 }

@@ -8,8 +8,8 @@ import type { ExtraTarget } from './extras';
 import { Extras, MAX_NAMES } from './extras.svelte';
 
 const target = (name: string, folder = '/pics', picture = true): ExtraTarget => ({ key: `${folder}/${name}`, folder, name, picture });
-const pictures = (...list: string[]) => ({ dimensions: list.map((name) => target(name)), checksums: [] });
-const files = (...list: string[]) => ({ dimensions: [], checksums: list.map((name) => target(name)) });
+const pictures = (...list: string[]) => ({ dimensions: list.map((name) => target(name)), checksums: [], git: [], reloads: 0 });
+const files = (...list: string[]) => ({ dimensions: [], checksums: list.map((name) => target(name)), git: [], reloads: 0 });
 
 type Ask = { path: string; name?: string; names?: string[] };
 
@@ -83,7 +83,7 @@ describe('Extras: dimensions', () => {
   it('makes one request for each folder (the items of a search result are in several), two at a time', async () => {
     const { out, answer } = held();
     const { extras, batches } = world((_, { path }) => answer(path));
-    const mixed = { dimensions: [target('a.jpg', '/a'), target('b.jpg', '/b'), target('c.jpg', '/a'), target('d.jpg', '/d')], checksums: [] };
+    const mixed = { dimensions: [target('a.jpg', '/a'), target('b.jpg', '/b'), target('c.jpg', '/a'), target('d.jpg', '/d')], checksums: [], git: [], reloads: 0 };
 
     extras.want(mixed);
     await settled();
@@ -121,7 +121,7 @@ describe('Extras: dimensions', () => {
     await settled();
     expect(batches()).toHaveLength(1);
 
-    extras.want({ dimensions: [{ ...target('a.jpg'), key: 'changed' }], checksums: [] });
+    extras.want({ dimensions: [{ ...target('a.jpg'), key: 'changed' }], checksums: [], git: [], reloads: 0 });
     await settled();
     expect(batches()).toHaveLength(2);
   });
@@ -145,10 +145,10 @@ describe('Extras: dimensions', () => {
     const { out, answer } = held();
     const { extras, batches } = world((_, { path }) => answer(path));
 
-    extras.want({ dimensions: [target('a.jpg', '/a'), target('b.jpg', '/b')], checksums: [] });
+    extras.want({ dimensions: [target('a.jpg', '/a'), target('b.jpg', '/b')], checksums: [], git: [], reloads: 0 });
     await settled();
-    extras.want({ dimensions: [target('x.jpg', '/x'), target('y.jpg', '/y')], checksums: [] });
-    extras.want({ dimensions: [target('y.jpg', '/y')], checksums: [] }); // x is gone before its turn
+    extras.want({ dimensions: [target('x.jpg', '/x'), target('y.jpg', '/y')], checksums: [], git: [], reloads: 0 });
+    extras.want({ dimensions: [target('y.jpg', '/y')], checksums: [], git: [], reloads: 0 }); // x is gone before its turn
     out.get('/a')?.resolve([dims(7, 7)]);
     await settled();
 
@@ -363,7 +363,7 @@ describe('Extras: checksums', () => {
       return HEX;
     });
 
-    extras.want({ dimensions: [target('a.jpg')], checksums: [target('b.bin')] });
+    extras.want({ dimensions: [target('a.jpg')], checksums: [target('b.bin')], git: [], reloads: 0 });
     await settled();
     await vi.advanceTimersByTimeAsync(300);
 

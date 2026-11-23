@@ -12,7 +12,7 @@ mod unix {
 
     use pretty_assertions::assert_eq;
 
-    use crate::process::{Exit, Wait, command, stop, wait_for, wait_for_exit};
+    use crate::process::{Exit, Wait, command, limit_for, stop, wait_for, wait_for_exit};
 
     /// What `/usr/bin/env` prints when started like a child (so only what the child is given).
     fn environment(kept: &[&str]) -> String {
@@ -21,6 +21,21 @@ mod unix {
             .expect("env runs");
 
         String::from_utf8_lossy(&output.stdout).replace('\0', "\n")
+    }
+
+    #[test]
+    fn the_hard_limit_on_processor_time_is_a_second_above_the_soft_one_and_the_others_are_equal() {
+        use rustix::process::Resource;
+
+        // The signal of the soft limit (`SIGXCPU`) is what ends a process, and not the `SIGKILL` of a hard limit that is the same.
+        let cpu = limit_for(Resource::Cpu, 6);
+        assert_eq!((cpu.current, cpu.maximum), (Some(6), Some(7)));
+
+        for resource in [Resource::Nofile, Resource::Core, Resource::Data] {
+            let limit = limit_for(resource, 6);
+
+            assert_eq!((limit.current, limit.maximum), (Some(6), Some(6)));
+        }
     }
 
     #[test]
@@ -149,4 +164,13 @@ fn a_thread_that_does_not_end_is_left_behind_and_one_that_ends_is_joined() {
     drop(stop);
 
     assert_eq!(join_within(std::thread::spawn(|| 7), Duration::from_secs(5)), Some(7));
+}
+
+#[cfg(windows)]
+#[test]
+fn a_child_starts_in_the_system_folder_and_not_in_the_apps_own() {
+    let command = super::command(std::path::Path::new("tool.exe"), [""; 0], &[]);
+    let system = std::env::var_os("SystemRoot");
+
+    assert_eq!(command.get_current_dir(), system.as_deref().map(std::path::Path::new));
 }

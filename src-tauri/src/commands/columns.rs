@@ -1,6 +1,8 @@
-//! The extra columns of the detailed view: `columns_dimensions` (the size of the pictures in view) and `columns_checksum`
-//! (the SHA-256 of one file). The reading is `pairpane_core::view::columns` (see its module docs for why a size is read
-//! in the app's own process and what bounds it); this module is what stands around that.
+//! The extra columns of the detailed view: `columns_dimensions` (the size of the pictures in view), `columns_checksum`
+//! (the SHA-256 of one file) and `columns_git` (the git status of the entries of the folder). The reading is
+//! `pairpane_core::view::columns` (see its module docs for why a size is read in the app's own process and what bounds it)
+//! and `pairpane_core::gitstatus` (see its module docs for why reading a repository's status starts nothing it names);
+//! this module is what stands around those.
 //!
 //! - What the page sent is checked before a thread is taken: the folder passes `resolve`, a call has at most
 //!   [`MAX_NAMES`] names, and a checksum's name is one plain name (`check_name`) that fits. A name of a batch that is not
@@ -17,15 +19,36 @@
 //!   file never fails the batch.
 //! - A checksum is refused as `invalidInput` with a fixed text when the file is over the cap, and as `notFound` or `io`
 //!   by the viewer's texts (`view_error`) for the other failures. No text sent to the page holds a path.
-//! - [`Columns::shut_down`] raises the flag both watch, as the app exits: a checksum stops between its chunks and a batch
-//!   between its files, and none starts after.
+//! - A git status is up to [`GIT_THREADS`] at once, and `busy` when they are taken. It is bounded by `Limits` (5 seconds and
+//!   200,000 entries): a repository that is over the entries is `invalidInput` ("the repository is too big to read here"),
+//!   one that takes the time is `invalidInput` too ("the repository took too long to read"), and a folder that is in no
+//!   repository (or in one that must not be read: a pointer to a network place, a link or a pipe where a file is expected, a
+//!   format that is not read) is `repo: false`, not an error. A folder that cannot be resolved is `notFound` or `io`, never
+//!   `invalidInput`. The texts hold no path.
+//! - A git status is read by a helper process, a short-lived child of the app's own executable that is confined (see
+//!   `pairpane_core::gitstatus`), and the request waits for it on its blocking thread, which holds its place of the
+//!   [`GIT_THREADS`] until the child has ended. At the deadline (the time limit and a short grace) the child is killed and the
+//!   request answers as for the time limit, so no status ever holds a thread, a processor or memory past it: there is nothing
+//!   that is left running and counted as stuck. [`Columns::shut_down`] kills the children that run.
+//! - Git status is not available on Windows yet: `columns_git` answers `unsupported` ("Git status is not available on Windows
+//!   yet") at once there, without starting a helper or touching the repository. The helper there has a Job Object's memory
+//!   limit and nothing that confines what it reads, so any gap in the checks the parent makes of a repository's pointers would
+//!   let a hostile repository make the system connect to a host of its choosing and hand it the user's credentials (SMB/NTLM).
+//!   Linux and macOS confine the helper, and have the column.
+//! - A repository that is refused for what it names (a link or a reparse point where git's own files are, a pointer to a place
+//!   that is not local, an object folder that holds anything but plain files, a repository of another user, a folder that is too
+//!   broad to read) is `repo: false` with a `note`, a fixed text for the page to show where the column is blank.
+//! - [`Columns::shut_down`] raises the flag all of them watch, as the app exits: a checksum stops between its chunks, a
+//!   batch between its files and a git status at once (its child is killed), and none starts after.
 
 use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use pairpane_core::gitstatus::{self, GitError, Limits};
 use pairpane_core::listing::platform;
-use pairpane_core::model::{Dimensions, IpcErrorCode};
+use pairpane_core::model::{Dimensions, GitStatus, IpcErrorCode};
 use pairpane_core::ops::name_fits;
 use pairpane_core::view::columns as read;
 use tauri::State;
@@ -34,9 +57,11 @@ use super::items::{begin, blocking};
 use super::limit::ThreadCap;
 use super::ops::{check_name, names_too_large};
 use super::panes::resolve;
-use super::view::view_error;
+use super::view::{read::helper_program, view_error};
 use crate::error::{CommandError, CommandResult};
 
+#[cfg(test)]
+mod git_tests;
 #[cfg(test)]
 mod tests;
 
@@ -49,11 +74,15 @@ const SIZE_THREADS: usize = 4;
 /// Checksums computed at once: each reads a file of up to 64 MiB.
 const HASH_THREADS: usize = 2;
 
+/// Git statuses read at once: each walks the folder's subtree of a repository, up to the cap on entries.
+const GIT_THREADS: usize = 2;
+
 /// The caps on the blocking threads and the flag that stops them when the app exits.
 #[derive(Default)]
 pub struct Columns {
     sizes: ThreadCap,
     hashes: ThreadCap,
+    statuses: ThreadCap,
     cancel: Arc<AtomicBool>,
 }
 
@@ -100,6 +129,51 @@ impl Columns {
         sizes.map_err(|error| view_error(&error))
     }
 
+    /// The git status of the entries of the folder `path`, bounded by `limits`, read by the helper `program` (the app itself).
+    async fn git(&self, path: String, limits: Limits, program: PathBuf) -> CommandResult<GitStatus> {
+        self.git_with(path, limits, move |folder, limits, cancel| {
+            gitstatus::status(folder, limits, cancel, &program)
+        })
+        .await
+    }
+
+    /// [`Self::git`] with the helper the app itself is, or the refusal where the column is not available (`windows`: this is
+    /// Windows; a parameter so that the refusal is tried on every system).
+    async fn git_on(&self, windows: bool, path: String) -> CommandResult<GitStatus> {
+        if windows {
+            return Err(git_unsupported());
+        }
+
+        // The helper is the app itself. Not being able to tell where it is is not a missing file.
+        let program = helper_program().map_err(|error| view_error(&io::Error::other(error)))?;
+
+        self.git(path, Limits::default(), program).await
+    }
+
+    /// Like [`Self::git`], with the status read by `read`, which is bounded by its limits and ends by the deadline of its own
+    /// (the helper is killed then).
+    async fn git_with(
+        &self,
+        path: String,
+        limits: Limits,
+        read: impl FnOnce(&Path, Limits, &AtomicBool) -> Result<GitStatus, GitError> + Send + 'static,
+    ) -> CommandResult<GitStatus> {
+        let folder = resolve(Some(path), None)?;
+        let permit = self.statuses.acquire(GIT_THREADS).ok_or_else(git_busy)?;
+        let cancel = Arc::clone(&self.cancel);
+
+        // The wait for the helper is on a blocking thread that holds the place until the helper has ended, which is at the
+        // deadline at the latest.
+        let status = blocking(permit, move || {
+            let folder = platform::local_path(&folder).map_err(|error| GitError::Folder(error.kind()))?;
+
+            read(&folder, limits, &cancel)
+        })
+        .await?;
+
+        status.map_err(|error| git_error(&error))
+    }
+
     /// The SHA-256 of the file `name` of the folder `path`, as lowercase hex.
     async fn checksum(&self, path: String, name: String) -> CommandResult<String> {
         let folder = resolve(Some(path), None)?;
@@ -127,6 +201,22 @@ fn checked(folder: &std::path::Path, name: &str) -> CommandResult<()> {
     check_name(folder, name)
 }
 
+/// What the page is told of a status that could not be given: the text of the error, which holds no path.
+fn git_error(error: &GitError) -> CommandError {
+    // `invalidInput` is for a repository that cannot be read here for its size or its time, and for nothing else.
+    let code = match error {
+        GitError::TooBig | GitError::TimedOut => IpcErrorCode::InvalidInput,
+        GitError::Folder(io::ErrorKind::NotFound) => IpcErrorCode::NotFound,
+        GitError::Cancelled | GitError::Folder(_) | GitError::Repository => IpcErrorCode::Io,
+    };
+
+    CommandError::new(code, error.to_string())
+}
+
+fn git_busy() -> CommandError {
+    CommandError::new(IpcErrorCode::Busy, "git statuses are being read; try again shortly")
+}
+
 fn busy() -> CommandError {
     CommandError::new(IpcErrorCode::Busy, "checksums are being computed; try again shortly")
 }
@@ -144,10 +234,35 @@ pub async fn columns_dimensions(
     columns.dimensions(path, names).await
 }
 
+/// The text of the answer that there is no git status on this system (see the module docs).
+const GIT_UNSUPPORTED: &str = "Git status is not available on Windows yet";
+
+/// What `columns_git` answers where the git status column is not available: `unsupported`, at once, whatever the path is.
+fn git_unsupported() -> CommandError {
+    CommandError::new(IpcErrorCode::Unsupported, GIT_UNSUPPORTED)
+}
+
 /// The SHA-256 of the file `name` of the folder `path` as lowercase hex. `invalidInput` ("the file is too big to checksum
 /// here") for a file over 64 MiB, `invalidInput` ("the file is not on this computer") for a cloud placeholder, and
 /// `invalidInput` for anything that is not a regular file, `busy` when two checksums are already being computed.
 #[tauri::command]
 pub async fn columns_checksum(columns: State<'_, Columns>, path: String, name: String) -> CommandResult<String> {
     columns.checksum(path, name).await
+}
+
+/// The git status of the direct children of the folder `path`: `repo` says whether the folder is in the work tree of a git
+/// repository (`false`: no marks), and `marks` has an entry for each child that is `modified`, `staged`, `untracked`,
+/// `ignored` or `conflicted`; a folder has the most severe mark of anything below it (`conflicted`, `modified`, `staged`,
+/// `untracked`), and is `ignored` only when it is itself. The repository is read in a confined helper process (read-only
+/// access to its own folders, a limit on memory and time), and nothing it names (a filter, a hook, `core.fsmonitor`, a
+/// credential helper) is ever started; a repository that points to a network place, has a link, a pipe or a device where a
+/// file is expected, or is of a format that is not read, is `repo: false`. `invalidInput` ("the repository is too big to
+/// read here") when a step of it walks over 200,000 entries or it has an index over 64 MiB or rules over their size,
+/// `invalidInput` ("the repository took too long to read") when it takes over 5 seconds (the helper is killed then), and
+/// `busy` when two statuses are already being read. A repository that is refused for what it names is `repo: false` with a `note`.
+/// On Windows it is `unsupported` ("Git status is not available on Windows yet") at once, with no helper started and nothing
+/// of the repository touched.
+#[tauri::command]
+pub async fn columns_git(columns: State<'_, Columns>, path: String) -> CommandResult<GitStatus> {
+    columns.git_on(cfg!(windows), path).await
 }

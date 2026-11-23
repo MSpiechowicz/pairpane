@@ -61,6 +61,23 @@ describe('Listing', () => {
     expect(calls).toEqual(['start', 'done', 'reload', 'done', 'start']);
   });
 
+  it('counts the times the folder shown is listed again, and not the times another folder is', async () => {
+    const backend = fakeBackend();
+    const listing = new Listing(backend.ipc, 'left');
+
+    await listing.open('/a');
+    backend.last().emit(start(0, '/a'));
+    expect(listing.reloads).toBe(0);
+
+    await listing.reload();
+    backend.last().emit(start(0, '/a'));
+    expect(listing.reloads).toBe(1);
+
+    await listing.open('/b');
+    backend.last().emit(start(0, '/b'));
+    expect(listing.reloads).toBe(1);
+  });
+
   it('drops events of an earlier open', async () => {
     const backend = fakeBackend();
     const listing = new Listing(backend.ipc, 'left');

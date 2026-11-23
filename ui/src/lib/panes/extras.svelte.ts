@@ -1,10 +1,19 @@
-import { SvelteMap } from 'svelte/reactivity';
-
 import type { Dimensions } from '$lib/ipc/bindings/Dimensions';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
 
-import { type Cell, type Checksum, checksumCell, dimensionsCell, type ExtraTarget, type ExtraWants, pixelsOf } from './extras';
-import { Lane } from './extrasLane';
+import {
+  type Cell,
+  type Checksum,
+  checksumCell,
+  dimensionsCell,
+  type ExtraTarget,
+  type ExtraWants,
+  type GitPlace,
+  pixelsOf,
+} from './extras';
+import { Lane, Wake } from './extrasLane';
+import { GitFolders } from './git.svelte';
+import { Kept } from './kept.svelte';
 import type { ExtraColumn } from './order';
 
 /** How many names one request for dimensions holds at the most (the backend refuses more). */
@@ -20,51 +29,8 @@ const FAILED_WAIT_MS = 10_000;
 export interface ExtraOptions {
   max?: number;
   checksums?: number;
-}
-
-/** A cache of a bounded size: when it is full the least recently wanted value goes. Reactive, so a cell shows its value on arrival. */
-class Kept<T> {
-  readonly #values = new SvelteMap<string, T>();
-  /** The keys of `#values`, the least recently wanted first. */
-  readonly #recent = new Map<string, true>();
-  readonly #max: number;
-
-  constructor(max: number) {
-    this.#max = max;
-  }
-
-  get(key: string): T | undefined {
-    return this.#values.get(key);
-  }
-
-  /** Whether `key` is kept; if it is, it is now the most recently wanted. Not reactive. */
-  wanted(key: string): boolean {
-    if (!this.#recent.has(key)) {
-      return false;
-    }
-
-    this.#touch(key);
-    return true;
-  }
-
-  set(key: string, value: T) {
-    this.#values.set(key, value);
-    this.#touch(key);
-
-    for (const oldest of this.#recent.keys()) {
-      if (this.#recent.size <= this.#max) {
-        break;
-      }
-
-      this.#recent.delete(oldest);
-      this.#values.delete(oldest);
-    }
-  }
-
-  #touch(key: string) {
-    this.#recent.delete(key);
-    this.#recent.set(key, true);
-  }
+  /** How long what git said about a folder holds, in milliseconds. */
+  gitTtl?: number;
 }
 
 /**
@@ -76,9 +42,12 @@ class Kept<T> {
  * answer is kept in a bounded cache until it is the least recently wanted. A file that has no checksum (too big, not on
  * this computer) or no dimensions is kept as such, so it is not asked for again until it changes. A request that fails
  * for a passing reason is not kept: its files wait a while and are asked for again if still wanted. Nothing is asked for
- * inside an archive.
+ * inside an archive. The git status of the folders in view is {@link git}'s (it asks a folder at a time).
  */
 export class Extras {
+  /** The git status of the folders the pane shows items of. */
+  readonly git: GitFolders;
+
   readonly #dimensions: Kept<Dimensions | null>;
   readonly #checksums: Kept<Checksum>;
   readonly #dimensionLane = new Lane(DIMENSION_BATCHES);
@@ -86,29 +55,37 @@ export class Extras {
   /** What is asked for, in the order to ask: what the pane wants that is not kept yet. */
   #dimensionQueue: readonly ExtraTarget[] = [];
   #checksumQueue: readonly ExtraTarget[] = [];
-  /** Set while a lane waits for its time, with the time it is set for. */
-  #wait: ReturnType<typeof setTimeout> | undefined;
-  #waitUntil = 0;
+  /** Looks at the queues again when a lane that waits has its time. */
+  readonly #wake = new Wake(() => this.#pump());
 
   readonly #ipc: Transport;
 
-  constructor(ipc: Transport, { max = MAX_KEPT, checksums = CHECKSUMS }: ExtraOptions = {}) {
+  constructor(ipc: Transport, { max = MAX_KEPT, checksums = CHECKSUMS, gitTtl }: ExtraOptions = {}) {
     this.#ipc = ipc;
+    this.git = new GitFolders(ipc, { ttl: gitTtl });
     this.#dimensions = new Kept(max);
     this.#checksums = new Kept(max);
     this.#checksumLane = new Lane(checksums);
   }
 
-  /** What the cells of `target` show: nothing for a value that has not arrived (or does not exist for it). */
-  cells(target: ExtraTarget | undefined): Record<ExtraColumn, Cell> {
+  /**
+   * What the cells of an item show: nothing for a value that has not arrived (or does not exist for it). `target` is the
+   * item as a file, `place` as anything that has a git status.
+   */
+  cells(target: ExtraTarget | undefined, place?: GitPlace): Record<ExtraColumn, Cell> {
     return {
       dimensions: dimensionsCell(target, target && this.#dimensions.get(target.key)),
       checksum: checksumCell(target, target && this.#checksums.get(target.key)),
+      git: this.git.cell(place),
     };
   }
 
-  /** What a sort by `column` goes by for `target`; `undefined` while that is not known (and for a file with none). */
-  sortKey(column: ExtraColumn, target: ExtraTarget | undefined): number | string | undefined {
+  /** What a sort by `column` goes by for an item (see {@link cells}); `undefined` while that is not known (and for an item with none). */
+  sortKey(column: ExtraColumn, target: ExtraTarget | undefined, place?: GitPlace): number | string | undefined {
+    if (column === 'git') {
+      return this.git.severity(place);
+    }
+
     if (target === undefined) {
       return undefined;
     }
@@ -125,9 +102,10 @@ export class Extras {
    * Sets what the pane wants now, the most wanted first. What it wanted before and has not been asked for yet is
    * dropped; a request already out is let be, and its answer kept. What is kept already is not asked for again.
    */
-  want({ dimensions, checksums }: ExtraWants) {
+  want({ dimensions, checksums, git, reloads }: ExtraWants) {
     const now = Date.now();
 
+    this.git.want(git, reloads);
     this.#dimensionQueue = dimensions.filter((target) => !this.#dimensions.wanted(target.key));
     this.#checksumQueue = checksums.filter((target) => !this.#checksums.wanted(target.key));
     this.#dimensionLane.retarget(this.#dimensionQueue, now);
@@ -141,94 +119,23 @@ export class Extras {
 
     // A lane that waits for its time: the queues are looked at again then.
     if (next.length > 0) {
-      this.#wakeAt(Math.min(...next), now);
+      this.#wake.at(Math.min(...next), now);
+    } else {
+      this.#wake.clear();
     }
-  }
-
-  /**
-   * The files of `queue` that may be asked about now (not out, not waiting for their time), and when the first of the
-   * others may be.
-   */
-  #due(queue: readonly ExtraTarget[], lane: Lane, now: number): { due: ExtraTarget[]; next: number | undefined } {
-    const due: ExtraTarget[] = [];
-    let next: number | undefined;
-
-    for (const target of queue) {
-      const after = lane.notBefore(target.key, now);
-      if (lane.flying.has(target.key)) {
-        continue;
-      }
-
-      if (after === undefined) {
-        due.push(target);
-      } else {
-        next = Math.min(next ?? after, after);
-      }
-    }
-
-    return { due, next };
   }
 
   /** Sends the next batches (one folder's pictures each); returns when to look again if the lane is waiting with work to do. */
   #askDimensions(now: number): number | undefined {
-    const lane = this.#dimensionLane;
-    let next: number | undefined;
-
-    while (lane.free) {
-      const queued = this.#due(this.#dimensionQueue, lane, now);
-      next = queued.next;
-      if (queued.due.length === 0) {
-        return next;
-      }
-
-      if (lane.waits(now) > 0) {
-        return Math.min(next ?? Infinity, now + lane.waits(now));
-      }
-
-      const folder = queued.due[0].folder;
-      void this.#loadDimensions(queued.due.filter((target) => target.folder === folder).slice(0, MAX_NAMES));
-    }
-
-    return next;
+    return this.#dimensionLane.drain(this.#dimensionQueue, now, (due) => {
+      const folder = due[0].folder;
+      void this.#loadDimensions(due.filter((target) => target.folder === folder).slice(0, MAX_NAMES));
+    });
   }
 
   /** Sends the checksums that can go; returns when to look again if the lane is waiting with work to do. */
   #askChecksums(now: number): number | undefined {
-    const lane = this.#checksumLane;
-    let next: number | undefined;
-
-    while (lane.free) {
-      const queued = this.#due(this.#checksumQueue, lane, now);
-      next = queued.next;
-      if (queued.due.length === 0) {
-        return next;
-      }
-
-      if (lane.waits(now) > 0) {
-        return Math.min(next ?? Infinity, now + lane.waits(now));
-      }
-
-      void this.#loadChecksum(queued.due[0]);
-    }
-
-    return next;
-  }
-
-  /** Looks at the queues again at `time`; a look that is set for later is moved up. */
-  #wakeAt(time: number, now: number) {
-    if (this.#wait !== undefined) {
-      if (this.#waitUntil <= time) {
-        return;
-      }
-
-      clearTimeout(this.#wait);
-    }
-
-    this.#waitUntil = time;
-    this.#wait = setTimeout(() => {
-      this.#wait = undefined;
-      this.#pump();
-    }, time - now);
+    return this.#checksumLane.drain(this.#checksumQueue, now, (due) => void this.#loadChecksum(due[0]));
   }
 
   /**

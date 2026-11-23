@@ -105,6 +105,7 @@ fn the_preferences_come_back_and_an_update_without_them_keeps_the_stored_ones() 
         show_ext: false,
         show_dimensions: true,
         show_checksum: true,
+        show_git: true,
         confirm_trash: false,
         ..Preferences::default()
     };
@@ -167,10 +168,10 @@ fn preferences_that_cannot_be_read_take_their_defaults_and_never_lose_the_rest_o
     );
     assert_eq!(broken.hotlist, state().hotlist);
 
-    let columns = with(serde_json::json!({ "showDimensions": true, "showChecksum": "yes" }));
+    let columns = with(serde_json::json!({ "showDimensions": true, "showChecksum": "yes", "showGit": "yes" }));
     let columns = columns.preferences.expect("read");
     assert!(
-        columns.show_dimensions && !columns.show_checksum,
+        columns.show_dimensions && !columns.show_checksum && !columns.show_git,
         "the extra columns are off unless the file turns them on"
     );
 

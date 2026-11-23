@@ -16,6 +16,7 @@ import type { ExternalEdit } from './bindings/ExternalEdit';
 import type { FindEvent } from './bindings/FindEvent';
 import type { FindId } from './bindings/FindId';
 import type { FindQuery } from './bindings/FindQuery';
+import type { GitStatus } from './bindings/GitStatus';
 import type { ItemProperties } from './bindings/ItemProperties';
 import type { JobId } from './bindings/JobId';
 import type { JobTask } from './bindings/JobTask';
@@ -131,6 +132,7 @@ export const commands = {
   thumb_get: cmd<{ path: string; name: string; size: number }, ArrayBuffer>(),
   columns_dimensions: cmd<{ path: string; names: string[] }, (Dimensions | null)[]>(),
   columns_checksum: cmd<{ path: string; name: string }, string>(),
+  columns_git: cmd<{ path: string }, GitStatus>(),
   view_text: cmd<{ session: number; query: TextQuery }, TextWindow>(),
   view_search: cmd<{ session: number; query: SearchQuery; onProgress: EventSink<number> }, SearchHit | null>(),
   view_search_cancel: cmd<{ session: number }, null>(),

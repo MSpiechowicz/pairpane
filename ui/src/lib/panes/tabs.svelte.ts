@@ -2,7 +2,7 @@ import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import type { SavedTab } from '$lib/ipc/bindings/SavedTab';
 import type { Transport } from '$lib/ipc/transport';
 
-import { extraTargetOf } from './extras';
+import { extraTargetOf, gitPlaceOf } from './extras';
 import { Extras } from './extras.svelte';
 import type { Layout } from './layout';
 import type { SortColumn } from './order';
@@ -50,7 +50,7 @@ export class PaneTabs {
   readonly view: PaneView;
   /** The thumbnails the pane shows in its thumbnails layout; they outlive a change of folder or tab (a tab brings its folder back). */
   readonly thumbs: Thumbs;
-  /** The values of the extra columns (dimensions, checksum) the pane shows in its detailed layout; kept like the thumbnails. */
+  /** The values of the extra columns (dimensions, checksum, git status) the pane shows in its detailed layout; kept like the thumbnails. */
   readonly extras: Extras;
 
   /** Plain array (not proxied); readers track `#revision`, bumped on every change. */
@@ -77,7 +77,7 @@ export class PaneTabs {
     this.thumbs = new Thumbs(ipc);
     this.extras = new Extras(ipc);
     this.view = new PaneView(ipc, pane, {
-      extraOf: (entry, column) => this.extras.sortKey(column, extraTargetOf(this.view.listing, entry)),
+      extraOf: (entry, column) => this.extras.sortKey(column, extraTargetOf(this.view.listing, entry), gitPlaceOf(this.view.listing, entry)),
       onOpen: () => {
         this.#pending = undefined;
         this.#route = undefined;

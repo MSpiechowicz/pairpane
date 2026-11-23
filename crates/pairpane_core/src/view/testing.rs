@@ -101,9 +101,15 @@ pub(crate) struct Probe {
 /// set, the test is to confine its process and print one line that starts with `PROBE `. (Confining the process of the
 /// test itself would confine the other tests with it.)
 pub(crate) fn run_probe(variable: &str, test: &str) -> Probe {
+    run_probe_with(variable, "1", test)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// Like [`run_probe`], with `value` for the variable, for a probe that is told something (a folder it is to use).
+pub(crate) fn run_probe_with(variable: &str, value: &str, test: &str) -> Probe {
     let output = std::process::Command::new(std::env::current_exe().expect("the test program"))
         .args(["--exact", test, "--nocapture", "--test-threads=1"])
-        .env(variable, "1")
+        .env(variable, value)
         .output()
         .expect("the probe starts");
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();

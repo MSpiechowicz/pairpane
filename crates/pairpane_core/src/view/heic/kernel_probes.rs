@@ -154,3 +154,35 @@ pub(super) fn mprotect_exec_errno() -> i32 {
         errno
     }
 }
+
+/// The error numbers of what [`Filter::ReadOnly`](super::kernel::Filter::ReadOnly) refuses and Landlock does not stop, for the
+/// tests: a request to a terminal that pushes input (`TIOCSTI`, asked of the open file `fd`: it is refused before it is asked
+/// whether `fd` is a terminal), a lock (`flock`), an attribute set by `setxattrat`, a call no list knows (a number above the
+/// highest that was reviewed), and then a question the filter lets through (`FIONREAD`: any error but `EPERM`, or `0`).
+pub(crate) fn read_only_errnos(fd: libc::c_int) -> [i32; 5] {
+    let errno = |result: i64| {
+        if result < 0 {
+            io::Error::last_os_error().raw_os_error().unwrap_or(-1)
+        } else {
+            0
+        }
+    };
+
+    let byte = b'x';
+    // SAFETY: `ioctl` with `TIOCSTI` reads one byte at the address it is given, which lives through the call; the filter or
+    // the kernel refuses it for a descriptor that is no terminal.
+    let tiocsti = errno(i64::from(unsafe { libc::ioctl(fd, libc::TIOCSTI, &raw const byte) }));
+    // SAFETY: `flock` takes the descriptor and an operation by value and touches no memory.
+    let flock = errno(i64::from(unsafe { libc::flock(fd, libc::LOCK_SH | libc::LOCK_NB) }));
+    // SAFETY: `setxattrat` (463) with every argument zero reads nothing, as the kernel refuses it for its bad descriptor and
+    // flags at the latest; the filter answers first.
+    let xattr = errno(unsafe { libc::syscall(463, 0, 0, 0, 0, 0, 0) });
+    // SAFETY: a call number that no kernel has, with nothing in its arguments: the filter answers `EPERM`, the kernel `ENOSYS`.
+    let unknown = errno(unsafe { libc::syscall(9_999) });
+
+    let mut waiting: libc::c_int = 0;
+    // SAFETY: `ioctl` with `FIONREAD` writes one `int` at the address it is given, which lives through the call.
+    let fionread = errno(i64::from(unsafe { libc::ioctl(fd, libc::FIONREAD, &raw mut waiting) }));
+
+    [tiocsti, flock, xattr, unknown, fionread]
+}

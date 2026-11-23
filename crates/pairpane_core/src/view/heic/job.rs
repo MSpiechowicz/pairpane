@@ -45,7 +45,7 @@ const UI_LIMITS: u32 = JOB_OBJECT_UILIMIT_HANDLES
 /// Creates the job with its limits, `memory` bytes of committed memory for a process in it (see `process::MEMORY` for the
 /// HEIC helper, and `view::thumb` for the thumbnail helper's), and puts `child` in it. The job must be kept until the
 /// child is reaped; dropping it ends every process still in it (the kill-on-close limit).
-pub(super) fn contain(child: &Child, memory: usize) -> io::Result<Job> {
+pub(crate) fn contain(child: &Child, memory: usize) -> io::Result<Job> {
     let job = limited(memory)?;
     job.assign(child)?;
 

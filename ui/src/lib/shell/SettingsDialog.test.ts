@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/svelte';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Preferences as Saved } from '$lib/ipc/bindings/Preferences';
 
@@ -47,6 +47,7 @@ const CHECKBOXES: [string, string, keyof Saved][] = [
   ['Columns', 'Modified', 'showModified'],
   ['Columns', 'Dimensions', 'showDimensions'],
   ['Columns', 'Checksum', 'showChecksum'],
+  ['Columns', 'Git status', 'showGit'],
   ['Files', 'Show hidden files', 'showHidden'],
   ['Confirmations', 'Ask before moving to the Trash', 'confirmTrash'],
   ['Confirmations', 'Ask for the target folder when copying or moving', 'confirmTransfer'],
@@ -143,5 +144,37 @@ describe('SettingsDialog', () => {
     await fireEvent.keyDown(window, { key: 'Escape' });
 
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('the Git status column on Windows', () => {
+  const WINDOWS = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)';
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('is a box that cannot be changed, with the reason beside it, and unchecked even where the preference was saved on', async () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(WINDOWS);
+    const preferences = new Preferences();
+    preferences.set({ showGit: true });
+    render(SettingsDialog, { preferences, onEditSettings: vi.fn(), onClose: vi.fn() });
+
+    const columns = within(group('Columns'));
+    const box = columns.getByRole('checkbox', { name: 'Git status' });
+
+    expect(box).toBeDisabled();
+    expect(box).not.toBeChecked();
+    expect(columns.getByText('Git status is not available on Windows yet.')).toBeInTheDocument();
+    await fireEvent.click(box);
+    expect(preferences.value.showGit).toBe(true);
+    // The other columns are as they were.
+    expect(columns.getByRole('checkbox', { name: 'Checksum' })).toBeEnabled();
+  });
+
+  it('is an ordinary box elsewhere, with no note', () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (X11; Linux x86_64)');
+    open();
+
+    expect(within(group('Columns')).getByRole('checkbox', { name: 'Git status' })).toBeEnabled();
+    expect(screen.queryByText(/not available on Windows/)).not.toBeInTheDocument();
   });
 });

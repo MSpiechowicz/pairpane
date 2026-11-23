@@ -11,6 +11,7 @@ export const DEFAULT_PREFERENCES: Readonly<Saved> = {
   showModified: true,
   showDimensions: false,
   showChecksum: false,
+  showGit: false,
   showHidden: false,
   confirmTrash: true,
   confirmTransfer: true,
