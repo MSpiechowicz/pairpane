@@ -145,6 +145,7 @@ mod sync;
 mod sync_archive;
 mod sync_remove;
 mod sync_terms;
+mod sync_unlink;
 #[cfg(unix)]
 mod sync_write;
 mod task;
@@ -250,7 +251,7 @@ mod sync_archive_tests;
 mod sync_race_tests;
 #[cfg(test)]
 mod sync_refusal_tests;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod sync_remove_link_tests;
 #[cfg(test)]
 mod sync_remove_tests;

@@ -26,6 +26,10 @@
 //! removal never enters a mounted volume or a link): a folder swapped in between is the race the other Windows jobs
 //! document.
 //!
+//! A file with another link elsewhere shares its change time with that link: removing one moves the time of the other, so
+//! an item that is another link to a file removed before it (in this job, or by its copies) is kept. Inside one folder
+//! deleted for good the walk knows the links it removed itself and looks only at their modification time.
+//!
 //! The side's folder itself is found by its path when the removals start, as it is for the copies: a folder swapped for a
 //! link to another one since the scan is entered (what is in it must still match the scan item by item). The last look and
 //! the removal are two steps: an item swapped for another inside its folder in between still goes.
@@ -45,7 +49,7 @@ use super::transfer::{MAX_DEPTH, Run, Stop};
 use super::trash;
 
 /// What the refusal of a folder that holds a mounted drive says. It holds no path.
-const HOLDS_A_MOUNT: &str = "contains a mounted drive or volume; unmount or delete it separately";
+pub(super) const HOLDS_A_MOUNT: &str = "contains a mounted drive or volume; unmount or delete it separately";
 
 /// One removal of the job: the item's path, what the scan saw of it, the folder of its side, and the folder of the other
 /// side (the source of the mirror) when that is a folder on disk.
@@ -163,7 +167,9 @@ impl Run<'_> {
                 },
             };
 
-            let done = self.remove_item(&roots[index], removal, permanent, archive.as_ref());
+            let done = self
+                .remove_item(&roots[index], removal, permanent, archive.as_ref())
+                .map_err(too_many_open);
             self.settle(removal.rel, done)?;
         }
 
@@ -252,6 +258,23 @@ impl Run<'_> {
     }
 }
 
+/// A walk that ran out of handles (one is held for each folder on the way down) says so, rather than "the disk reported an
+/// error".
+fn too_many_open(stop: Stop) -> Stop {
+    #[cfg(unix)]
+    if let Stop::Failed(error) = &stop
+        && error.raw_os_error() == Some(rustix::io::Errno::MFILE.raw_os_error())
+    {
+        return refusal(
+            io::ErrorKind::Other,
+            "the folders go too deep to be walked with the files this app may keep open",
+        )
+        .into();
+    }
+
+    stop
+}
+
 /// Enters the folders `parents` below `root`, each from the one above with no link followed: the last of them (`None` for
 /// the root itself) and its path. `Ok(None)` when one is gone or is not a folder now. `before` is a test's, run between
 /// the look at a folder and its open.
@@ -300,7 +323,7 @@ fn facts_of(node: &Node) -> SyncFacts {
 }
 
 /// Whether `node` was modified or changed (Unix `ctime`) after `since`, or has no time to tell.
-fn is_newer(node: &Node, since: i64) -> bool {
+pub(super) fn is_newer(node: &Node, since: i64) -> bool {
     node.modified.is_none_or(|time| time > since) || node.changed.is_some_and(|time| time > since)
 }
 
@@ -378,7 +401,7 @@ fn survey(
 /// Whether the folder `node`, opened as `held`, is the top of another mounted drive: on another device than the folder that
 /// holds it, or (Linux 5.8 and later) a mount root on the same one, as a bind mount is. Windows: never (see the module's
 /// text).
-fn is_mount(held: &Held, node: &Node, (outer, hooks): (Option<u64>, &Hooks)) -> io::Result<bool> {
+pub(super) fn is_mount(held: &Held, node: &Node, (outer, hooks): (Option<u64>, &Hooks)) -> io::Result<bool> {
     if hooks.mount_names.iter().any(|name| node.name == name.as_str()) {
         return Ok(true);
     }
@@ -402,77 +425,4 @@ fn is_mount_root(held: &Held) -> io::Result<bool> {
 #[cfg(not(target_os = "linux"))]
 fn is_mount_root(_held: &Held) -> io::Result<bool> {
     Ok(false)
-}
-
-/// What stops a removal for good that is under way: an entry changed after the look.
-#[cfg(unix)]
-fn changed_meanwhile() -> io::Error {
-    refusal(io::ErrorKind::Other, "it changed while the folder was being walked")
-}
-
-#[cfg(unix)]
-impl Run<'_> {
-    /// Removes `node` of `folder` for good, through handles: a file or a link alone (when it is still that entry), a folder
-    /// with all that is in it, entered from its folder with no link followed (see [`Run::empty_held`]).
-    fn remove_held(&mut self, folder: &Held, node: &Node, since: i64) -> Result<(), Stop> {
-        use rustix::fs::{AtFlags, statat, unlinkat};
-
-        if node.kind == Kind::Dir {
-            let held = folder.subfolder(node)?;
-            self.empty_held(&held, node.device, (0, since))?;
-
-            return Ok(unlinkat(&folder.dir, &node.name, AtFlags::REMOVEDIR).map_err(io::Error::from)?);
-        }
-
-        let now = statat(&folder.dir, &node.name, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
-        if !node.is(&now) {
-            return Err(changed_meanwhile().into());
-        }
-
-        Ok(unlinkat(&folder.dir, &node.name, AtFlags::empty()).map_err(io::Error::from)?)
-    }
-
-    /// Removes all that the folder `held` (on `device`, `depth` below the item) holds, through its handle. It stops, with
-    /// what it removed gone, at a folder on another drive, at an entry modified or changed after `since`, and when the job
-    /// is cancelled (looked at once for each folder).
-    fn empty_held(&mut self, held: &Held, device: Option<u64>, (depth, since): (usize, i64)) -> Result<(), Stop> {
-        use rustix::fs::{AtFlags, unlinkat};
-
-        self.checkpoint()?;
-        let entries = held.entries()?;
-        if let Some(error) = entries.failed.into_iter().next() {
-            return Err(error.into());
-        }
-
-        for entry in entries.nodes {
-            if is_newer(&entry, since) {
-                return Err(changed_meanwhile().into());
-            }
-
-            if entry.kind == Kind::Dir {
-                if depth + 1 >= MAX_DEPTH {
-                    return Err(refusal(io::ErrorKind::InvalidInput, "the folders go too deep").into());
-                }
-
-                let below = held.subfolder(&entry)?;
-                if is_mount(&below, &entry, (device, &self.inner.hooks))? {
-                    return Err(refusal(io::ErrorKind::InvalidInput, HOLDS_A_MOUNT).into());
-                }
-                self.empty_held(&below, entry.device, (depth + 1, since))?;
-                unlinkat(&held.dir, &entry.name, AtFlags::REMOVEDIR).map_err(io::Error::from)?;
-            } else {
-                unlinkat(&held.dir, &entry.name, AtFlags::empty()).map_err(io::Error::from)?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-#[cfg(windows)]
-impl Run<'_> {
-    /// Removes `node` for good by its path: the system's removal never enters a mounted volume or a link (see `delete`).
-    fn remove_held(&mut self, _folder: &Held, node: &Node, _since: i64) -> Result<(), Stop> {
-        Ok(super::delete::remove(&node.path)?)
-    }
 }

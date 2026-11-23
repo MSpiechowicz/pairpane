@@ -173,3 +173,24 @@ fn a_folder_on_the_way_swapped_for_a_link_mid_job_leads_nowhere() {
         assert_eq!(read(&right.join("dir.old/a.txt")), b"keep me");
     }
 }
+
+/// Two links to one file in two folders of a folder deleted for good: removing the first moves the change time of the
+/// second, which the walk knows it did itself, so the folder goes whole.
+#[test]
+fn hard_links_in_a_folder_deleted_for_good_do_not_stop_it_halfway() {
+    let pair = Pair::new();
+    let right = pair.right();
+    file(&right.join("dir/a/f.txt"), b"linked", 100);
+    fs::create_dir_all(right.join("dir/b")).expect("b");
+    fs::hard_link(right.join("dir/a/f.txt"), right.join("dir/b/f.txt")).expect("link");
+    file(&right.join("dir/c/g.txt"), b"g", 100);
+    // The scan begins once the setup is older than the slack the times are given.
+    std::thread::sleep(std::time::Duration::from_millis(2_100));
+    let mut seen = removal(&right, "dir", PaneId::Right);
+    seen.scanned = millis(SystemTime::now());
+
+    let ended = run(mirror(&pair.left(), &right, &[], &[("dir", seen)], true));
+
+    is_done(&ended, 0);
+    assert!(!right.join("dir").exists());
+}
