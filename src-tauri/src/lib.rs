@@ -146,6 +146,7 @@ pub fn run() -> ExitCode {
             commands::thumbs::thumb_get,
             commands::columns::columns_dimensions,
             commands::columns::columns_checksum,
+            commands::columns::columns_git,
             commands::edit::edit_open,
             commands::edit::edit_save,
             commands::edit::edit_external,

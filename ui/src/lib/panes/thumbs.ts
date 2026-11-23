@@ -25,21 +25,31 @@ export interface ThumbTarget {
 }
 
 /**
- * Where the file `entry` of `listing` really is, for what the backend reads from disk: `undefined` for anything that is
- * not a file, and for anything inside an archive (reading it would unpack it). A search result or a flat view lists
- * items by their path below the folder searched, so the real folder is the one that holds the item. The key says which
- * file this is and what state it is in (its size and time), so that a changed file is not taken for the one before.
+ * Where the item `entry` of `listing` really is, for what the backend reads from disk: the real folder that holds it and
+ * its name there. `undefined` for `..` and for anything inside an archive (reading it would unpack it). A search result
+ * or a flat view lists items by their path below the folder searched, so the real folder is the one that holds the item.
  */
-export function placeOf(listing: Listing, entry: Entry | undefined): { key: string; folder: string; name: string } | undefined {
+export function whereIs(listing: Listing, entry: Entry | undefined): { folder: string; name: string } | undefined {
   const root = listing.folder;
-  if (entry === undefined || entry.kind !== 'file' || root === undefined || listing.readonly) {
+  if (entry === undefined || root === undefined || listing.readonly) {
     return undefined;
   }
 
-  const { folder, name } = listing.results === undefined ? { folder: root, name: entry.name } : splitResult(root, entry.name);
-  const key = [folder, name, entry.size, entry.modified ?? ''].join('\0');
+  return listing.results === undefined ? { folder: root, name: entry.name } : splitResult(root, entry.name);
+}
 
-  return { key, folder, name };
+/**
+ * Where the file `entry` of `listing` really is (see {@link whereIs}): `undefined` for anything that is not a file too.
+ * The key says which file this is and what state it is in (its size and time), so that a changed file is not taken for
+ * the one before.
+ */
+export function placeOf(listing: Listing, entry: Entry | undefined): { key: string; folder: string; name: string } | undefined {
+  const at = entry?.kind === 'file' ? whereIs(listing, entry) : undefined;
+  if (entry === undefined || at === undefined) {
+    return undefined;
+  }
+
+  return { ...at, key: [at.folder, at.name, entry.size, entry.modified ?? ''].join('\0') };
 }
 
 /**

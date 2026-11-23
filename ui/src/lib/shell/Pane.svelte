@@ -13,7 +13,7 @@
   import PaneRow from '$lib/panes/PaneRow.svelte';
   import type { Range } from '$lib/panes/scroll';
   import type { PaneTabs } from '$lib/panes/tabs.svelte';
-  import { targetOf, wantedBy } from '$lib/panes/thumbs';
+  import { targetOf, wantedBy, whereIs } from '$lib/panes/thumbs';
   import type { Volumes } from '$lib/panes/volumes.svelte';
   import VirtualColumns from '$lib/panes/VirtualColumns.svelte';
   import VirtualGrid from '$lib/panes/VirtualGrid.svelte';
@@ -64,6 +64,7 @@
   const extraColumns = $derived({
     dimensions: detailed && preferences.value.showDimensions,
     checksum: detailed && preferences.value.showChecksum,
+    git: detailed && preferences.value.showGit,
   });
   const listing = $derived(view.listing);
   const uid = $props.id();
@@ -231,7 +232,9 @@
             {brief}
             tile={thumbnails}
             thumb={thumbnails ? thumbs.get(targetOf(listing, entry, thumbs.size)) : undefined}
-            extra={extraColumns.dimensions || extraColumns.checksum ? extras.cells(extraTargetOf(listing, entry)) : undefined}
+            extra={extraColumns.dimensions || extraColumns.checksum || extraColumns.git
+              ? extras.cells(extraTargetOf(listing, entry), whereIs(listing, entry))
+              : undefined}
             up={view.isUp(index)}
             cursor={index === view.cursor}
             selected={entry !== undefined && view.isSelected(entry.name)}
@@ -270,7 +273,7 @@
 
 <style>
   .pane {
-    /* The columns of the header and of every row: icon, name, then ext, size, modified, dimensions and checksum as far as the settings show them. */
+    /* The columns of the header and of every row: icon, name, then ext, size, modified, dimensions, checksum and git as far as the settings show them. */
     --pane-cols: var(--cols-full);
     --cursor-line: color-mix(in srgb, var(--accent) 35%, transparent);
     --cursor-bg: color-mix(in srgb, var(--text) 5%, transparent);

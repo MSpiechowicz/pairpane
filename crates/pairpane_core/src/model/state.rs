@@ -132,6 +132,8 @@ pub struct Preferences {
     /// SHA-256 of a file. Off until the user turns them on.
     pub show_dimensions: bool,
     pub show_checksum: bool,
+    /// The git status column: the state of each entry of a folder inside a repository. Off until the user turns it on.
+    pub show_git: bool,
     /// The panes list hidden files.
     pub show_hidden: bool,
     /// Moving to the Trash asks first (deleting for good always does).
@@ -161,6 +163,7 @@ impl<'de> Deserialize<'de> for Preferences {
             show_modified: flag("showModified", defaults.show_modified),
             show_dimensions: flag("showDimensions", defaults.show_dimensions),
             show_checksum: flag("showChecksum", defaults.show_checksum),
+            show_git: flag("showGit", defaults.show_git),
             show_hidden: flag("showHidden", defaults.show_hidden),
             confirm_trash: flag("confirmTrash", defaults.confirm_trash),
             confirm_transfer: flag("confirmTransfer", defaults.confirm_transfer),
@@ -179,6 +182,7 @@ impl Default for Preferences {
             show_modified: true,
             show_dimensions: false,
             show_checksum: false,
+            show_git: false,
             show_hidden: false,
             confirm_trash: true,
             confirm_transfer: true,

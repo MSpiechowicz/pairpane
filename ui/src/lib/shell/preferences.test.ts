@@ -11,6 +11,7 @@ describe('Preferences', () => {
       showModified: true,
       showDimensions: false,
       showChecksum: false,
+      showGit: false,
       showHidden: false,
       confirmTrash: true,
       confirmTransfer: true,

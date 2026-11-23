@@ -66,6 +66,7 @@ const COMMANDS: &[&str] = &[
     "thumb_get",
     "columns_dimensions",
     "columns_checksum",
+    "columns_git",
     "edit_open",
     "edit_save",
     "edit_external",

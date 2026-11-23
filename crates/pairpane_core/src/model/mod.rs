@@ -26,7 +26,7 @@ mod volume;
 
 pub use app::AppInfo;
 pub use archive::ArchiveSpot;
-pub use columns::Dimensions;
+pub use columns::{Dimensions, GitEntry, GitMark, GitStatus};
 pub use compare::{
     CompareEvent, CompareFacts, CompareId, CompareOptions, CompareRoot, CompareRow, CompareStatus, SyncDirection,
     SyncFacts, SyncItem, SyncRemoval,

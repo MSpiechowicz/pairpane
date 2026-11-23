@@ -64,6 +64,11 @@ export class Listing {
   /** Opening another folder failed; the current one stays listed and this says why. */
   notice = $state<string | undefined>();
   summary = $state<{ dirs: number; files: number; bytes: number; free: number | null } | undefined>();
+  /**
+   * How many times the folder shown was listed again (a change on disk, hidden toggled, the same folder opened once
+   * more). What is kept about the folder's state on disk (a git status) is out of date once this changes.
+   */
+  reloads = $state(0);
   /** Milliseconds from `open` to the first batch (the first screen). */
   firstScreenMs = $state<number | undefined>();
 
@@ -261,6 +266,7 @@ export class Listing {
           event.path === this.#folder && sameSpot(event.archive, this.archive) && event.results === this.results && this.error === undefined;
         const next = new Array<Entry | undefined>(event.total);
         if (reload) {
+          this.reloads += 1;
           this.#rows.slice(0, event.total).forEach((entry, index) => (next[index] = entry));
         } else {
           this.summary = undefined;

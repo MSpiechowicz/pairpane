@@ -69,6 +69,7 @@
     { flag: 'showModified', text: 'Modified' },
     { flag: 'showDimensions', text: 'Dimensions' },
     { flag: 'showChecksum', text: 'Checksum' },
+    { flag: 'showGit', text: 'Git status' },
   ];
 
   const FILES: readonly Toggle[] = [{ flag: 'showHidden', text: 'Show hidden files' }];

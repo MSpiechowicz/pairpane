@@ -62,6 +62,7 @@
     "allow-thumb-get",
     "allow-columns-dimensions",
     "allow-columns-checksum",
+    "allow-columns-git",
     "allow-edit-open",
     "allow-edit-save",
     "allow-edit-external",

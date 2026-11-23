@@ -44,8 +44,8 @@
     tile?: boolean;
     /** The thumbnail to show in a tile in place of the icon. */
     thumb?: Decoded;
-    /** The Dimensions and Checksum columns, as far as the settings show them; empty until the value arrives. */
-    extra?: { dimensions: Cell; checksum: Cell };
+    /** The Dimensions, Checksum and Git columns, as far as the settings show them; empty until the value arrives. */
+    extra?: { dimensions: Cell; checksum: Cell; git: Cell };
   } = $props();
 
   const parts = $derived(entry ? splitName(entry) : undefined);
@@ -58,6 +58,7 @@
     modified: !plain && preferences.value.showModified,
     dimensions: !plain && preferences.value.showDimensions,
     checksum: !plain && preferences.value.showChecksum,
+    git: !plain && preferences.value.showGit,
   });
 
   /** The tooltip of a name: where a link points; in the brief and thumbnails layouts the whole name, which may be cut short. */
@@ -130,6 +131,9 @@
     {/if}
     {#if columns.checksum}
       <span class="ck" title={extra?.checksum.tip}>{extra?.checksum.text}</span>
+    {/if}
+    {#if columns.git}
+      <span class="gt {extra?.git.tone ?? ''}" title={extra?.git.tip}>{extra?.git.text}</span>
     {/if}
   {/if}
 </div>
@@ -242,7 +246,8 @@
   .ex,
   .dt,
   .dm,
-  .ck {
+  .ck,
+  .gt {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -258,6 +263,24 @@
   .ck {
     font: 11.5px var(--font-mono);
     color: var(--dim);
+  }
+
+  /* The mark keeps its colour in a selected row: the colour is part of what it says. */
+  .gt {
+    font: 600 11.5px var(--font-mono);
+    color: var(--dim);
+  }
+
+  .gt.accent {
+    color: var(--accent);
+  }
+
+  .gt.ok {
+    color: var(--ok);
+  }
+
+  .gt.danger {
+    color: var(--danger);
   }
 
   .sz {
@@ -351,7 +374,8 @@
     .ex,
     .dt,
     .dm,
-    .ck {
+    .ck,
+    .gt {
       display: none;
     }
 

@@ -77,7 +77,8 @@
     .ex,
     .dt,
     .dm,
-    .ck {
+    .ck,
+    .gt {
       display: none;
     }
   }

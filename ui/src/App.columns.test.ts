@@ -105,3 +105,61 @@ describe('the Dimensions and Checksum columns', () => {
     expect(await left().findByText('640×480')).toBeInTheDocument();
   });
 });
+
+describe('the Git status column', () => {
+  const status = (path: string) => ({
+    repo: true,
+    marks: path === '/left' ? [{ name: 'photo.jpg', mark: 'modified' }, { name: 'sub', mark: 'untracked' }] : [{ name: 'c.md', mark: 'staged' }],
+  });
+
+  it('is not in the panes, and asks for nothing, until the settings show it', async () => {
+    const backend = await shown({ columns_git: (({ path }: { path: string }) => status(path)) as never });
+
+    expect(left().queryByRole('button', { name: 'Git' })).not.toBeInTheDocument();
+    expect(backend.sent('columns_git')).toEqual([]);
+  });
+
+  it('shows the marks of each pane once Git status is turned on in the settings, with their words, and goes when it is turned off', async () => {
+    const backend = await shown({ columns_git: (({ path }: { path: string }) => status(path)) as never });
+
+    await tickBox('Git status');
+
+    expect(left().getByRole('button', { name: 'Git' })).toBeInTheDocument();
+    const modified = await left().findByText('M');
+    expect(modified).toHaveAttribute('title', expect.stringMatching(/^Modified/));
+    expect(left().getByText('?')).toHaveAttribute('title', expect.stringMatching(/^Untracked/));
+    // The setting is for both panes: each asks about its own folder, once.
+    expect(await within(pane('Right pane')).findByText('S')).toHaveAttribute('title', expect.stringMatching(/^Staged/));
+    expect(backend.sent('columns_git')).toHaveLength(2);
+    expect(backend.sent('columns_git')).toEqual(expect.arrayContaining([{ path: '/left' }, { path: '/right' }]));
+
+    await tickBox('Git status');
+
+    expect(left().queryByRole('button', { name: 'Git' })).not.toBeInTheDocument();
+    expect(left().queryByText('M')).not.toBeInTheDocument();
+  });
+
+  it('is sorted by from its header, the most serious marks first', async () => {
+    await shown({ columns_git: (({ path }: { path: string }) => status(path)) as never });
+    await tickBox('Git status');
+    await left().findByText('M');
+
+    await fireEvent.click(left().getByRole('button', { name: 'Git' }));
+
+    expect(left().getAllByRole('option').map((row) => row.querySelector('.nm')?.textContent)).toEqual(['..', 'sub', 'photo.jpg', 'notes.txt']);
+  });
+
+  it('comes back as the last session left it', async () => {
+    const state: SavedState = {
+      active: 'left',
+      left: { tabs: [{ path: '/left', sort: 'name', desc: false }], active: 0 },
+      right: { tabs: [{ path: '/right', sort: 'name', desc: false }], active: 0 },
+      hotlist: [],
+      preferences: { ...DEFAULT_PREFERENCES, showGit: true },
+    };
+    await shown({ state_load: () => state, columns_git: (({ path }: { path: string }) => status(path)) as never });
+
+    expect(left().getByRole('button', { name: 'Git' })).toBeInTheDocument();
+    expect(await left().findByText('M')).toBeInTheDocument();
+  });
+});

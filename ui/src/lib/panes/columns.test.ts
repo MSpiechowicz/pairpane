@@ -82,7 +82,7 @@ describe('the columns of a pane', () => {
   });
 
   it('adds the Dimensions and Checksum columns to the header and the rows, as buttons like the others', () => {
-    preferences.set({ showDimensions: true, showChecksum: true });
+    preferences.set({ showDimensions: true, showChecksum: true, showGit: true });
     render(ColumnHeader, { view: new PaneTabs(fakeBackend().ipc, 'left').view });
     render(PaneRow, {
       id: 'r-1',
@@ -91,25 +91,32 @@ describe('the columns of a pane', () => {
       cursor: false,
       selected: false,
       size: '0 B',
-      extra: { dimensions: { text: '640×480', tip: '640 × 480 pixels' }, checksum: { text: 'abcdef012345', tip: 'abcdef0123456789' } },
+      extra: {
+        dimensions: { text: '640×480', tip: '640 × 480 pixels' },
+        checksum: { text: 'abcdef012345', tip: 'abcdef0123456789' },
+        git: { text: 'M', tip: 'Modified', tone: 'accent' },
+      },
     });
 
-    expect(headers()).toEqual(['Name', 'Ext', 'Size', 'Modified', 'Dimensions', 'Checksum']);
+    expect(headers()).toEqual(['Name', 'Ext', 'Size', 'Modified', 'Dimensions', 'Checksum', 'Git']);
     expect(document.querySelector('.row .dm')).toHaveTextContent('640×480');
     expect(document.querySelector('.row .dm')).toHaveAttribute('title', '640 × 480 pixels');
     expect(document.querySelector('.row .ck')).toHaveTextContent('abcdef012345');
     expect(document.querySelector('.row .ck')).toHaveAttribute('title', 'abcdef0123456789');
+    expect(document.querySelector('.row .gt')).toHaveTextContent('M');
+    expect(document.querySelector('.row .gt')).toHaveAttribute('title', 'Modified');
+    expect(document.querySelector('.row .gt')).toHaveClass('accent');
   });
 
   it('leaves the extra columns out of a brief row and of a tile, whatever the settings say', () => {
-    preferences.set({ showDimensions: true, showChecksum: true });
-    const extra = { dimensions: { text: '1×1' }, checksum: { text: 'ab' } };
+    preferences.set({ showDimensions: true, showChecksum: true, showGit: true });
+    const extra = { dimensions: { text: '1×1' }, checksum: { text: 'ab' }, git: { text: 'M' } };
     const common = { id: 'r-1', index: 1, entry: entry('a.jpg'), cursor: false, selected: false, size: '0 B', extra };
 
     render(PaneRow, { ...common, brief: true });
     render(PaneRow, { ...common, tile: true });
 
-    expect(document.querySelector('.row .dm, .row .ck')).toBeNull();
+    expect(document.querySelector('.row .dm, .row .ck, .row .gt')).toBeNull();
   });
 
   it('shows the name alone when every column is hidden', () => {

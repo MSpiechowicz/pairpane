@@ -20,7 +20,7 @@ fn png(width: u32, height: u32) -> Vec<u8> {
 
 const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
-fn fill(cap: &ThreadCap, max: usize) -> Vec<Permit> {
+pub(super) fn fill(cap: &ThreadCap, max: usize) -> Vec<Permit> {
     (0..max).map(|_| cap.acquire(max).expect("a place")).collect()
 }
 
@@ -33,7 +33,7 @@ fn hash(columns: &Columns, path: &str, name: &str) -> CommandResult<String> {
 }
 
 /// The code and the text the page is told of a refusal.
-fn shown<T>(result: CommandResult<T>) -> (IpcErrorCode, String) {
+pub(super) fn shown<T>(result: CommandResult<T>) -> (IpcErrorCode, String) {
     let Err(error) = result else {
         panic!("refused");
     };

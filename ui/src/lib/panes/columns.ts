@@ -27,6 +27,7 @@ export const COLUMNS: readonly ColumnSpec[] = [
   { column: 'modified', label: 'Modified', cell: 'dt', shownBy: 'showModified', width: '118px', narrow: false },
   { column: 'dimensions', label: 'Dimensions', cell: 'dm', shownBy: 'showDimensions', width: '92px', narrow: false },
   { column: 'checksum', label: 'Checksum', cell: 'ck', shownBy: 'showChecksum', width: '104px', narrow: false },
+  { column: 'git', label: 'Git', cell: 'gt', shownBy: 'showGit', width: '44px', narrow: false },
 ];
 
 /** Whether the pane shows `column`; the name is always shown. */

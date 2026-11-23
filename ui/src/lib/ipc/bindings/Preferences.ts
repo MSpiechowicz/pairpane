@@ -19,6 +19,10 @@ showExt: boolean, showSize: boolean, showModified: boolean,
  */
 showDimensions: boolean, showChecksum: boolean, 
 /**
+ * The git status column: the state of each entry of a folder inside a repository. Off until the user turns it on.
+ */
+showGit: boolean, 
+/**
  * The panes list hidden files.
  */
 showHidden: boolean, 

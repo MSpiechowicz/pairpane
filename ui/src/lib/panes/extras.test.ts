@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { arrive, entry, fakeBackend } from '../../../tests/panes';
-import { extraTargetOf, NOTHING, wantedExtras } from './extras';
+import { extraTargetOf, gitCell, NOTHING, severityOf, wantedExtras } from './extras';
 import { Listing } from './listing.svelte';
 import { PaneTabs } from './tabs.svelte';
 import { THUMB_SIZE, targetOf } from './thumbs';
 
-const BOTH = { dimensions: true, checksum: true };
+const BOTH = { dimensions: true, checksum: true, git: false };
 
 /** A pane in `/pics` (so row 0 is `..`) with these entries. */
 async function shown(entries = [entry('a.jpg'), entry('b.txt'), entry('sub', 'dir'), entry('c.PNG')]) {
@@ -97,9 +97,9 @@ describe('wantedExtras', () => {
     const view = await shown();
     const rows = { first: 0, last: 5 };
 
-    expect(names(wantedExtras(view, rows, rows, { dimensions: true, checksum: false }).checksums)).toEqual([]);
-    expect(names(wantedExtras(view, rows, rows, { dimensions: false, checksum: true }).dimensions)).toEqual([]);
-    expect(wantedExtras(view, rows, rows, { dimensions: false, checksum: false })).toBe(NOTHING);
+    expect(names(wantedExtras(view, rows, rows, { dimensions: true, checksum: false, git: false }).checksums)).toEqual([]);
+    expect(names(wantedExtras(view, rows, rows, { dimensions: false, checksum: true, git: false }).dimensions)).toEqual([]);
+    expect(wantedExtras(view, rows, rows, { dimensions: false, checksum: false, git: false })).toBe(NOTHING);
   });
 
   it('puts the rows in view first, then the others near them', async () => {
@@ -108,5 +108,55 @@ describe('wantedExtras', () => {
     const wants = wantedExtras(view, { first: 3, last: 5 }, { first: 0, last: 6 }, BOTH);
 
     expect(names(wants.checksums)).toEqual(['c', 'd', 'a', 'b', 'e']);
+  });
+});
+
+describe('wantedExtras: git', () => {
+  const GIT = { dimensions: false, checksum: false, git: true };
+
+  it('wants the folder of the items in view once, whatever their kinds (a folder has a status too), not for `..`', async () => {
+    const view = await shown();
+
+    const wants = wantedExtras(view, { first: 0, last: 5 }, { first: 0, last: 5 }, GIT);
+
+    expect(wants.git).toEqual(['/pics']);
+    expect(wants.dimensions).toEqual([]);
+    expect(wants.checksums).toEqual([]);
+    expect(wantedExtras(view, { first: 0, last: 0 }, { first: 0, last: 0 }, GIT).git).toEqual([]); // only `..`
+  });
+
+  it('wants no folder when the column is off', async () => {
+    const view = await shown();
+    const rows = { first: 0, last: 5 };
+
+    expect(wantedExtras(view, rows, rows, BOTH).git).toEqual([]);
+  });
+});
+
+describe('the Git cell', () => {
+  const place = { folder: '/repo', name: 'a.txt' };
+
+  it('is a mark, with its words, for an item git has something to say about', () => {
+    expect(gitCell(place, { marks: new Map([['a.txt', 'staged']]) })).toMatchObject({ text: 'S', tone: 'ok' });
+  });
+
+  it('is empty for a clean item, a folder outside a repository, and what is not known', () => {
+    expect(gitCell(place, { marks: new Map() })).toEqual({ text: '' });
+    expect(gitCell(place, null)).toEqual({ text: '' });
+    expect(gitCell(place, undefined)).toEqual({ text: '' });
+    expect(gitCell(undefined, { marks: new Map([['a.txt', 'modified']]) })).toEqual({ text: '' });
+  });
+
+  it('is a dash with the reason for a repository too big to read', () => {
+    expect(gitCell(place, { problem: 'too big' })).toEqual({ text: '–', tip: 'too big' });
+  });
+
+  it('goes by severity: conflicted, modified, staged, untracked, ignored, and none for the rest', () => {
+    const folder = (mark: 'conflicted' | 'modified' | 'staged' | 'untracked' | 'ignored') => ({ marks: new Map([['a.txt', mark]]) });
+
+    expect((['conflicted', 'modified', 'staged', 'untracked', 'ignored'] as const).map((mark) => severityOf(place, folder(mark)))).toEqual([0, 1, 2, 3, 4]);
+    expect(severityOf(place, { marks: new Map() })).toBeUndefined();
+    expect(severityOf(place, null)).toBeUndefined();
+    expect(severityOf(place, { problem: 'x' })).toBeUndefined();
   });
 });
