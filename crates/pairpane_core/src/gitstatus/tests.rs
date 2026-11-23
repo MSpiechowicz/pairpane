@@ -395,14 +395,17 @@ fn a_submodule_is_never_opened_and_has_no_mark_of_its_own() {
 }
 
 #[test]
-fn an_untracked_nested_repository_is_an_untracked_folder_and_is_not_entered() {
+fn an_untracked_nested_repository_is_an_untracked_folder_through_its_files_and_its_git_folder_is_not_read() {
     let repo = clean(&[("a.txt", b"a")]);
     let nested = repo.path("nested");
     fs::create_dir_all(&nested).expect("a folder");
     gix::init(&nested).expect("a nested repository");
     fs::write(nested.join("inside.txt"), b"i").expect("a file");
 
+    // The walk goes through the folder like any other (its `.git` is pruned, not looked at as a repository): one untracked folder.
     assert_eq!(marks_of(repo.root()), owned(&[("nested", Untracked)]));
+    // Browsed into, it is a repository of its own, and its `.git` is not marked.
+    assert_eq!(marks_of(&nested), owned(&[("inside.txt", Untracked)]));
 }
 
 #[test]

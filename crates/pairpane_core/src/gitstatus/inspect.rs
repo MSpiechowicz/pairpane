@@ -1,8 +1,10 @@
 //! The files of a repository that gix is about to read, looked at first (see [`super::files`]): each has to be a regular
 //! file within its cap, so that a named pipe, a device or a link to `/dev/zero` in a place where a file is expected never
-//! reaches an open that waits for ever or a read that does not end. Everything that is not here (the content of a loose
-//! object, the blobs of the index) is read by gix, and what holds up a read of those is the time limit of the caller, which
-//! answers for the request whether or not the read returns.
+//! reaches an open that waits for ever or a read that does not end. The folders gix goes through to those files are looked at
+//! too: `refs`, `objects`, `objects/info`, `objects/pack` and each `objects/xx` of every object folder must be real folders and
+//! no link (or reparse point), as a link there would lead to files that were not looked at. Everything that is not here (the
+//! content of a loose object, the blobs of the index) is read by gix, and what holds up a read of those is the time limit of
+//! the caller, which answers for the request whether or not the read returns.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -57,9 +59,10 @@ pub(super) fn files(layout: &Layout) -> Result<(), Refusal> {
         folders.push(layout.common_dir.as_path());
     }
     for folder in &folders {
-        // The ignore and attribute rules of the repository's own folder.
+        // The ignore and attribute rules of the repository's own folder. gix reads them through a link, and a link is fine when
+        // it leads to a regular file of a local place (or nowhere, which gix reads as no rules): see [`files::seen_following`].
         for name in ["info/exclude", "info/attributes"] {
-            fine(files::seen_below(folder, name, CONFIG_BYTES))?;
+            fine(files::seen_following_below(folder, name, CONFIG_BYTES))?;
         }
     }
 
@@ -69,7 +72,7 @@ pub(super) fn files(layout: &Layout) -> Result<(), Refusal> {
     refs(layout)?;
 
     for objects in object_folders(&layout.common_dir)? {
-        packs(&objects)?;
+        object_folder(&objects)?;
     }
 
     Ok(())
@@ -117,7 +120,7 @@ fn check_index(path: &Path) -> Result<(), Refusal> {
 /// reads it from, in the common folder, or in the work tree's own folder for a ref of that work tree). A ref that is in
 /// `packed-refs` has no file, and `HEAD` that is an id has none either.
 fn refs(layout: &Layout) -> Result<(), Refusal> {
-    let mut text = match files::read(&layout.git_dir.join("HEAD"), POINTER_BYTES) {
+    let mut text = match files::read_following(&layout.git_dir.join("HEAD"), POINTER_BYTES) {
         Seen::Plain(bytes) => bytes,
         Seen::Missing => return Ok(()),
         Seen::Odd | Seen::Large => return Err(Refusal::Odd),
@@ -181,31 +184,30 @@ fn loose_ref(layout: &Layout, name: &str) -> Result<Option<Vec<u8>>, Refusal> {
 }
 
 /// The object folders: the repository's own and the alternates it names, which gix opens too, each with its own
-/// `info/alternates` (up to a depth). One that is not a local place, or a list that is too long, is a repository not to read.
+/// `info/alternates` (up to a depth). The lists are parsed by gix's own parser (`gix::odb::alternate::parse`: comments, quoted
+/// entries, and `\r` is kept as part of the name), and every relative entry of every list, at any depth, is joined to the
+/// objects folder of the repository itself, as gix joins it (`gix_odb::alternate::resolve`), and not to the folder of the list
+/// it was read from. One that is not a local place, or a list that is too long, is a repository not to read.
 fn object_folders(common_dir: &Path) -> Result<Vec<PathBuf>, Refusal> {
     let own = common_dir.join("objects");
     let mut folders = vec![own.clone()];
-    let mut pending = vec![(own, 0)];
+    let mut pending = vec![(own.clone(), 0)];
 
     while let Some((folder, depth)) = pending.pop() {
-        let text = match files::read_below(&folder, "info/alternates", ALTERNATES_BYTES) {
+        let bytes = match files::read_below(&folder, "info/alternates", ALTERNATES_BYTES) {
             Seen::Missing => continue,
-            Seen::Plain(bytes) => String::from_utf8(bytes).map_err(|_| Refusal::Odd)?,
+            Seen::Plain(bytes) => bytes,
             Seen::Odd | Seen::Large => return Err(Refusal::Odd),
         };
+        let entries = gix::odb::alternate::parse(&bytes).map_err(|_| Refusal::Odd)?;
 
-        for line in text.lines() {
-            let line = line.trim_end_matches('\r');
-            if line.trim().is_empty() || line.starts_with('#') {
-                continue;
-            }
-            // A quoted line (with escapes) is not read: no tool writes one for a folder that is an ordinary place.
-            if line.starts_with('"') || depth + 1 > ALTERNATES_DEPTH || folders.len() >= ALTERNATES_LINES {
+        for entry in entries {
+            if depth + 1 > ALTERNATES_DEPTH || folders.len() >= ALTERNATES_LINES {
                 return Err(Refusal::Odd);
             }
 
             // Not a local place: the repository is not read, and nothing at the other end is touched.
-            let target = pointer_target(&folder, line).ok_or(Refusal::Odd)?;
+            let target = pointer_target(&own, &entry).ok_or(Refusal::Odd)?;
             folders.push(target.clone());
             pending.push((target, depth + 1));
         }
@@ -214,8 +216,21 @@ fn object_folders(common_dir: &Path) -> Result<Vec<PathBuf>, Refusal> {
     Ok(folders)
 }
 
-/// The files of the pack folder of one object folder: gix opens the pack and its index when an object is in it.
-fn packs(objects: &Path) -> Result<(), Refusal> {
+/// The structure of one object folder, which gix goes through to read an object: the folder itself, `info`, `pack` and each
+/// of the 256 folders of loose objects that is there must be a real folder, and no link or reparse point (one would lead to
+/// files that were not looked at), and the files of `pack` must be plain ones: gix opens the pack and its index when an object
+/// is in it.
+fn object_folder(objects: &Path) -> Result<(), Refusal> {
+    let fanned_out = (0..=u8::MAX).map(|byte| objects.join(format!("{byte:02x}")));
+    let folders = [objects.to_path_buf(), objects.join("info"), objects.join("pack")];
+
+    for folder in folders.into_iter().chain(fanned_out) {
+        match files::folder(&folder) {
+            Seen::Plain(()) | Seen::Missing => {}
+            Seen::Odd | Seen::Large => return Err(Refusal::Odd),
+        }
+    }
+
     listed(&objects.join("pack"), |entry| {
         fine(files::seen(&entry.path(), u64::MAX))
     })
@@ -261,7 +276,6 @@ mod tests {
             r"\\host\share\objects",
             "//host/share/objects",
             r"\\?\UNC\host\share\objects",
-            "\"quoted\"",
         ] {
             fs::write(&alternates, format!("../../fine/objects\n{line}\n")).expect("a list");
 

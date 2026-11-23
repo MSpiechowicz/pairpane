@@ -6,6 +6,12 @@
 //! [`Meter`] (so a bomb is `TooBig` after the cap, not after the billion) and looks at the stop flag. The bytes held by the
 //! walk, the depth and the length of a path are bounded too, and gix's own limit on the size of one object (16 MiB for a
 //! repository of reduced trust) holds for each object read.
+//!
+//! A sparse index (`git sparse-checkout set --cone --sparse-index`) holds a folder that is out of the work tree as one entry
+//! of the folder's name with a slash at its end, with the mode of a folder and the id of its tree: everything of `HEAD` below
+//! it is there and unchanged, or the entry's tree is another one than `HEAD`'s, and then the folder is staged. Such a folder of
+//! `HEAD` is not walked, its files are not "deleted" for the index not listing them, and the entry is not "added" for `HEAD`
+//! not listing it as a file.
 
 use std::ops::Range;
 
@@ -89,6 +95,11 @@ pub(super) fn staged(
         stop,
         meter,
     };
+
+    // A folder that is out of a sparse checkout is all as `HEAD` has it, and its files are not in the index to be compared.
+    if walk.inside_sparse_directory() {
+        return Ok(());
+    }
 
     match walk.subtree(head)? {
         Subtree::Stopped => return Ok(()),
@@ -220,6 +231,12 @@ impl Walk<'_, '_> {
             }
 
             if mode.is_tree() {
+                path.push(b'/');
+                if self.sparse_directory(path.as_bstr(), &id) {
+                    continue;
+                }
+                path.pop();
+
                 if stack.len() >= MAX_DEPTH {
                     self.meter.exhaust();
 
@@ -245,6 +262,46 @@ impl Walk<'_, '_> {
         }
 
         Ok(())
+    }
+
+    /// Whether the folder this status is for is, or is below, a sparse directory of the index: one of the folders on its way (the
+    /// folder itself too) has an entry of its own, with a slash at its end.
+    fn inside_sparse_directory(&self) -> bool {
+        let prefix = self.marks.prefix();
+
+        prefix
+            .iter()
+            .enumerate()
+            .filter(|(_, byte)| **byte == b'/')
+            .any(|(at, _)| self.sparse_entry(prefix[..=at].as_bstr()).is_some())
+    }
+
+    /// The position in the index of the sparse directory `path` (a folder's path with a slash at its end), if the index has one.
+    fn sparse_entry(&self, path: &BStr) -> Option<usize> {
+        let position = self.state.entry_index_by_path_and_stage(path, Stage::Unconflicted)?;
+
+        self.state.entries()[position].mode.is_sparse().then_some(position)
+    }
+
+    /// A folder of `HEAD`, whose path with a slash is `path`, that the index holds as a sparse directory: it is not looked
+    /// into. It is staged when the tree the index holds is not the tree of `HEAD`.
+    fn sparse_directory(&mut self, path: &BStr, head_tree: &gix::oid) -> bool {
+        let Some(position) = self.sparse_entry(path) else {
+            return false;
+        };
+        if let Some(seen) = position
+            .checked_sub(self.range.start)
+            .and_then(|at| self.seen.get_mut(at))
+        {
+            *seen = true;
+        }
+
+        if *self.state.entries()[position].id != *head_tree {
+            let folder = &path[..path.len() - 1];
+            self.marks.note(folder.as_bstr(), GitMark::Staged);
+        }
+
+        true
     }
 
     /// The next entry of the tree open in `frame`, with its name put in `path` after the path of the tree (what an entry
@@ -305,6 +362,11 @@ impl Walk<'_, '_> {
 
             let entry = &self.state.entries()[self.range.start + offset];
             if entry.stage() != Stage::Unconflicted || entry.flags.contains(Flags::INTENT_TO_ADD) {
+                continue;
+            }
+            // A sparse directory is a folder of `HEAD` that was not looked into (or one `HEAD` does not have, which is not a file
+            // that is added).
+            if entry.mode.is_sparse() {
                 continue;
             }
             if !self.meter.spend(1) {

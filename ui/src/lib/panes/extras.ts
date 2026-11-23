@@ -87,10 +87,13 @@ const GIT_MARKS: readonly { mark: GitMark; text: string; tip: string; dirTip: st
   { mark: 'ignored', text: '!', tip: 'Ignored: git leaves it out', dirTip: 'Ignored: git leaves it out', tone: 'dim' },
 ];
 
-/** Where `entry` of `listing` is for the Git column (a folder too has a status): `undefined` for `..` and inside an archive. */
+/**
+ * Where `entry` of `listing` is for the Git column (a folder too has a status): `undefined` for `..` and inside an archive.
+ * A link to a folder is a file to git (one entry, with no folder to hold something inside), so it is not `dir`.
+ */
 export function gitPlaceOf(listing: Listing, entry: Entry | undefined): GitPlace | undefined {
   const at = whereIs(listing, entry);
-  return at && { ...at, dir: entry?.kind === 'dir' };
+  return at && { ...at, dir: entry?.kind === 'dir' && entry.linkTarget === null };
 }
 
 /**

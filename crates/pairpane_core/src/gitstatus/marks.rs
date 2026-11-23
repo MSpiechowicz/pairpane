@@ -48,6 +48,12 @@ impl Marks {
         }
     }
 
+    /// Whether the directory walk said that the folder is untracked as a whole: it says so with one entry for the folder or for
+    /// a parent, which holds everything below it, the ignored files too.
+    pub(super) fn is_untracked_as_a_whole(&self) -> bool {
+        self.whole == Some(GitMark::Untracked)
+    }
+
     /// The repository-relative path of the folder with a slash at its end, as the index spells it.
     pub(super) fn prefix(&self) -> &[u8] {
         &self.prefix
@@ -102,8 +108,9 @@ impl Marks {
         }
     }
 
-    /// The marks, by name. When the folder as a whole is untracked or ignored, each of its children has that mark too;
-    /// `folder` is read for their names, and the read counts in `meter`.
+    /// The marks, by name. When the folder as a whole is untracked or ignored, each of its children has that mark too, unless
+    /// it was noted with a mark of its own (an ignored file in an untracked folder stays ignored); `folder` is read for their
+    /// names, and the read counts in `meter`.
     pub(super) fn finish(mut self, folder: &Path, meter: &mut Meter<'_>) -> io::Result<Vec<GitEntry>> {
         if let Some(whole) = self.whole {
             for entry in fs::read_dir(folder)? {
@@ -116,7 +123,9 @@ impl Marks {
                     continue;
                 }
 
-                self.keep(name.to_string_lossy().into_owned(), whole);
+                // A child that was noted keeps what it was noted with: the walk says what each of them is, and says only that
+                // the folder is untracked for the rest.
+                self.by_name.entry(name.to_string_lossy().into_owned()).or_insert(whole);
             }
         }
 
@@ -243,6 +252,55 @@ mod tests {
                 pair("build", GitMark::Ignored),
                 pair("mixed", GitMark::Untracked),
             ]
+        );
+    }
+
+    #[test]
+    fn a_folder_that_is_untracked_as_a_whole_keeps_the_ignored_marks_of_its_children() {
+        let folder = tempfile::tempdir().expect("a folder");
+        for name in ["new.txt", "debug.log", "staged.txt", "sub"] {
+            fs::write(folder.path().join(name), b"x").expect("a file");
+        }
+        let finished = |whole: GitMark| {
+            let mut marks = Marks::new("fresh");
+            marks.note(b"fresh".as_bstr(), whole);
+            marks.note(b"fresh/debug.log".as_bstr(), GitMark::Ignored);
+            marks.note(b"fresh/staged.txt".as_bstr(), GitMark::Staged);
+
+            let stop = super::super::watch::Stop::default();
+            marks
+                .finish(folder.path(), &mut Meter::new(&stop, 100))
+                .expect("marks")
+                .into_iter()
+                .map(|entry| (entry.name, entry.mark))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            finished(GitMark::Untracked),
+            vec![
+                pair("debug.log", GitMark::Ignored),
+                pair("new.txt", GitMark::Untracked),
+                pair("staged.txt", GitMark::Staged),
+                pair("sub", GitMark::Untracked),
+            ]
+        );
+        // A folder that is ignored as a whole leaves a child that was found untracked as it is.
+        let mut marks = Marks::new("fresh");
+        marks.note(b"fresh".as_bstr(), GitMark::Ignored);
+        marks.note(b"fresh/new.txt".as_bstr(), GitMark::Untracked);
+        let stop = super::super::watch::Stop::default();
+        let marked = marks.finish(folder.path(), &mut Meter::new(&stop, 100)).expect("marks");
+        assert_eq!(
+            marked
+                .iter()
+                .find(|entry| entry.name == "new.txt")
+                .map(|entry| entry.mark),
+            Some(GitMark::Untracked)
+        );
+        assert_eq!(
+            marked.iter().find(|entry| entry.name == "sub").map(|entry| entry.mark),
+            Some(GitMark::Ignored)
         );
     }
 

@@ -29,6 +29,8 @@ pub(super) struct Staged<'a> {
     pub(super) content: &'a [u8],
     pub(super) stage: Stage,
     pub(super) mode: Mode,
+    /// The id of the entry, when it is not the id of a blob of `content` (a sparse directory is a tree).
+    pub(super) id: Option<gix::ObjectId>,
 }
 
 impl<'a> Staged<'a> {
@@ -38,6 +40,17 @@ impl<'a> Staged<'a> {
             content,
             stage: Stage::Unconflicted,
             mode: Mode::FILE,
+            id: None,
+        }
+    }
+
+    /// A directory of a sparse index: one entry, with the path of the folder and a slash at its end, for the tree `tree`, which
+    /// is not checked out.
+    pub(super) fn sparse(path: &'a str, tree: gix::ObjectId) -> Self {
+        Self {
+            mode: Mode::DIR,
+            id: Some(tree),
+            ..Self::file(path, b"")
         }
     }
 
@@ -85,7 +98,11 @@ impl Repo {
     /// A linked work tree `name` of this repository, next to it: its folder, with a `.git` file, and its own folder in the
     /// repository (`HEAD` and the index are copies of the repository's). The folders of both are returned.
     pub(super) fn linked_worktree(&self, name: &str) -> (PathBuf, PathBuf) {
-        let linked = self.dir.path().join(name);
+        self.linked_worktree_at(self.dir.path().join(name), name)
+    }
+
+    /// Like [`Self::linked_worktree`], with the work tree at `linked` (a folder that is not made yet).
+    pub(super) fn linked_worktree_at(&self, linked: PathBuf, name: &str) -> (PathBuf, PathBuf) {
         let admin = self.git_dir().join("worktrees").join(name);
         fs::create_dir_all(&linked).expect("the worktree folder");
         fs::create_dir_all(&admin).expect("the admin folder");
@@ -164,6 +181,18 @@ impl Repo {
         self.write_index(&entries);
     }
 
+    /// The id of the tree of the folder `path` in the tree of `HEAD`.
+    pub(super) fn tree_of(&self, path: &str) -> gix::ObjectId {
+        let head = self.repo.head_commit().expect("a commit");
+        let tree = head.tree().expect("its tree");
+        let entry = tree
+            .lookup_entry_by_path(path)
+            .expect("a lookup")
+            .expect("a folder of HEAD");
+
+        entry.object_id()
+    }
+
     /// Makes the tree `tree` the content of `HEAD` (one commit with no parent), leaving the index and the work tree alone.
     pub(super) fn commit_tree(&self, tree: gix::ObjectId) {
         let signature = gix::actor::SignatureRef {
@@ -222,10 +251,16 @@ impl Repo {
     fn write_index_with(&self, entries: &[Staged<'_>], disk_stat: bool) {
         let mut state = gix::index::State::new(self.repo.object_hash());
         for entry in entries {
-            let id = if entry.mode == Mode::COMMIT {
-                gitlink_target()
+            let id = match entry.id {
+                Some(id) => id,
+                None if entry.mode == Mode::COMMIT => gitlink_target(),
+                None => self.repo.write_blob(entry.content).expect("a blob").detach(),
+            };
+            // A sparse directory is not in the work tree, and git marks it so.
+            let flags = if entry.mode == Mode::DIR {
+                Flags::from_stage(entry.stage) | Flags::SKIP_WORKTREE | Flags::EXTENDED
             } else {
-                self.repo.write_blob(entry.content).expect("a blob").detach()
+                Flags::from_stage(entry.stage)
             };
             let stat = if disk_stat {
                 let metadata = gix::index::fs::Metadata::from_path_no_follow(&self.path(entry.path)).expect("metadata");
@@ -234,13 +269,7 @@ impl Repo {
             } else {
                 Stat::default()
             };
-            state.dangerously_push_entry(
-                stat,
-                id,
-                Flags::from_stage(entry.stage),
-                entry.mode,
-                BString::from(entry.path).as_ref(),
-            );
+            state.dangerously_push_entry(stat, id, flags, entry.mode, BString::from(entry.path).as_ref());
         }
         state.sort_entries();
 

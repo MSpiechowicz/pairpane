@@ -56,12 +56,18 @@ impl Stop {
 /// The entries one status may still walk.
 pub(super) struct Meter<'a> {
     stop: &'a Stop,
+    cap: usize,
     left: usize,
 }
 
 impl<'a> Meter<'a> {
     pub(super) fn new(stop: &'a Stop, cap: usize) -> Self {
-        Self { stop, left: cap }
+        Self { stop, cap, left: cap }
+    }
+
+    /// Whether the status was told to stop.
+    pub(super) fn is_stopped(&self) -> bool {
+        self.stop.is_stopped()
     }
 
     /// Counts `count` entries. When there are no more to give, the status is told to stop and this answers `false`.
@@ -78,6 +84,13 @@ impl<'a> Meter<'a> {
                 false
             }
         }
+    }
+
+    /// Begins the next step of the status, which has the whole cap for itself (the steps are the index range, the walk of
+    /// `HEAD` and the walk of the work tree: what one of them counts is not what another does). A status that was stopped
+    /// stays stopped.
+    pub(super) fn next_phase(&mut self) {
+        self.left = self.cap;
     }
 
     /// Something other than a count is over its bound (a path too long, a tree nested too deep): the same as running out
@@ -197,6 +210,22 @@ mod tests {
             started.elapsed() < Duration::from_secs(10),
             "the watchdog was waited for"
         );
+    }
+
+    #[test]
+    fn each_phase_has_the_whole_cap_and_a_stop_outlives_the_phase() {
+        let stop = Stop::default();
+        let mut meter = Meter::new(&stop, 5);
+
+        assert!(meter.spend(5));
+        meter.next_phase();
+        assert!(meter.spend(5));
+        assert!(!stop.is_stopped());
+
+        assert!(!meter.spend(1));
+        meter.next_phase();
+        assert!(!meter.spend(1), "the status stays stopped");
+        assert!(matches!(stop.reason(), Some(GitError::TooBig)));
     }
 
     #[test]

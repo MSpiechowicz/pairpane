@@ -27,8 +27,11 @@
 //!   `invalidInput`. The texts hold no path.
 //! - A git status answers by its deadline whether or not its read has come back (`stuck`): it runs on a thread of its own,
 //!   which the request waits for until the time limit and [`GIT_GRACE`] have passed; then the request answers as for the time
-//!   limit, gives its place of the [`GIT_THREADS`] back, and the thread counts as stuck until it ends. While
-//!   [`stuck::MAX_STUCK`] threads are stuck, a status is refused as `busy`.
+//!   limit, gives its place of the [`GIT_THREADS`] back, and the thread counts as stuck until it ends. A status holds a place
+//!   in the count of [`stuck::MAX_STUCK`] (2) for as long as it runs and when it is stuck, and takes it before its thread is
+//!   started, so that the count of those that run or are stuck is never over it; when it is full a status is refused as `busy`.
+//!   The count is small because a thread that is stuck may be one that spends a processor (one object of a long chain of
+//!   deltas cannot be interrupted, and gix has no hook for it): at most two can.
 //! - [`Columns::shut_down`] raises the flag all of them watch, as the app exits: a checksum stops between its chunks, a
 //!   batch between its files and a git status at its next entry, and none starts after.
 
@@ -145,6 +148,7 @@ impl Columns {
         read: impl FnOnce(&Path, Limits, &AtomicBool) -> Result<GitStatus, GitError> + Send + 'static,
     ) -> CommandResult<GitStatus> {
         let folder = resolve(Some(path), None)?;
+        // A quick answer; the place in the count is taken (and checked again) when the thread is started.
         if self.stuck.is_full() {
             return Err(git_busy());
         }
@@ -165,6 +169,7 @@ impl Columns {
         match answer {
             Ok(status) => status.map_err(|error| git_error(&error)),
             Err(Unanswered::TimedOut) => Err(git_error(&GitError::TimedOut)),
+            Err(Unanswered::Busy) => Err(git_busy()),
             Err(Unanswered::Failed) => Err(CommandError::new(IpcErrorCode::Internal, "the status was interrupted")),
         }
     }
@@ -243,9 +248,9 @@ pub async fn columns_checksum(columns: State<'_, Columns>, path: String, name: S
 /// `untracked`), and is `ignored` only when it is itself. The repository is read in process and nothing it names (a filter, a
 /// hook, `core.fsmonitor`, a credential helper) is ever started, and a repository that points to a network place, or has a
 /// pipe or a device where a file is expected, or is of a format that is not read, is `repo: false`. `invalidInput` ("the
-/// repository is too big to read here") when it walks over 200,000 entries or has an index over 64 MiB, `invalidInput` ("the
+/// repository is too big to read here") when a step of it walks over 200,000 entries or it has an index over 64 MiB, `invalidInput` ("the
 /// repository took too long to read") when it takes over 5 seconds (the answer comes by then whether or not the read has
-/// returned), and `busy` when two statuses are already being read or four threads of statuses are stuck.
+/// returned), and `busy` when two statuses are already being read, or the ones being read and the ones stuck add up to two.
 #[tauri::command]
 pub async fn columns_git(columns: State<'_, Columns>, path: String) -> CommandResult<GitStatus> {
     columns.git(path, Limits::default()).await

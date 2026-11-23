@@ -6,12 +6,12 @@ use std::path::Path;
 
 use gix::bstr::BStr;
 use gix::dir::EntryRef;
-use gix::dir::entry::Status as DirStatus;
+use gix::dir::entry::{Kind as DirKind, Status as DirStatus};
 use gix::dir::walk::{Action, Delegate};
 use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
 use gix::status::plumbing::index_as_worktree_with_renames::{Entry, VisitEntry};
 
-use super::files;
+use super::files::{self, Rules};
 use super::marks::Marks;
 use super::watch::Meter;
 use crate::model::GitMark;
@@ -52,17 +52,31 @@ pub(super) struct Walker<'a, 'm> {
     pub(super) meter: &'a mut Meter<'m>,
     /// The work tree, to look at the `.gitignore` of a folder before the walk enters it.
     pub(super) workdir: &'a Path,
+    /// The bytes of the rules files read so far: the ones of the folder and its parents, and of each folder entered.
+    pub(super) rules: u64,
 }
 
 impl Walker<'_, '_> {
-    /// Whether the rules files of the folder `rela_path` must not be handed to gix (see [`files::risky_rules_file`]): the
-    /// walk reads its `.gitignore` on entering, and a pipe there would hold it up for ever. Such a folder is not entered.
-    fn rules_are_risky(&self, rela_path: &BStr) -> bool {
+    /// Whether the walk may enter the folder `rela_path`, whose `.gitignore` it reads on entering (see [`files::rules_file`]):
+    /// a pipe there would hold it up for ever, and a file too big is no rules file, so such a folder is not entered. The bytes
+    /// of the rules files add up, and past [`files::RULES_TOTAL_BYTES`] the status is too big (the patterns of all of them are
+    /// held in memory).
+    fn may_enter(&mut self, rela_path: &BStr) -> bool {
         let Ok(rela_path) = gix::path::from_bstr(rela_path) else {
-            return true;
+            return false;
         };
 
-        files::risky_rules_file(&self.workdir.join(rela_path).join(".gitignore"))
+        match files::rules_file(&self.workdir.join(rela_path).join(".gitignore")) {
+            Rules::Risky => false,
+            Rules::Bytes(bytes) => {
+                self.rules += bytes;
+                if self.rules > files::RULES_TOTAL_BYTES {
+                    self.meter.exhaust();
+                }
+
+                !self.meter.is_stopped()
+            }
+        }
     }
 }
 
@@ -93,11 +107,17 @@ impl Delegate for Walker<'_, '_> {
             return false;
         }
 
+        // The submodules are never entered (point 6 of the module docs): the walk is told to look in folders that hold
+        // repositories, so what the index holds as a gitlink is skipped here.
+        if entry.index_kind == Some(DirKind::Repository) {
+            return false;
+        }
+
         entry.status.can_recurse(
             entry.disk_kind,
             entry.pathspec_match,
             for_deletion,
             worktree_root_is_repository,
-        ) && !self.rules_are_risky(entry.rela_path.as_ref())
+        ) && self.may_enter(entry.rela_path.as_ref())
     }
 }

@@ -2,14 +2,19 @@
 //! a hundred folders of one repository would otherwise decode the same index a hundred times; with this, the index is
 //! decoded once while it does not change. What is kept is at most [`SLOTS`] decoded indexes (the least recently used goes
 //! first), each for a key that says which file it was decoded from: the repository's folder, `HEAD`'s commit, and the
-//! index file's length and time of modification. A file that was changed in the last moments cannot be told from the one
+//! index file's length, time of modification, device and inode, and time of change (where the system has them: an index
+//! that was replaced by a file of the same length and time of modification is another file, and a write cannot be hidden by
+//! setting the time of modification back, which the time of change shows). A file that was changed in the last moments cannot be told from the one
 //! that was decoded by its time (a coarse clock may give the same one for two writes, as git's own racy checks know), so
 //! an index younger than the minimum age is decoded each time and not kept.
 
+use std::fs::Metadata;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
+
+use crate::listing::platform;
 
 /// How many decoded indexes are kept.
 const SLOTS: usize = 4;
@@ -32,6 +37,36 @@ pub(super) struct Key {
     pub(super) head: Option<gix::ObjectId>,
     pub(super) len: u64,
     pub(super) modified: Option<SystemTime>,
+    /// The device and the inode of the file, where the system has them.
+    pub(super) identity: Option<(u64, u64)>,
+    /// The time the file's status last changed (seconds and nanoseconds), where the system has it.
+    pub(super) changed: Option<(i64, i64)>,
+}
+
+impl Key {
+    /// The key of the index file whose metadata is `metadata`, in the repository of `git_dir` at the commit `head`.
+    pub(super) fn of(git_dir: PathBuf, head: Option<gix::ObjectId>, metadata: &Metadata) -> Self {
+        Self {
+            git_dir,
+            head,
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+            identity: platform::identity(metadata),
+            changed: changed_at(metadata),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn changed_at(metadata: &Metadata) -> Option<(i64, i64)> {
+    use std::os::unix::fs::MetadataExt;
+
+    Some((metadata.ctime(), metadata.ctime_nsec()))
+}
+
+#[cfg(not(unix))]
+fn changed_at(_metadata: &Metadata) -> Option<(i64, i64)> {
+    None
 }
 
 /// The cache of the app.
@@ -110,6 +145,8 @@ mod tests {
             head: None,
             len,
             modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000)),
+            identity: None,
+            changed: None,
         }
     }
 
@@ -177,6 +214,59 @@ mod tests {
         }
 
         assert_eq!(cache.decoded(), 4);
+    }
+
+    /// Sets the time of modification of the file at `path` (the way a program that restores it does).
+    #[cfg(unix)]
+    fn set_modified(path: &std::path::Path, time: SystemTime) {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .expect("the file")
+            .set_modified(time)
+            .expect("set");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_index_replaced_by_a_file_of_the_same_length_and_time_is_not_the_one_that_was_decoded() {
+        let folder = tempfile::tempdir().expect("a folder");
+        let path = folder.path().join("index");
+        let then = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let key = |path: &std::path::Path| {
+            let metadata = std::fs::metadata(path).expect("metadata");
+
+            Key::of(folder.path().to_path_buf(), None, &metadata)
+        };
+        std::fs::write(&path, b"0123456789").expect("an index");
+        set_modified(&path, then);
+        let original = key(&path);
+        assert_eq!(original, key(&path), "the same file has the same key");
+
+        // Another file in its place (the inode is another one), with the same length and time of modification.
+        let other = folder.path().join("other");
+        std::fs::write(&other, b"9876543210").expect("an index");
+        set_modified(&other, then);
+        std::fs::rename(&other, &path).expect("replaced");
+        let replaced = key(&path);
+        assert_eq!((replaced.len, replaced.modified), (original.len, original.modified));
+        assert_ne!(replaced, original);
+
+        // The same file written in place, with the time of modification put back: the time of change shows it.
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(&path, b"abcdefghij").expect("written");
+        set_modified(&path, then);
+        let rewritten = key(&path);
+        assert_eq!((rewritten.len, rewritten.modified), (replaced.len, replaced.modified));
+        assert_eq!(rewritten.identity, replaced.identity);
+        assert_ne!(rewritten, replaced);
+
+        // And the cache decodes each of them.
+        let cache = Cache::new(Duration::ZERO);
+        for key in [original, replaced, rewritten] {
+            cache.get(key, index).expect("decoded");
+        }
+        assert_eq!(cache.decoded(), 3);
     }
 
     #[test]

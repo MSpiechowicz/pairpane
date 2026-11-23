@@ -195,7 +195,7 @@ fn a_status_that_never_returns_is_answered_at_the_deadline_and_gives_its_place_b
 }
 
 #[test]
-fn while_four_threads_are_stuck_a_status_is_busy_until_one_ends() {
+fn while_the_most_threads_are_stuck_a_status_is_busy_until_one_ends() {
     let (_folder, path) = repository();
     let columns = Columns::default();
     let mut releases = Vec::new();

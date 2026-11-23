@@ -25,6 +25,27 @@ fn more_entries_than_the_cap_is_too_big() {
 }
 
 #[test]
+fn each_step_of_a_status_has_the_whole_cap_for_itself() {
+    // The index range, the walk of `HEAD` and the walk of the work tree each count the files of the folder: 100 files do not
+    // make 300 entries for a cap of 150.
+    let paths: Vec<String> = (0..100).map(|index| format!("file{index:03}.txt")).collect();
+    let repo = clean_paths(&paths);
+    repo.put("file000.txt", b"changed");
+    repo.put("new.txt", b"n");
+    let cap = |entries| Limits {
+        entries,
+        ..Limits::default()
+    };
+
+    let answer = status(repo.root(), cap(150), &AtomicBool::new(false)).expect("a status");
+    assert_eq!(answer.marks.len(), 2);
+
+    // A step that alone is over the cap is still too big: the index has more entries than that.
+    let answer = status(repo.root(), cap(99), &AtomicBool::new(false));
+    assert!(matches!(answer, Err(GitError::TooBig)), "{answer:?}");
+}
+
+#[test]
 fn a_big_generated_tree_of_untracked_files_is_too_big_under_a_small_cap() {
     let repo = clean(&[("tracked/keep.txt", b"k")]);
     for folder in 0..80 {

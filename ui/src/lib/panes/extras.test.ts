@@ -144,6 +144,14 @@ describe('the Git place of an item', () => {
     expect(gitPlaceOf(listing, entry('..', 'dir'))).toBeUndefined();
     expect(gitPlaceOf(listing, undefined)).toBeUndefined();
   });
+
+  it('is not a folder for a link, even one to a folder: git holds a link as one file', async () => {
+    const { listing } = await shown();
+
+    expect(gitPlaceOf(listing, entry('to-sub', 'dir', { linkTarget: 'sub' }))).toEqual({ folder: '/pics', name: 'to-sub', dir: false });
+    expect(gitPlaceOf(listing, entry('to-file', 'file', { linkTarget: 'a.jpg' }))).toMatchObject({ dir: false });
+    expect(gitPlaceOf(listing, entry('broken', 'other', { linkTarget: 'gone' }))).toMatchObject({ dir: false });
+  });
 });
 
 describe('the Git cell', () => {
