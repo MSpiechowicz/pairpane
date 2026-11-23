@@ -44,13 +44,14 @@ const SHELL_COMMAND = new RegExp(
   'i',
 );
 
-// The one place a shell runs: the dock's command line, whose purpose is to run what the user types in their own shell
-// (issue #52). The user allows it in a native dialog once per run of the app; see `crates/pairpane_core/src/shell/mod.rs`
-// and `src-tauri/src/commands/shell.rs`. Everywhere else both shell rules hold, and no marker can waive them.
+// The one place a shell is named: the dock's command line, whose purpose is to run what the user types in their own
+// shell (issue #52); the user allows it in a native dialog. Its runner falls back to the system's shell when the user's
+// is not set, and its tests run one. Only these files are exempt, and only from naming a shell: it is started from the
+// user's `$SHELL` / `%ComSpec%`, so `shell-spawn` holds there too. Everywhere else no marker can waive either rule.
 const COMMAND_LINE = [
-  'crates/pairpane_core/src/shell/**',
-  'src-tauri/src/commands/shell.rs',
-  'src-tauri/src/commands/shell/**',
+  'crates/pairpane_core/src/shell/mod.rs',
+  'crates/pairpane_core/src/shell/tests.rs',
+  'src-tauri/src/commands/shell/tests.rs',
 ] as const;
 
 const RULES: readonly Rule[] = [
@@ -59,7 +60,6 @@ const RULES: readonly Rule[] = [
     reason: 'never spawn a shell; use a fixed binary with explicit argv',
     pattern: SHELL_COMMAND,
     extensions: ['.rs'],
-    skip: COMMAND_LINE,
     optOut: false,
   },
   {

@@ -80,7 +80,8 @@ impl Cleaner {
                 (State::Escape, _) | (State::EscapeOne, _) => State::Text,
                 (State::Control, '\u{40}'..='\u{7e}') => State::Text,
                 (State::Control, _) => State::Control,
-                (State::Command, '\u{7}') => State::Text,
+                // A line break ends a command that was never finished, so it does not hide the lines after it.
+                (State::Command | State::CommandEscape, '\u{7}' | '\n') => State::Text,
                 (State::Command, '\u{1b}') => State::CommandEscape,
                 (State::Command, _) => State::Command,
                 (State::CommandEscape, '\\') => State::Text,

@@ -3,24 +3,28 @@
 //! What the page is trusted with. `shell_run` runs a line in the user's shell: whatever sends it runs anything the user
 //! can. The page is not a trust boundary for the whole app (other commands write files, see `edit.rs`), but no command
 //! before this one started a program the user had not chosen. So the first line in a run of the app is put to the user
-//! in a native dialog of the shell, which the page cannot call (no dialog permission is granted to it); a yes holds until
-//! the app ends, a no refuses that line and the next one asks again (one question at a time). Nothing is remembered
-//! between runs: the state file is the page's to write.
+//! in a native dialog of the shell, which the page cannot call (no dialog permission is granted to it), showing the line
+//! itself and that a yes holds for the next ones; the answer, a no too, holds until the app ends (see [`consent`]).
+//! Nothing is remembered between runs: the state file is the page's to write.
 //!
 //! The line runs as the core's [`shell`] module says: in the folder of the active pane, its input closed, its output
 //! streamed as text up to a cap; a stop ends it and what it started. At most [`RUNNING`] commands run at once, and all
 //! are stopped as the app exits.
 //!
 //! `terminal_open` starts no line and no program the page names: the terminal is the one `$TERMINAL` names or a known
-//! one (Terminal on macOS, the shell in a console of its own on Windows), with no arguments but the folder on macOS and
-//! the folder as its working directory. No text sent to the page holds a path; details go to the log.
+//! one found in the system's own folders (Terminal on macOS, the shell in a console of its own on Windows), with no
+//! arguments but the folder on macOS and the folder as its working directory. Still, a program file can be planted
+//! (the page can write files), so the first start of each terminal program in a run is put to the user the same way,
+//! showing its path. At most [`TERMINALS`] are open at once. No text sent to the page holds a path; details go to the
+//! log.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use pairpane_core::model::{IpcError, IpcErrorCode, ShellEvent, ShellId};
@@ -34,14 +38,17 @@ use super::limit::{Permit, ThreadCap};
 use super::panes::resolve;
 use crate::error::{CommandError, CommandResult};
 
+mod consent;
 #[cfg(test)]
 mod tests;
+
+use consent::{Consent, line_question, terminal_question};
 
 /// Commands that may run at once.
 const RUNNING: usize = 4;
 
-/// Terminals being started at once (each only until it has started).
-const STARTING: usize = 2;
+/// Terminals open at once (each holds its place until it is closed, when the thread that waits for it ends).
+const TERMINALS: usize = 8;
 
 /// How long the exit waits for the commands to be told to stop.
 const EXIT_WAIT: Duration = Duration::from_millis(200);
@@ -52,44 +59,23 @@ pub struct Shells {
     runs: Mutex<HashMap<ShellId, Arc<Stop>>>,
     ids: AtomicU64,
     running: ThreadCap,
-    starting: ThreadCap,
-    /// The user allowed the command line in this run.
-    allowed: AtomicBool,
-    /// Held while the user is asked.
-    asking: Mutex<()>,
+    terminals: ThreadCap,
+    /// The user's say on the command line, by shell.
+    lines: Consent<PathBuf>,
+    /// The user's say on terminal programs, by program and arguments.
+    programs: Consent<(OsString, Vec<OsString>)>,
 }
 
 impl Shells {
-    /// Whether the command line may run lines: it may once the user has allowed it in this run; otherwise `ask` (given
-    /// the question) decides. A second question at once is `busy`, not put.
-    fn consent(&self, shell: &Path, ask: impl FnOnce(String) -> bool) -> CommandResult<()> {
-        if self.allowed.load(Ordering::Acquire) {
-            return Ok(());
-        }
-
-        // A question that panicked is over: its lock is taken again, not left as one open for good.
-        let _asking = match self.asking.try_lock() {
-            Ok(asking) => asking,
-            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-            Err(TryLockError::WouldBlock) => {
-                return Err(CommandError::new(IpcErrorCode::Busy, "another question is open"));
-            }
-        };
-        if self.allowed.load(Ordering::Acquire) {
-            return Ok(());
-        }
-
-        if ask(question(shell)) {
-            self.allowed.store(true, Ordering::Release);
-
-            Ok(())
-        } else {
-            // Not `forbidden`, whose text the page never sees: this one says what happened.
-            Err(CommandError::new(
-                IpcErrorCode::InvalidInput,
-                "the command line was not allowed",
-            ))
-        }
+    /// Whether the command line may run `line` with `shell`: it may once the user has allowed it in this run (and may
+    /// not once they refused); otherwise `ask` (given the question, which shows the line) decides.
+    fn consent(&self, shell: &Path, line: &str, ask: impl FnOnce(String) -> bool) -> CommandResult<()> {
+        self.lines.allows(
+            shell.to_owned(),
+            || line_question(shell, line),
+            ask,
+            "the command line was not allowed (until Pairpane is started again)",
+        )
     }
 
     /// Takes a place for a command and gives it an id and a stop flag; `busy` when [`RUNNING`] run.
@@ -138,15 +124,6 @@ impl Shells {
     fn lock(&self) -> MutexGuard<'_, HashMap<ShellId, Arc<Stop>>> {
         self.runs.lock().unwrap_or_else(PoisonError::into_inner)
     }
-}
-
-/// What the user is asked before the first line of a run.
-fn question(shell: &Path) -> String {
-    format!(
-        "Run the commands you type in Pairpane's command line?\n\nThey run in your shell ({}) with your permissions, in \
-         the folder of the active pane. You are asked once each time Pairpane starts.",
-        shell.display()
-    )
 }
 
 /// Runs a command on a blocking thread that holds `permit` until it ends, and drops it from `shells` then.
@@ -199,8 +176,9 @@ fn start_error(error: &io::Error) -> IpcError {
     IpcError::new(IpcErrorCode::Process, text)
 }
 
-/// Starts the terminal in `folder` and lets it run (a thread reaps it when it ends).
-fn open_terminal(folder: &Path, place: Permit) -> CommandResult<()> {
+/// Starts the terminal in `folder` once the user has allowed its program, and lets it run: a thread reaps it when it
+/// ends, holding `place` until then.
+fn open_terminal(shells: &Shells, folder: &Path, place: Permit, ask: impl FnOnce(String) -> bool) -> CommandResult<()> {
     if !folder.is_dir() {
         return Err(CommandError::new(IpcErrorCode::NotFound, "the folder is not there"));
     }
@@ -212,8 +190,27 @@ fn open_terminal(folder: &Path, place: Permit) -> CommandResult<()> {
         )
     })?;
 
+    // The arguments the user is asked about are the program's own: the folder (macOS) changes with every call.
+    let fixed: Vec<OsString> = args
+        .iter()
+        .filter(|arg| arg.as_os_str() != folder.as_os_str())
+        .cloned()
+        .collect();
+    shells.programs.allows(
+        (program.clone(), fixed.clone()),
+        || terminal_question(&program, &fixed),
+        ask,
+        "this terminal was not allowed (until Pairpane is started again)",
+    )?;
+
     let mut command = Command::new(program);
     command.args(args).current_dir(folder);
+    for (name, value) in shell::appimage_env(std::env::vars_os()) {
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
 
     // A console program started by the app (which has none) gets a console of its own, and its input and output.
     #[cfg(windows)]
@@ -235,11 +232,11 @@ fn open_terminal(folder: &Path, place: Permit) -> CommandResult<()> {
 
         CommandError::new(IpcErrorCode::Process, "the terminal could not be started")
     })?;
-    drop(place);
 
     let waiter = std::thread::Builder::new()
         .name("pairpane-terminal-wait".to_owned())
         .spawn(move || {
+            let _place = place;
             child.wait().ok();
         });
     if let Err(error) = waiter {
@@ -267,10 +264,11 @@ pub async fn shell_run(
 
     let asker = app.clone();
     let program = user_shell.program.clone();
+    let line = command.clone();
     async_runtime::spawn_blocking(move || {
         asker
             .state::<Shells>()
-            .consent(&program, |question| ask_user(&asker, question))
+            .consent(&program, &line, |question| ask_user(&asker, question))
     })
     .await
     .map_err(|_| CommandError::new(IpcErrorCode::Internal, "the question could not be put"))??;
@@ -287,16 +285,22 @@ pub async fn shell_stop(shells: State<'_, Shells>, id: ShellId) -> CommandResult
     shells.stop(id)
 }
 
-/// Opens the user's terminal in the folder `path`. `process` when there is none or it cannot be started.
+/// Opens the user's terminal in the folder `path`. The first start of a terminal program in a run asks the user in a
+/// native dialog; a refusal is `invalidInput`. `process` when there is none or it cannot be started; `busy` when
+/// [`TERMINALS`] are open.
 #[tauri::command]
-pub async fn terminal_open(shells: State<'_, Shells>, path: String) -> CommandResult<()> {
+pub async fn terminal_open(app: AppHandle, shells: State<'_, Shells>, path: String) -> CommandResult<()> {
     let folder = resolve(Some(path), None)?;
     let place = shells
-        .starting
-        .acquire(STARTING)
-        .ok_or_else(|| CommandError::new(IpcErrorCode::Busy, "a terminal is being started"))?;
+        .terminals
+        .acquire(TERMINALS)
+        .ok_or_else(|| CommandError::new(IpcErrorCode::Busy, "eight terminals are open; close one first"))?;
 
-    async_runtime::spawn_blocking(move || open_terminal(&folder, place))
-        .await
-        .map_err(|_| CommandError::new(IpcErrorCode::Internal, "the terminal could not be started"))?
+    async_runtime::spawn_blocking(move || {
+        open_terminal(&app.state::<Shells>(), &folder, place, |question| {
+            ask_user(&app, question)
+        })
+    })
+    .await
+    .map_err(|_| CommandError::new(IpcErrorCode::Internal, "the terminal could not be started"))?
 }

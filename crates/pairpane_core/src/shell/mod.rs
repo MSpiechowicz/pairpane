@@ -28,11 +28,13 @@ use crate::model::ShellEvent;
 use crate::process::{GRACE, POLL};
 
 mod clean;
+mod env;
 mod terminal;
 #[cfg(test)]
 mod tests;
 
 pub use clean::Cleaner;
+pub use env::appimage_env;
 pub use terminal::terminal;
 #[cfg(all(test, unix, not(target_os = "macos")))]
 use terminal::terminal_from;
@@ -91,11 +93,24 @@ impl Shell {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        for (name, value) in appimage_env(std::env::vars_os()) {
+            match value {
+                Some(value) => command.env(name, value),
+                None => command.env_remove(name),
+            };
+        }
 
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
 
+            // A line that starts with `-` would be read as options of the shell (`bash -c -i`): a space before it is
+            // the same command.
+            let line = if line.starts_with('-') {
+                format!(" {line}")
+            } else {
+                line.to_owned()
+            };
             command.arg("-c").arg(line).process_group(0);
         }
 
@@ -104,7 +119,10 @@ impl Shell {
             use std::os::windows::process::CommandExt;
 
             // `/S` takes the line between the outer quotes as it is; the quotes are the only change made to it.
+            // A program is looked for on the PATH only, not first in the folder the line runs in (which may be one
+            // that was downloaded or unpacked): `git` is never a `git.bat` planted there.
             command
+                .env("NoDefaultCurrentDirectoryInExePath", "1")
                 .args(["/D", "/S", "/C"])
                 .raw_arg(format!("\"{line}\""))
                 .creation_flags(crate::process::CREATE_NO_WINDOW);
@@ -175,6 +193,28 @@ impl Running {
         ))
     }
 
+    /// Whether the shell has ended. On Unix it is not reaped yet (it stays a zombie until [`Running::reap`]), so its
+    /// process group id stays reserved and a later signal to the group cannot reach another one.
+    fn has_ended(&mut self) -> io::Result<bool> {
+        #[cfg(unix)]
+        {
+            use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
+
+            let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+            Ok(waitid(WaitId::Pid(Pid::from_child(&self.child)), options)?.is_some())
+        }
+
+        #[cfg(windows)]
+        {
+            Ok(self.child.try_wait()?.is_some())
+        }
+    }
+
+    /// The exit status of a shell that has ended, which is reaped.
+    fn reap(&mut self) -> Option<ExitStatus> {
+        self.child.wait().ok()
+    }
+
     /// Asks the command and what it started to end (`SIGTERM` to its group on Unix; on Windows the job is ended at once).
     fn terminate(&mut self) {
         #[cfg(unix)]
@@ -238,22 +278,30 @@ impl Stop {
     }
 }
 
-/// What a reading thread sends: a chunk read, or the end of its pipe.
+/// What a reading thread sends: a chunk read from its stream (0: output, 1: errors), or the end of its pipe.
 enum Piece {
-    Bytes(Vec<u8>),
+    Bytes(usize, Vec<u8>),
     End,
 }
 
-/// Reads `pipe` to its end on a thread of its own, sending what it reads to `sender`.
-fn read_on_thread(mut pipe: impl Read + Send + 'static, sender: Sender<Piece>, name: &str) -> io::Result<()> {
+/// Reads `pipe` to its end on a thread of its own, sending what it reads to `sender`. Once nobody takes it (the command
+/// is over, and a program it left in the background still writes), it is read and dropped: the pipe stays open, so that
+/// program is not ended by a broken pipe.
+fn read_on_thread(
+    mut pipe: impl Read + Send + 'static,
+    stream: usize,
+    sender: Sender<Piece>,
+    name: &str,
+) -> io::Result<()> {
     thread::Builder::new().name(name.to_owned()).spawn(move || {
         let mut buffer = vec![0; CHUNK];
+        let mut wanted = true;
         loop {
             match pipe.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => {
-                    if sender.send(Piece::Bytes(buffer[..read].to_vec())).is_err() {
-                        return;
+                    if wanted {
+                        wanted = sender.send(Piece::Bytes(stream, buffer[..read].to_vec())).is_ok();
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
@@ -280,8 +328,8 @@ pub fn run(
     let (mut running, stdout, stderr) = Running::start(shell, line, folder)?;
 
     let (sender, receiver) = mpsc::channel();
-    let readers = read_on_thread(stdout, sender.clone(), "pairpane-shell-out")
-        .and_then(|()| read_on_thread(stderr, sender, "pairpane-shell-err"));
+    let readers = read_on_thread(stdout, 0, sender.clone(), "pairpane-shell-out")
+        .and_then(|()| read_on_thread(stderr, 1, sender, "pairpane-shell-err"));
     if let Err(error) = readers {
         running.kill();
         running.child.wait().ok();
@@ -291,7 +339,7 @@ pub fn run(
     let mut supervisor = Supervisor {
         running,
         receiver,
-        cleaner: Cleaner::default(),
+        cleaners: [Cleaner::default(), Cleaner::default()],
         sent: 0,
         truncated: false,
         open_pipes: 2,
@@ -314,7 +362,8 @@ pub fn run(
 struct Supervisor {
     running: Running,
     receiver: Receiver<Piece>,
-    cleaner: Cleaner,
+    /// One for each stream, so that neither's escape or cut character runs into the other's text.
+    cleaners: [Cleaner; 2],
     /// Bytes of text sent so far.
     sent: usize,
     truncated: bool,
@@ -327,49 +376,48 @@ struct Supervisor {
 
 impl Supervisor {
     /// Runs until the command has ended and its output has (or [`GRACE`] after that, has not); its exit status.
+    /// A stop asked while it runs is `SIGTERM` to its group and, [`GRACE`] later, `SIGKILL` to whatever of the group is
+    /// left, even when the shell itself has ended by then (what it started may ignore the polite one); a forced stop
+    /// is `SIGKILL` at once.
     fn drive(&mut self, stop: &Stop, emit: &mut dyn FnMut(ShellEvent) -> bool) -> Option<ExitStatus> {
-        let mut status = None;
         let mut ended_at: Option<Instant> = None;
 
         loop {
             // A stop counts only while the command runs: one that comes after it ended leaves alone what it left
             // running in the background, and does not say it was stopped.
-            if status.is_none() {
-                if stop.asked() {
-                    self.stop();
-                }
-                let overdue = self.stopped_at.is_some_and(|asked| asked.elapsed() >= GRACE);
-                if !self.killed && (stop.forced() || overdue) {
-                    self.running.kill();
-                    self.killed = true;
-                }
+            if ended_at.is_none() && stop.asked() {
+                self.stop();
+            }
+            let overdue = self.stopped_at.is_some_and(|asked| asked.elapsed() >= GRACE);
+            if !self.killed && (overdue || (stop.forced() && (ended_at.is_none() || self.stopped_at.is_some()))) {
+                self.running.kill();
+                self.killed = true;
             }
 
-            if status.is_none() {
-                match self.running.child.try_wait() {
-                    Ok(Some(exit)) => {
-                        status = Some(exit);
-                        ended_at = Some(Instant::now());
-                    }
-                    Ok(None) => {}
+            if ended_at.is_none() {
+                match self.running.has_ended() {
+                    Ok(true) => ended_at = Some(Instant::now()),
+                    Ok(false) => {}
                     Err(error) => {
                         tracing::warn!(%error, "cannot wait for the command");
                         self.running.kill();
-                        self.running.child.wait().ok();
-                        return None;
+                        return self.running.reap();
                     }
                 }
             }
 
+            // A stopped command is over once its group has been killed.
+            let settled = self.stopped_at.is_none() || self.killed;
             if let Some(ended) = ended_at
+                && settled
                 && (self.open_pipes == 0 || ended.elapsed() >= GRACE)
             {
                 break;
             }
 
             match self.receiver.recv_timeout(POLL) {
-                Ok(Piece::Bytes(bytes)) => {
-                    if !self.forward(&bytes, emit) && status.is_none() {
+                Ok(Piece::Bytes(stream, bytes)) => {
+                    if !self.forward(stream, &bytes, emit) && ended_at.is_none() {
                         self.stop();
                     }
                 }
@@ -386,14 +434,16 @@ impl Supervisor {
 
         // What is still queued was read before the end.
         while let Ok(piece) = self.receiver.try_recv() {
-            if let Piece::Bytes(bytes) = piece {
-                self.forward(&bytes, emit);
+            if let Piece::Bytes(stream, bytes) = piece {
+                self.forward(stream, &bytes, emit);
             }
         }
-        let rest = self.cleaner.finish();
-        self.send(rest, emit);
+        for stream in 0..self.cleaners.len() {
+            let rest = self.cleaners[stream].finish();
+            self.send(rest, emit);
+        }
 
-        status
+        self.running.reap()
     }
 
     fn stop(&mut self) {
@@ -404,8 +454,8 @@ impl Supervisor {
     }
 
     /// Sends what `bytes` say as text, up to [`MAX_OUTPUT`] in all. `false` when the page no longer wants it.
-    fn forward(&mut self, bytes: &[u8], emit: &mut dyn FnMut(ShellEvent) -> bool) -> bool {
-        let text = self.cleaner.push(bytes);
+    fn forward(&mut self, stream: usize, bytes: &[u8], emit: &mut dyn FnMut(ShellEvent) -> bool) -> bool {
+        let text = self.cleaners[stream].push(bytes);
         self.send(text, emit)
     }
 

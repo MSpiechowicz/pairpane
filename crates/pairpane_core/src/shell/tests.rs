@@ -1,4 +1,3 @@
-#[cfg(all(unix, not(target_os = "macos")))]
 use std::ffi::OsString;
 
 use super::*;
@@ -46,21 +45,65 @@ fn a_character_set_escape_is_left_out_whole_and_an_unfinished_escape_does_not_hi
     assert!(shown.len() < 40, "the start of the sequence is left out: {shown:?}");
 }
 
+#[test]
+fn an_appimage_leaves_no_variable_naming_its_mount_and_nothing_changes_outside_one() {
+    let vars = |pairs: &[(&str, &str)]| {
+        pairs
+            .iter()
+            .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+            .collect::<Vec<_>>()
+    };
+    let os = |text: &str| OsString::from(text);
+
+    let changes = appimage_env(
+        vars(&[
+            ("APPDIR", "/tmp/.mount_Pair1/"),
+            ("APPIMAGE", "/home/u/Pairpane.AppImage"),
+            ("PATH", "/tmp/.mount_Pair1/usr/bin:/usr/bin:/bin"),
+            ("GTK_PATH", "/tmp/.mount_Pair1/usr/lib/gtk-3.0"),
+            ("HOME", "/home/u"),
+        ])
+        .into_iter(),
+    );
+
+    assert_eq!(
+        changes,
+        vec![
+            (os("APPDIR"), None),
+            (os("APPIMAGE"), None),
+            (os("PATH"), Some(os("/usr/bin:/bin"))),
+            (os("GTK_PATH"), None),
+        ]
+    );
+    assert!(appimage_env(vars(&[("PATH", "/usr/bin")]).into_iter()).is_empty());
+}
+
 #[cfg(all(unix, not(target_os = "macos")))]
 #[test]
-fn the_terminal_is_the_one_terminal_names_then_the_first_known_one_found() {
-    let found = |name: &str| (name == "konsole" || name == "kitty").then(|| PathBuf::from(format!("/usr/bin/{name}")));
+fn the_terminal_is_the_one_terminal_names_then_the_first_known_one_in_the_system_folders() {
+    // On the PATH: a planted `x-terminal-emulator` in the user's folder, and the real ones.
+    let on_path = |name: &str| match name {
+        "x-terminal-emulator" => Some(PathBuf::from("/home/u/.local/bin/x-terminal-emulator")),
+        "konsole" | "kitty" => Some(PathBuf::from(format!("/usr/bin/{name}"))),
+        _ => None,
+    };
+    let in_system =
+        |name: &str| (name == "konsole" || name == "kitty").then(|| PathBuf::from(format!("/usr/bin/{name}")));
     let folder = Path::new("/home");
 
     let chosen = |variable: Option<&str>| {
-        terminal_from(folder, variable.map(OsString::from), &found).map(|(program, _)| program)
+        terminal_from(folder, variable.map(OsString::from), &on_path, &in_system).map(|(program, _)| program)
     };
 
     assert_eq!(chosen(Some("kitty")), Some(OsString::from("/usr/bin/kitty")));
-    assert_eq!(chosen(None), Some(OsString::from("/usr/bin/konsole")));
+    assert_eq!(
+        chosen(None),
+        Some(OsString::from("/usr/bin/konsole")),
+        "not the one planted in the user's folder"
+    );
     assert_eq!(chosen(Some("nothing")), Some(OsString::from("/usr/bin/konsole")));
     assert_eq!(chosen(Some("../kitty")), Some(OsString::from("/usr/bin/konsole")));
-    assert_eq!(terminal_from(folder, None, &|_: &str| None), None);
+    assert_eq!(terminal_from(folder, None, &|_: &str| None, &|_: &str| None), None);
 }
 
 /// The runs of a command, with `/bin/sh`.
@@ -243,6 +286,50 @@ mod on_unix {
         thread::sleep(Duration::from_millis(1200));
         assert!(matches!(events.last(), Some(ShellEvent::Done { stopped: false, .. })));
         assert!(marker.exists(), "the background program ran to its end");
+    }
+
+    #[test]
+    fn a_stop_kills_what_ignores_the_polite_one_even_once_the_shell_has_ended() {
+        let folder = temp();
+
+        let (result, events) = run_sh(
+            "sh -c 'trap \"\" TERM; while :; do sleep 1; done' & echo $!; wait",
+            folder.path(),
+            Some(Duration::from_millis(300)),
+        );
+
+        result.expect("ran");
+        assert!(matches!(events.last(), Some(ShellEvent::Done { stopped: true, .. })));
+        let pid: i32 = output(&events).trim().parse().expect("the pid");
+        let pid = rustix::process::Pid::from_raw(pid).expect("a pid");
+        let since = Instant::now();
+        while rustix::process::test_kill_process(pid).is_ok() && since.elapsed() < Duration::from_secs(3) {
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            rustix::process::test_kill_process(pid).is_err(),
+            "the program that ignored TERM is gone"
+        );
+    }
+
+    #[test]
+    fn a_line_that_starts_with_a_dash_is_a_command_not_options_of_the_shell() {
+        let folder = temp();
+
+        let (result, events) = run_sh("-v 2>/dev/null; echo ok", folder.path(), None);
+
+        result.expect("ran");
+        assert_eq!(output(&events), "ok\n");
+    }
+
+    #[test]
+    fn an_unfinished_escape_in_the_output_does_not_hide_the_errors() {
+        let folder = temp();
+
+        let (result, events) = run_sh("printf '\\033]0;title'; echo seen >&2", folder.path(), None);
+
+        result.expect("ran");
+        assert_eq!(output(&events), "seen\n");
     }
 
     #[test]

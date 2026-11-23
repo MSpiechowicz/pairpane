@@ -79,14 +79,19 @@ describe('installer-shell', () => {
 });
 
 describe('the command line', () => {
-  test('is the one place a shell may be named and spawned', () => {
+  test('may name a shell in its runner and its tests only', () => {
     expectClean('crates/pairpane_core/src/shell/mod.rs', `const SHELL: &str = "${SHELL_PATH}";\n`);
-    expectClean('src-tauri/src/commands/shell/tests.rs', 'fn f() { Command::new("bash"); }\n');
+    expectClean('src-tauri/src/commands/shell/tests.rs', `const SHELL: &str = "${SHELL_PATH}";\n`);
   });
 
-  test('does not reach past its own files', () => {
+  test('may not spawn a shell by name, even there', () => {
+    expectViolation('crates/pairpane_core/src/shell/mod.rs', 'fn f() { Command::new("bash"); }\n', 'shell-spawn');
+  });
+
+  test('does not reach past those files', () => {
+    expectViolation('crates/pairpane_core/src/shell/terminal.rs', `const SHELL: &str = "${SHELL_PATH}";\n`, 'installer-shell');
+    expectViolation('src-tauri/src/commands/shell.rs', `const SHELL: &str = "${SHELL_PATH}";\n`, 'installer-shell');
     expectViolation('crates/pairpane_core/src/shells.rs', `const SHELL: &str = "${SHELL_PATH}";\n`, 'installer-shell');
-    expectViolation('src-tauri/src/commands/shell_more.rs', 'fn f() { Command::new("bash"); }\n', 'shell-spawn');
   });
 });
 

@@ -61,10 +61,14 @@ Put `--` before `{file}` where the editor supports it, so a name can never be re
 These two are not settings, but they use what your system says:
 
 - **The command line** (the dock's `❯` field) runs what you type in your own shell (`$SHELL`, or `/bin/sh` when it is
-  not set; `%ComSpec%` on Windows) in the folder of the active pane. Its input is closed, and its output appears above
-  the dock: up to 1 MiB, with colours and other terminal codes left out. **Stop** ends the command and everything it
-  started. The first command after each start of Pairpane asks you to allow the command line.
+  not set; `%ComSpec%` on Windows, which then looks for programs on the `PATH` only, not first in the folder) in the
+  folder of the active pane. Its input is closed, and its output appears above the dock: up to 1 MiB, with colours and
+  other terminal codes left out. **Stop** ends the command and everything it started (what ignores the polite request
+  is killed two seconds later). The first command after each start of Pairpane is shown to you in a question: if you
+  allow it, later commands run without asking until Pairpane ends; if not, the command line stays off until then.
 - **Open terminal here** (in the command palette, and it can be given a key) opens a terminal in that folder: on Linux
-  the one `$TERMINAL` names (a program name or an absolute path; a value with arguments is not used), otherwise the first of
-  `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `kitty`, `alacritty`, `wezterm`, `foot` and
-  `xterm` that is installed; Terminal on macOS; a new console window of your shell on Windows.
+  the one `$TERMINAL` names (a program name on the `PATH` or an absolute path; a value with arguments is not used),
+  otherwise the first of `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `kitty`, `alacritty`,
+  `wezterm`, `foot` and `xterm` found in the system's folders (`/usr/bin`, `/bin`, `/usr/local/bin`); Terminal on
+  macOS; a new console window of your shell on Windows. The first time a terminal program is to be started after
+  Pairpane starts, you are asked to allow it, with its path shown.
