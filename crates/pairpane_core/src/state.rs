@@ -23,10 +23,12 @@ use serde::{Deserialize, Serialize};
 use crate::listing::platform::check_folder;
 use crate::model::{SavedPane, SavedState, SavedTab};
 
+mod keys;
 mod named;
 mod renames;
 mod searches;
 
+pub use keys::{MAX_KEY_OVERRIDES, MAX_KEYS_PER_ACTION};
 pub use renames::MAX_RENAMES;
 pub use searches::{MAX_SEARCH_NAME_CHARS, MAX_SEARCHES, SavedUpdate};
 
@@ -76,6 +78,25 @@ pub fn clean(state: SavedState) -> SavedState {
         hotlist,
         searches: searches::clean_searches(state.searches),
         renames: renames::clean_renames(state.renames),
+        keys: keys::clean_keys(state.keys),
+    }
+}
+
+/// A state with nothing in it, for what a file that cannot be used leaves to keep.
+fn empty() -> SavedState {
+    let pane = || SavedPane {
+        tabs: Vec::new(),
+        active: 0,
+    };
+
+    SavedState {
+        active: crate::model::PaneId::Left,
+        left: pane(),
+        right: pane(),
+        hotlist: Vec::new(),
+        searches: Vec::new(),
+        renames: Vec::new(),
+        keys: Vec::new(),
     }
 }
 
@@ -174,11 +195,7 @@ pub fn save(file: &Path, state: SavedState) -> io::Result<()> {
 /// Like [`save`] for a state the webview sent: when it has no `searches` the ones stored in `file` are kept (none when
 /// the file cannot be used), when it has them, even none, they replace the stored ones. Otherwise as [`save_changed`].
 pub fn save_update(file: &Path, update: SavedUpdate, last: &mut Option<Vec<u8>>) -> io::Result<bool> {
-    let state = update.resolve(|| {
-        load(file)
-            .map(|stored| (stored.searches, stored.renames))
-            .unwrap_or_default()
-    });
+    let state = update.resolve(|| load(file).unwrap_or_else(empty));
 
     save_changed(file, state, last)
 }
@@ -233,5 +250,7 @@ mod tests;
 #[cfg(test)]
 mod searches_tests;
 
+#[cfg(test)]
+mod keys_tests;
 #[cfg(test)]
 mod renames_tests;

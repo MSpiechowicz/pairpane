@@ -1,8 +1,15 @@
 import type { FilesChoice } from '$lib/shell/menu';
-import { ACTIONS, type Action, keysOf } from '$lib/shell/shortcuts';
+import { keymap } from '$lib/shell/keymap.svelte';
+import { ACTIONS, type Action } from '$lib/shell/shortcuts';
 
 /** A command the palette lists: an action of the keymap, a choice of the Files menu, or one of the top bar's. */
-export type CommandId = Exclude<Action, 'palette'> | FilesChoice | 'toggleHidden' | 'editSettings' | 'checkUpdates';
+export type CommandId =
+  | Exclude<Action, 'palette'>
+  | FilesChoice
+  | 'toggleHidden'
+  | 'editSettings'
+  | 'keyboardShortcuts'
+  | 'checkUpdates';
 
 /** Every command, by the name the palette shows. */
 export const COMMANDS: readonly { id: CommandId; label: string }[] = [
@@ -45,6 +52,7 @@ export const COMMANDS: readonly { id: CommandId; label: string }[] = [
   { id: 'transfers', label: 'Transfers' },
   { id: 'toggleHidden', label: 'Show or hide hidden files' },
   { id: 'editSettings', label: 'Edit settings' },
+  { id: 'keyboardShortcuts', label: 'Keyboard shortcuts…' },
   { id: 'checkUpdates', label: 'Check for updates' },
 ];
 
@@ -53,7 +61,7 @@ export function isAction(id: string): id is Action {
   return (ACTIONS as readonly string[]).includes(id);
 }
 
-/** The keys of the command `id`, as they are written, when it has any. */
+/** The keys of the command `id` in the keymap of the app, as they are written, when it has any. */
 export function keysFor(id: string): string | undefined {
-  return isAction(id) ? keysOf(id) : undefined;
+  return isAction(id) ? keymap.keysOf(id) : undefined;
 }

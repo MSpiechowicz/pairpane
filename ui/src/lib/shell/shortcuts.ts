@@ -36,9 +36,8 @@ export const ACTIONS = [
 /** An action of the keymap. */
 export type Action = (typeof ACTIONS)[number];
 
-/** A key that stands for an action, with the modifiers that must be held (and no other). */
-export interface Binding {
-  action: Action;
+/** A key with the modifiers that must be held with it (and no other). */
+export interface Chord {
   /** `KeyboardEvent.key`; a letter is matched whatever its case (caps lock). */
   key: string;
   ctrl?: boolean;
@@ -46,12 +45,17 @@ export interface Binding {
   shift?: boolean;
 }
 
+/** A key that stands for an action. */
+export interface Binding extends Chord {
+  action: Action;
+}
+
 /**
  * The keymap: Ctrl + a letter (Ctrl on every OS: on macOS Cmd+W already closes the window and Cmd+Q quits the app),
  * Alt + a key, and a function key or Delete on its own or with Shift. F3 views the file, F4 edits it, F5 copies, F6
  * moves, Shift+F6 renames, F2 renames in place, Shift+F2 compares two files, F7 makes a folder, Shift+F4 a file, F8 and
  * Delete move to the Trash, Shift+F8 and Shift+Delete delete for good. An action may have more than one key; the first
- * is the one shown.
+ * is the one shown. These are the defaults: the user may set others (see `keymap`).
  */
 export const BINDINGS: readonly Binding[] = [
   { action: 'palette', key: 'k', ctrl: true },
@@ -87,23 +91,23 @@ export const BINDINGS: readonly Binding[] = [
 ];
 
 /** Whether `event` is the key of `binding`, with exactly its modifiers. */
-function matches(event: KeyboardEvent, binding: Binding): boolean {
+function matches(event: KeyboardEvent, binding: Chord): boolean {
   const key = binding.key.length === 1 ? event.key.toLowerCase() === binding.key : event.key === binding.key;
 
   return key && event.ctrlKey === !!binding.ctrl && event.altKey === !!binding.alt && event.shiftKey === !!binding.shift;
 }
 
-/** How the keys of a binding are written: `Ctrl+K`, `Alt+Left`, `Shift+F2`. */
-function written({ key, ctrl, alt, shift }: Binding): string {
+/** How the keys of a chord are written: `Ctrl+K`, `Alt+Left`, `Shift+F2`. */
+export function written({ key, ctrl, alt, shift }: Chord): string {
   const names: Record<string, string> = { ArrowLeft: 'Left', ArrowRight: 'Right', Delete: 'Del' };
   const name = names[key] ?? (key.length === 1 ? key.toUpperCase() : key);
 
   return [ctrl ? 'Ctrl' : '', alt ? 'Alt' : '', shift ? 'Shift' : '', name].filter((part) => part !== '').join('+');
 }
 
-/** The keys of `action` as they are written, when it has any (the first of its bindings). */
-export function keysOf(action: Action): string | undefined {
-  const binding = BINDINGS.find((candidate) => candidate.action === action);
+/** The keys of `action` as they are written, when it has any (the first of its bindings in `bindings`). */
+export function keysOf(action: Action, bindings: readonly Binding[] = BINDINGS): string | undefined {
+  const binding = bindings.find((candidate) => candidate.action === action);
 
   return binding === undefined ? undefined : written(binding);
 }
@@ -117,12 +121,40 @@ export function reloadsPage(event: KeyboardEvent): boolean {
  * The action a key press stands for. Ctrl+Alt (AltGr, which types characters) and Cmd are never shortcuts; Tab
  * alone is not one either (it switches panes). The function keys and Delete are the only shortcuts without a modifier.
  */
-export function shortcutFor(event: KeyboardEvent): Action | undefined {
+export function shortcutFor(event: KeyboardEvent, bindings: readonly Binding[] = BINDINGS): Action | undefined {
   if (event.isComposing || event.metaKey || (event.ctrlKey && event.altKey)) {
     return undefined;
   }
 
-  return BINDINGS.find((binding) => matches(event, binding))?.action;
+  return bindings.find((binding) => matches(event, binding))?.action;
+}
+
+/** The chord a key press is, for one to be set; `undefined` for a modifier pressed on its own, Cmd and AltGr. */
+export function chordOf(event: KeyboardEvent): Chord | undefined {
+  const modifierOnly = ['Control', 'Alt', 'Shift', 'Meta', 'AltGraph', 'CapsLock', 'Dead', 'Unidentified'].includes(event.key);
+  if (modifierOnly || event.isComposing || event.metaKey || (event.ctrlKey && event.altKey)) {
+    return undefined;
+  }
+
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  return { key, ctrl: event.ctrlKey || undefined, alt: event.altKey || undefined, shift: event.shiftKey || undefined };
+}
+
+/**
+ * Why `chord` cannot be an action's key, or `undefined` when it can: one with neither Ctrl nor Alt must be a function key
+ * or Delete (any other key alone types, moves the cursor or works the dialogs), and Escape never is one.
+ */
+export function refusalOf(chord: Chord): string | undefined {
+  if (chord.key === 'Escape') {
+    return 'Escape closes dialogs: it cannot be a shortcut.';
+  }
+
+  const free = /^F([1-9]|1[0-2])$/.test(chord.key) || chord.key === 'Delete';
+  if (!chord.ctrl && !chord.alt && !free) {
+    return 'Hold Ctrl or Alt with this key, or use a function key or Delete.';
+  }
+
+  return undefined;
 }
 
 /** Whether the key press goes to a text field: shortcuts and pane switching leave those alone. */

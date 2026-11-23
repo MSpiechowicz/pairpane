@@ -36,7 +36,9 @@
   import type { FilesChoice, Menu } from '$lib/shell/menu';
   import Pane from '$lib/shell/Pane.svelte';
   import { Session } from '$lib/shell/session.svelte';
-  import { isTyping, reloadsPage, shortcutFor } from '$lib/shell/shortcuts';
+  import { isTyping, reloadsPage } from '$lib/shell/shortcuts';
+  import { keymap } from '$lib/shell/keymap.svelte';
+  import KeymapDialog from '$lib/shell/KeymapDialog.svelte';
   import { switchesPane } from '$lib/shell/switchPane';
   import { type ActionContext, runAction } from '$lib/shell/actions';
   import { isAction } from '$lib/palette/commands';
@@ -59,6 +61,7 @@
   let failure = $state<string | undefined>();
   let active = $state<Side>('left');
   let showHidden = $state(false);
+  let keysOpen = $state(false);
   /** The dropdown that is open, and the pane under whose header it is. */
   let menu = $state<{ side: Side; kind: Menu } | undefined>();
 
@@ -80,6 +83,7 @@
     hotlist,
     searches,
     renames,
+    keymap,
     active: { get: () => active, set: (side) => (active = side) },
   });
   session.watch();
@@ -147,7 +151,8 @@
       passwords.modal ||
       finder.modal ||
       comparison.modal ||
-      palette.shown,
+      palette.shown ||
+      keysOpen,
   );
 
   /** Alt+F7: the Find dialog, on the folder the active pane shows (inside an archive: the folder that holds it). */
@@ -224,7 +229,7 @@
 
   /** A shortcut of the keymap. Alt+Left is the webview's own "go back", so a handled shortcut always prevents the default. */
   function runShortcut(event: KeyboardEvent) {
-    const action = shortcutFor(event);
+    const action = keymap.shortcutFor(event);
     if (action === undefined || isTyping(event.target)) {
       return;
     }
@@ -249,6 +254,8 @@
       toggleHidden();
     } else if (item.id === 'editSettings') {
       editSettings();
+    } else if (item.id === 'keyboardShortcuts') {
+      keysOpen = true;
     } else if (item.id === 'checkUpdates') {
       void updates.check(true);
     } else if (isAction(item.id)) {
@@ -387,6 +394,10 @@
 
 {#if palette.shown}
   <Palette {palette} onTake={takePicked} />
+{/if}
+
+{#if keysOpen}
+  <KeymapDialog {keymap} onClose={() => (keysOpen = false)} />
 {/if}
 
 {#if files.dialog}

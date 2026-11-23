@@ -5,7 +5,7 @@
 
   import FilesMenu from './FilesMenu.svelte';
   import type { FilesChoice } from './menu';
-  import { shortcutFor } from './shortcuts';
+  import { keymap } from './keymap.svelte';
   import type { Theme } from './theme.svelte';
 
   let {
@@ -77,7 +77,7 @@
 
   /** Escape closes the popup, and so does a shortcut: its action (a dialog, a pane change) takes over. */
   function closeOnKey(event: KeyboardEvent) {
-    if (open && (event.key === 'Escape' || shortcutFor(event) !== undefined)) {
+    if (open && (event.key === 'Escape' || keymap.shortcutFor(event) !== undefined)) {
       open = undefined;
     }
   }

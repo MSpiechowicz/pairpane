@@ -37,8 +37,8 @@ pub struct SavedPane {
     pub active: u32,
 }
 
-/// What comes back on the next start: both panes' tabs, the active pane, the hotlist, the saved searches and the saved
-/// rename rules.
+/// What comes back on the next start: both panes' tabs, the active pane, the hotlist, the saved searches, the saved
+/// rename rules and the keys the user set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -59,4 +59,32 @@ pub struct SavedState {
     #[serde(default)]
     #[ts(as = "Option<Vec<SavedRename>>", optional)]
     pub renames: Vec<SavedRename>,
+    /// The keys the user set for actions, in place of the default ones. Like `searches`: absent in an old file or a state
+    /// sent without them, and whoever saves must send the ones it has.
+    #[serde(default)]
+    #[ts(as = "Option<Vec<KeyOverride>>", optional)]
+    pub keys: Vec<KeyOverride>,
+}
+
+/// A key and the modifiers held with it, as the keymap writes it (`key` is `KeyboardEvent.key`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct KeyChord {
+    pub key: String,
+    #[serde(default)]
+    pub ctrl: bool,
+    #[serde(default)]
+    pub alt: bool,
+    #[serde(default)]
+    pub shift: bool,
+}
+
+/// The keys the user set for one action of the keymap; none leaves the action with no key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct KeyOverride {
+    pub action: String,
+    pub keys: Vec<KeyChord>,
 }
