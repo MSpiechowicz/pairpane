@@ -14,7 +14,8 @@
 //!
 //! On Unix a file's target folders are entered, and its temporary file made and renamed, through the handle of each folder
 //! (see `sync_write`), so a folder swapped for a link meanwhile leads nowhere. On Windows, and for a folder that is copied
-//! whole, the steps go by path, the race the other copies document. Items from an archive are in `sync_archive`.
+//! whole, the steps go by path, the race the other copies document. Items from an archive are in `sync_archive`; copies into
+//! an archive and removals from one are applied in one rewrite of it (`sync_into`), after the copies out of it.
 
 use std::fs::{self, Metadata};
 use std::io;
@@ -86,20 +87,19 @@ impl Run<'_> {
             refuse_nested(one, other)?;
         }
 
-        let items: Vec<(&str, &SyncPlan, &Side<'_>, &Path)> = request
-            .names
-            .iter()
-            .zip(plans)
-            .filter_map(|(rel, plan)| {
-                let (source, target) = match plan.direction {
-                    SyncDirection::ToRight => (&left, &right),
-                    SyncDirection::ToLeft => (&right, &left),
-                };
-                let Side::Disk(target) = target else { return None };
+        let mut into_archive: Vec<(&str, &SyncPlan)> = Vec::new();
+        let mut items: Vec<(&str, &SyncPlan, &Side<'_>, &Path)> = Vec::new();
+        for (rel, plan) in request.names.iter().zip(plans) {
+            let (source, target) = match plan.direction {
+                SyncDirection::ToRight => (&left, &right),
+                SyncDirection::ToLeft => (&right, &left),
+            };
 
-                Some((rel.as_str(), plan, source, target.as_path()))
-            })
-            .collect();
+            match target {
+                Side::Disk(target) => items.push((rel.as_str(), plan, source, target.as_path())),
+                Side::Archive(_) => into_archive.push((rel.as_str(), plan)),
+            }
+        }
 
         self.phase(JobPhase::Scanning);
         for (rel, plan, source, _) in &items {
@@ -133,7 +133,32 @@ impl Run<'_> {
             self.sync_from_archive(archive, target, &rows)?;
         }
 
-        let removed: Vec<Removal<'_>> = request.names[plans.len().min(request.names.len())..]
+        let names_of_removals = &request.names[plans.len().min(request.names.len())..];
+        let archive_side = [&left, &right].into_iter().find_map(|side| match side {
+            Side::Archive(archive) => Some(archive),
+            Side::Disk(_) => None,
+        });
+        if let Some(archive) = archive_side {
+            let disk = [&left, &right].into_iter().find_map(|side| match side {
+                Side::Disk(folder) => Some(folder.as_path()),
+                Side::Archive(_) => None,
+            });
+            let archive_pane = if matches!(left, Side::Archive(_)) {
+                PaneId::Left
+            } else {
+                PaneId::Right
+            };
+            let removed_from_archive: Vec<(&str, &SyncRemove)> = names_of_removals
+                .iter()
+                .zip(removals)
+                .filter(|(_, removal)| removal.side == archive_pane)
+                .map(|(rel, removal)| (rel.as_str(), removal))
+                .collect();
+
+            self.sync_into_archive(archive, disk, &into_archive, &removed_from_archive)?;
+        }
+
+        let removed: Vec<Removal<'_>> = names_of_removals
             .iter()
             .zip(removals)
             .filter_map(|(rel, removal)| {

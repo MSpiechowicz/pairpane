@@ -308,7 +308,7 @@ fn enter(root: &Root, parents: &str, before: Option<&OpenHook>) -> io::Result<Op
 }
 
 /// What a removal states of `node`, as a plan states it. A link is `other`, which no removal holds.
-fn facts_of(node: &Node) -> SyncFacts {
+pub(super) fn facts_of(node: &Node) -> SyncFacts {
     let kind = match node.kind {
         Kind::Dir => EntryKind::Dir,
         Kind::File => EntryKind::File,

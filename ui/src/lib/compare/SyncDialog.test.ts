@@ -9,6 +9,7 @@ import { Syncer } from './syncer.svelte';
 import SyncDialog from './SyncDialog.svelte';
 
 const ARCHIVE = { kind: 'archive', archive: '/right/a.zip', dir: 'docs' } as const;
+const RAR = { kind: 'archive', archive: '/right/a.rar', dir: 'docs' } as const;
 
 function open(roots: Parameters<Syncer['show']>[0] = { left: folder('/home/ann'), right: folder('/home/bob') }, answers: Parameters<typeof compareBackend>[0] = {}) {
   const backend = compareBackend(answers);
@@ -95,7 +96,7 @@ describe('SyncDialog', () => {
   });
 
   it('disables the arrows a row cannot take, and says why in the title', async () => {
-    const s = open({ left: folder('/home/ann'), right: ARCHIVE });
+    const s = open({ left: folder('/home/ann'), right: RAR });
     await scanned(
       s,
       row('lo.txt', 'leftOnly', facts(), null),
@@ -108,7 +109,7 @@ describe('SyncDialog', () => {
 
     const intoArchive = within(only).getByRole('button', { name: 'Copy to the right: lo.txt' });
     expect(intoArchive).toBeDisabled();
-    expect(intoArchive).toHaveAttribute('title', 'Archives can only be copied from');
+    expect(intoArchive).toHaveAttribute('title', 'This archive can only be read (a RAR or a single .gz file)');
     expect(within(only).getByRole('button', { name: 'Skip: lo.txt' })).toHaveAttribute('aria-pressed', 'true');
     expect(within(link).getByRole('button', { name: 'Copy to the right: link' })).toHaveAttribute('title', 'Links are not copied.');
     expect(within(mixed).getByRole('button', { name: 'Copy to the left: mixed' })).toHaveAttribute('title', 'A file and a folder cannot replace each other.');
@@ -310,8 +311,8 @@ describe('SyncDialog confirmation', () => {
   });
 
   describe('a mirror', () => {
-    async function mirrored() {
-      const s = open();
+    async function mirrored(right: Parameters<Syncer['show']>[0]['right'] = folder('/home/bob')) {
+      const s = open({ left: folder('/home/ann'), right });
       await scanned(
         s,
         row('new.txt', 'leftOnly', facts({ size: 10 }), null),
@@ -376,6 +377,28 @@ describe('SyncDialog confirmation', () => {
 
       expect(screen.getByText(/✕ 1 item · 20 B/)).toBeInTheDocument();
       expect(button('Synchronize')).toBeEnabled();
+    });
+
+    it('into an archive: what it removes from it is deleted for good, after a second confirmation, in one rewrite', async () => {
+      const s = await mirrored(ARCHIVE);
+
+      expect(within(asked()).getByText(/2 items removed from the archive will not be kept anywhere/)).toBeInTheDocument();
+      expect(within(asked()).getByText(/The archive is rewritten once/)).toBeInTheDocument();
+      expect(within(asked()).queryByRole('checkbox', { name: /Delete permanently/ })).not.toBeInTheDocument();
+
+      await fireEvent.click(within(asked()).getByRole('button', { name: 'Continue…' }));
+      const second = screen.getByRole('dialog', { name: 'Delete 2 items permanently?' });
+      expect(within(second).getByText(/2 items will be deleted for good, 2 of them from the archive/)).toBeInTheDocument();
+      await fireEvent.click(within(second).getByRole('button', { name: 'Delete permanently' }));
+
+      await waitFor(() => expect(s.calls('ops_sync')).toHaveLength(1));
+      expect(s.calls('ops_sync')[0]).toMatchObject({
+        items: [{ path: 'new.txt', direction: 'toRight' }],
+        removals: [
+          { path: 'old.txt', side: 'right' },
+          { path: 'old-dir', side: 'right' },
+        ],
+      });
     });
   });
 });

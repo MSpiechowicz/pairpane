@@ -190,7 +190,7 @@ fn owner<'r>(plans: &HashMap<&'r str, &'r SyncPlan>, rel: &str) -> Option<(&'r s
 }
 
 /// What the entry `child` of the index is as the plans state it: a link or special entry is `other`, which no plan holds.
-fn entry_facts(child: &archive::Child<'_>) -> SyncFacts {
+pub(super) fn entry_facts(child: &archive::Child<'_>) -> SyncFacts {
     let (kind, size, modified) = match child.entry {
         _ if child.dir => (EntryKind::Dir, 0, None),
         Some(entry) if entry.kind == EntryType::File => (EntryKind::File, entry.size, entry.modified),

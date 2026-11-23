@@ -91,22 +91,24 @@ impl Visitor for Adding<'_> {
     }
 }
 
-/// The archive an add job changes, as the job opened it.
-struct Opened<'a> {
-    name: &'a str,
-    /// The archive's folder, and its path.
-    folder: PathBuf,
-    path: PathBuf,
-    print: Fingerprint,
+/// The archive an add job (or a synchronization into an archive) changes, as the job opened it.
+pub(super) struct Opened<'a> {
+    pub(super) name: &'a str,
+    /// The archive's folder as the request names it (its state is told by that path), the folder resolved, and the
+    /// archive's path.
+    pub(super) shown: &'a std::path::Path,
+    pub(super) folder: PathBuf,
+    pub(super) path: PathBuf,
+    pub(super) print: Fingerprint,
 }
 
 /// What the new archive is made of: the old one, minus the entries left out, and the planned new entries.
-struct Change<'a> {
-    index: &'a ArchiveIndex,
-    password: Option<&'a Password>,
-    left_out: Vec<u32>,
+pub(super) struct Change<'a> {
+    pub(super) index: &'a ArchiveIndex,
+    pub(super) password: Option<&'a Password>,
+    pub(super) left_out: Vec<u32>,
     /// The bytes that are taken from the old archive, about.
-    copy: u64,
+    pub(super) copy: u64,
 }
 
 impl Run<'_> {
@@ -124,6 +126,7 @@ impl Run<'_> {
         let (found, file, print) = open_archive(&folder, &request.to, name)?;
         let opened = Opened {
             name,
+            shown: &request.to,
             folder,
             path: found.path,
             print,
@@ -173,6 +176,19 @@ impl Run<'_> {
             copy: rewrite::bytes_to_copy(&index, &left_out),
             left_out,
         };
+        self.replace_archive(opened, archive, &plan, &change, cancel)
+    }
+
+    /// Writes the new archive of `change` and `plan` beside the old one and puts it in place when the old one is still the
+    /// one that was read (see the module's text).
+    pub(super) fn replace_archive(
+        &mut self,
+        opened: &Opened<'_>,
+        archive: File,
+        plan: &Plan,
+        change: &Change<'_>,
+        cancel: &AtomicBool,
+    ) -> Result<(), Stop> {
         self.found(change.copy);
 
         self.phase(JobPhase::Packing);
@@ -183,7 +199,7 @@ impl Run<'_> {
         }
         self.keep_mode(&archive, &file)?;
 
-        self.write_changed(&plan, &change, (opened, &archive, file), cancel)?;
+        self.write_changed(plan, change, (opened, &archive, file), cancel)?;
         self.checkpoint()?;
 
         // Not held any more when it is replaced (Windows does not replace a file that another handle has open).
@@ -201,7 +217,7 @@ impl Run<'_> {
     /// Fails when `password` is missing for an archive with encrypted content, or does not open it: the new entries are
     /// sealed with it, so it is checked as far as `archive::confirm_password` can (a whole entry of a zip, not only its
     /// check byte, which a wrong password passes one time in 256).
-    fn check_password(
+    pub(super) fn check_password(
         &self,
         index: &ArchiveIndex,
         file: &File,
@@ -383,7 +399,7 @@ impl Run<'_> {
 
     /// Fails when the file at the path of the archive is not the one that was opened (see the module's text).
     fn check_unchanged(&self, opened: &Opened<'_>) -> Result<(), Stop> {
-        let (_, _, now) = open_archive(&opened.folder, &self.job.request.to, opened.name)?;
+        let (_, _, now) = open_archive(&opened.folder, opened.shown, opened.name)?;
         if now != opened.print {
             return Err(changed().into());
         }
@@ -393,7 +409,7 @@ impl Run<'_> {
 }
 
 /// Refuses the archive of `index` when it cannot be rewritten (see the module's text) or has no folder `inner`.
-fn check_changeable(index: &ArchiveIndex, inner: &str) -> Result<(), Stop> {
+pub(super) fn check_changeable(index: &ArchiveIndex, inner: &str) -> Result<(), Stop> {
     if matches!(index.format(), ArchiveFormat::Gz | ArchiveFormat::Rar) {
         return Err(refusal(io::ErrorKind::Unsupported, "this archive cannot be changed").into());
     }
@@ -415,7 +431,7 @@ fn check_changeable(index: &ArchiveIndex, inner: &str) -> Result<(), Stop> {
 }
 
 /// The ordinals of the entries of `index`, by their path.
-fn paths_of(index: &ArchiveIndex) -> HashMap<&str, Vec<u32>> {
+pub(super) fn paths_of(index: &ArchiveIndex) -> HashMap<&str, Vec<u32>> {
     let mut paths: HashMap<&str, Vec<u32>> = HashMap::new();
 
     for entry in index.entries() {

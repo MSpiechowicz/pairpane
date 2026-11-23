@@ -295,7 +295,7 @@ fn what_a_mirror_cannot_ask_for_is_refused_when_the_job_is_submitted() {
     let good = removal(&right, "b.txt", PaneId::Right);
     let engine = Rig::new().engine;
     let archive = SyncRoot::Archive {
-        name: "x.zip".to_owned(),
+        name: "x.rar".to_owned(),
         inner: String::new(),
         source: ArchiveJob::default(),
     };

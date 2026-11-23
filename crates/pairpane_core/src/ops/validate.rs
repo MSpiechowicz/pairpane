@@ -255,7 +255,8 @@ fn check_targets(names: &[String], targets: &[String]) -> Result<(), Refused> {
 }
 
 /// Whether a synchronization can run: at most one side is an archive and it names an archive that is read and a folder
-/// that is normalized, there is one plan or removal for each name, nothing is copied into an archive or removed from one,
+/// that is normalized, there is one plan or removal for each name, nothing is copied into or removed from an archive that is
+/// not written,
 /// each plan copies a file over a file (or onto nothing) or a folder onto nothing, and each removal is of a file or a
 /// folder.
 fn sync_acceptable(
@@ -287,8 +288,7 @@ fn sync_acceptable(
     sound
         && plans.len().checked_add(removals.len()) == Some(names)
         && removals.iter().all(|removal| {
-            matches!(side(removal.side), SyncRoot::Folder)
-                && matches!(removal.seen.kind, EntryKind::File | EntryKind::Dir)
+            writable(side(removal.side)) && matches!(removal.seen.kind, EntryKind::File | EntryKind::Dir)
         })
         && plans.iter().all(|plan| {
             let target = match plan.direction {
@@ -296,8 +296,17 @@ fn sync_acceptable(
                 SyncDirection::ToLeft => left,
             };
 
-            matches!(target, SyncRoot::Folder) && plan_fits(plan)
+            writable(target) && plan_fits(plan)
         })
+}
+
+/// Whether a synchronization may write to `root`: a folder, or an archive of a format that is written (not a rar or a single
+/// gzip file).
+fn writable(root: &SyncRoot) -> bool {
+    match root {
+        SyncRoot::Folder => true,
+        SyncRoot::Archive { name, .. } => is_writable(archive::by_extension(name)),
+    }
 }
 
 /// A file onto a file or onto nothing, a folder onto nothing: what a copy can do and what the scan offers.

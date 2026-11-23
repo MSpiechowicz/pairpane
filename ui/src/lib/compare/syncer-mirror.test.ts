@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { facts, folder, MODIFIED, row, rows } from '../../../tests/compare';
-import { actions, ARCHIVE, planned, setup, started } from '../../../tests/syncer';
+import { actions, planned, RAR, setup, started } from '../../../tests/syncer';
 
 describe('Syncer mirror', () => {
   it('a mirror to the right copies what the left has and removes what only the right has; the job carries the removals', async () => {
@@ -41,8 +41,8 @@ describe('Syncer mirror', () => {
     expect(s.syncer.permanent).toBe(false);
   });
 
-  it('removes only a file or folder that one side alone has, never from an archive, and says how many rows refused', async () => {
-    const s = setup({}, { left: folder('/left'), right: ARCHIVE });
+  it('removes only a file or folder that one side alone has, never from an archive that is only read, and says how many rows refused', async () => {
+    const s = setup({}, { left: folder('/left'), right: RAR });
     const scan = await started(s);
     scan.emit(
       rows(

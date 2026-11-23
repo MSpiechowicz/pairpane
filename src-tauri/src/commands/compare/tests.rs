@@ -9,6 +9,7 @@ use pairpane_core::model::{CompareStatus, EntryKind};
 use super::*;
 use crate::commands::archives::fixtures::{collecting, item, tar_of};
 use crate::commands::testing::{Gate, elsewhere, folder_with, gated, wait_until};
+use pairpane_core::archive::Fingerprint;
 
 type Log = Arc<Mutex<Vec<CompareEvent>>>;
 
@@ -331,8 +332,13 @@ fn an_archive_is_one_side_of_a_scan_by_its_index() {
     // The folder holds the archive too, so only what the archive has too is the same.
     let (_other, right) = folder_with(&[("a.txt", b"alpha"), ("only-here.txt", b"x")]);
 
-    let (_, events) = scanned(&Comparer::default(), (tar, folder(&right)), plain());
+    let comparer = Comparer::default();
+    let (id, events) = scanned(&comparer, (tar, folder(&right)), plain());
 
+    // The state of the archive it read is kept, for a job that writes to the archive.
+    let read = comparer.archive_read(id).expect("kept").expect("an archive was read");
+    let modified = fs::metadata(folder_side.path().join("pack.tar")).expect("archive");
+    assert_eq!(read, Fingerprint::of(&folder_side.path().join("pack.tar"), &modified));
     let found = statuses(&events);
     assert_eq!(
         found.iter().map(|(path, _)| path.as_str()).collect::<Vec<_>>(),

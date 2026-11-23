@@ -11,10 +11,12 @@ export type SyncAction = 'toRight' | 'toLeft' | 'remove' | 'skip';
 /** The directions a row can be copied in. */
 export type SyncCopy = 'toRight' | 'toLeft';
 
-/** Which of the two sides is an archive (archives are only copied from). */
+/** Which of the two sides is an archive, and which of those can only be read (a RAR, a lone `.gz`): it is only copied from. */
 export interface Archives {
   left: boolean;
   right: boolean;
+  leftReadOnly: boolean;
+  rightReadOnly: boolean;
 }
 
 /** A row of the table: what the scan found, and what is to be done about it. */
@@ -34,8 +36,8 @@ export const STATUS_TEXT: Record<CompareStatus, string> = {
   equal: 'Equal',
 };
 
-/** What an arrow into an archive says: nothing is written into one here. */
-export const ARCHIVE_TARGET_TEXT = 'Archives can only be copied from';
+/** What an arrow into, or a removal from, an archive that is only read says. */
+export const ARCHIVE_TARGET_TEXT = 'This archive can only be read (a RAR or a single .gz file)';
 
 /** The direction each status is copied in unless the user chooses otherwise; a difference that says no way (`differs`) is left alone. */
 const DEFAULTS: Record<CompareStatus, SyncAction> = {
@@ -52,9 +54,6 @@ export function baseName(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1);
 }
 
-/** What a removal from an archive says: nothing is removed from one here. */
-export const ARCHIVE_REMOVAL_TEXT = 'Nothing is removed from an archive';
-
 /** Why `row` cannot be removed, or `undefined` when it can: only an item that one side alone has, a file or a folder. */
 function whyNotRemove(row: CompareRow, archives: Archives): string | undefined {
   const { left, right } = row;
@@ -68,7 +67,7 @@ function whyNotRemove(row: CompareRow, archives: Archives): string | undefined {
     return 'Links and special files are not removed.';
   }
 
-  return (left !== null ? archives.left : archives.right) ? ARCHIVE_REMOVAL_TEXT : undefined;
+  return (left !== null ? archives.leftReadOnly : archives.rightReadOnly) ? ARCHIVE_TARGET_TEXT : undefined;
 }
 
 /** Why `row` cannot be copied in `direction` (or removed), or `undefined` when it can. */
@@ -100,7 +99,7 @@ export function whyNot(row: CompareRow, direction: Exclude<SyncAction, 'skip'>, 
     return 'There is nothing on this side to copy.';
   }
 
-  return (toRight ? archives.right : archives.left) ? ARCHIVE_TARGET_TEXT : undefined;
+  return (toRight ? archives.rightReadOnly : archives.leftReadOnly) ? ARCHIVE_TARGET_TEXT : undefined;
 }
 
 /**
