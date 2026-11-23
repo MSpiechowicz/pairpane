@@ -1,3 +1,10 @@
+# [0.25.0](https://github.com/MSpiechowicz/pairpane/compare/v0.24.0...v0.25.0) (2026-11-23)
+
+
+### Features
+
+* **ui:** Ctrl+K command palette (#54) ([17eb34b](https://github.com/MSpiechowicz/pairpane/commit/17eb34b5279df5ce5ab3258b5c29f083f98516c1)), closes [#50](https://github.com/MSpiechowicz/pairpane/issues/50)
+
 # [0.24.0](https://github.com/MSpiechowicz/pairpane/compare/v0.23.0...v0.24.0) (2026-11-23)
 
 
