@@ -15,6 +15,7 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::ptr;
+use std::sync::{Mutex, PoisonError};
 
 use super::step::{at, at_code, at_result};
 
@@ -64,9 +65,19 @@ impl Drop for Sid {
     }
 }
 
+/// `E_UNEXPECTED`: what `CreateAppContainerProfile` answers when another call is making the same profile at that moment
+/// (seen on CI with several thumbnails asked for at once); the profile is then there, or about to be.
+const UNEXPECTED: i32 = 0x8000_FFFF_u32 as i32;
+
+/// Held while the profile is made: two threads that make it at once can make it fail (see [`UNEXPECTED`]).
+static MAKING: Mutex<()> = Mutex::new(());
+
 /// The SID of the container, made when the profile is not there yet. The profile is a small registry key and a folder in
-/// the user's profile that Windows keeps for the container; it is never deleted here.
+/// the user's profile that Windows keeps for the container; it is never deleted here. One thread at a time makes it;
+/// one that is told the profile exists, or that hits another process making it, takes the SID from the name instead
+/// (it is a hash of the name, the same either way).
 pub(super) fn container_sid() -> io::Result<Sid> {
+    let _making = MAKING.lock().unwrap_or_else(PoisonError::into_inner);
     let name = wide(OsStr::new(NAME));
     let display = wide(OsStr::new("Pairpane thumbnails"));
     let description = wide(OsStr::new(
@@ -89,7 +100,7 @@ pub(super) fn container_sid() -> io::Result<Sid> {
     if made >= 0 {
         return Ok(Sid(sid));
     }
-    if made != ALREADY_EXISTS {
+    if made != ALREADY_EXISTS && made != UNEXPECTED {
         return Err(at_result("CreateAppContainerProfile", made));
     }
 
@@ -360,5 +371,19 @@ mod tests {
         assert_eq!(count(&mut read_only, &sid), 0);
         let mut more = list_with(&sid, 0, WANTED | WRITE_DAC);
         assert_eq!(count(&mut more, &sid), 1, "more is enough");
+    }
+
+    #[test]
+    fn threads_that_ask_for_the_container_at_once_all_get_it() {
+        // Three thumbnails are asked for at once when a folder is opened; on CI two threads making the profile at the
+        // same moment failed with E_UNEXPECTED and turned thumbnails off for the run.
+        // The SID is a raw pointer, which does not cross threads: each thread says only whether it got one.
+        let threads: Vec<_> = (0..8)
+            .map(|_| std::thread::spawn(|| container_sid().map(drop)))
+            .collect();
+
+        for thread in threads {
+            thread.join().expect("the thread").expect("the container");
+        }
     }
 }
