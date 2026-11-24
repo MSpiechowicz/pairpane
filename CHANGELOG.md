@@ -1,3 +1,10 @@
+# [0.33.0](https://github.com/MSpiechowicz/pairpane/compare/v0.32.0...v0.33.0) (2026-11-24)
+
+
+### Features
+
+* **view:** git status column (#66) ([d29236a](https://github.com/MSpiechowicz/pairpane/commit/d29236a0ee92d9f791433e13d009a5e05ee79106)), closes [#60](https://github.com/MSpiechowicz/pairpane/issues/60)
+
 # [0.32.0](https://github.com/MSpiechowicz/pairpane/compare/v0.31.0...v0.32.0) (2026-11-23)
 
 
