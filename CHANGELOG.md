@@ -1,3 +1,10 @@
+## [0.33.6](https://github.com/MSpiechowicz/pairpane/compare/v0.33.5...v0.33.6) (2026-11-25)
+
+
+### Bug Fixes
+
+* **ops:** a no-replace rename the system refuses on Windows, and by a link where the flag is missing (#84) ([5219d55](https://github.com/MSpiechowicz/pairpane/commit/5219d559cc5c4ae2e8aca14acf87b22a0a4f8651)), closes [#77](https://github.com/MSpiechowicz/pairpane/issues/77)
+
 ## [0.33.5](https://github.com/MSpiechowicz/pairpane/compare/v0.33.4...v0.33.5) (2026-11-25)
 
 
