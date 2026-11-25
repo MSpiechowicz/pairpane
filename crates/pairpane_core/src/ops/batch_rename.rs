@@ -4,7 +4,8 @@
 //! The renames go in two passes, so that a name is never needed before it is free:
 //!
 //! 1. Every item whose new name is the name of another item of the job (or its own name in another case, where names
-//!    ignore case) is first moved aside, to a temporary name (`.pairpane-rename-…tmp`) that nothing has: the rename refuses
+//!    ignore case) is first moved aside, to a temporary name that nothing has (`.pairpane-rename-…-` and its own name, see
+//!    [`aside_name`], so one left there by a crash still says what it was): the rename refuses
 //!    to replace, so a taken name is skipped over. Then every other item goes straight to its new name. Each step can be
 //!    cancelled, and a cancel puts the items that are aside back under their own names.
 //! 2. Then each item that is aside goes to its new name, which is free now unless someone made it so in between. This
@@ -23,6 +24,7 @@ use crate::model::JobPhase;
 
 use super::held::Held;
 use super::partial::run_token;
+use super::rename::aside_name;
 use super::rename_log::RenameLog;
 use super::report::refusal;
 use super::transfer::{Run, Stop};
@@ -143,11 +145,9 @@ impl Run<'_> {
     fn move_aside(&mut self, held: &Held, folder: &Path, from: &str) -> io::Result<String> {
         for _ in 0..MAX_ASIDE_TRIES {
             self.sequence += 1;
-            let name = format!(
-                ".pairpane-rename-{}-{}-{}.tmp",
-                run_token(),
-                self.job.id.0,
-                self.sequence
+            let name = aside_name(
+                &format!(".pairpane-rename-{}-{}-{}", run_token(), self.job.id.0, self.sequence),
+                from,
             );
 
             match held.rename_noreplace(from, &name) {

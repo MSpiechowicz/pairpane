@@ -157,14 +157,18 @@ fn an_item_whose_step_fails_leaves_those_that_wait_for_its_name_where_they_were(
 fn a_temporary_name_that_is_taken_is_skipped_and_left_alone() {
     let root = folder_with(&["a", "b"]);
     let src = root.path().join("src");
-    // The first name the job (the first of this engine) would try.
-    let taken = format!(".pairpane-rename-{}-1-1.tmp", run_token());
-    put(root.path(), &format!("src/{taken}"), b"someone else's");
+    // The first name the job (the first of this engine) would try, for whichever item goes aside first.
+    let taken = ["a", "b"].map(|name| format!(".pairpane-rename-{}-1-1-{name}", run_token()));
+    for name in &taken {
+        put(root.path(), &format!("src/{name}"), b"someone else's");
+    }
     let mut rig = Rig::new();
 
     swap_without_errors(&mut rig, &src);
-    assert_eq!(temporary_names(&src), std::slice::from_ref(&taken));
-    assert_eq!(read(&src.join(&taken)), b"someone else's");
+    assert_eq!(temporary_names(&src), taken);
+    for name in &taken {
+        assert_eq!(read(&src.join(name)), b"someone else's");
+    }
     assert_eq!(contents(&src), (b"b".to_vec(), b"a".to_vec()));
 }
 
@@ -265,4 +269,28 @@ fn a_rename_cancelled_after_some_items_reports_exactly_those_in_its_last_progres
         Some((2, 4)),
         "the last progress before the end counts the items done"
     );
+}
+
+#[test]
+fn an_item_aside_says_what_it_was_by_its_temporary_name() {
+    // Were the app to stop here (a crash, the power going off), the item would stay under this name: it holds the old
+    // name, so the item can still be told (#74).
+    let root = folder_with(&["a", "b"]);
+    let src = root.path().join("src");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let names = Arc::clone(&seen);
+    let mut rig = rig_with(move |_, path| {
+        let name = path.file_name().expect("a name").to_string_lossy().into_owned();
+        names.lock().expect("names").push(name);
+    });
+
+    swap_without_errors(&mut rig, &src);
+
+    let seen = seen.lock().expect("names").clone();
+    assert!(!seen.is_empty());
+    assert!(
+        seen.iter().all(|name| name.ends_with("-a") || name.ends_with("-b")),
+        "{seen:?}"
+    );
+    assert_eq!(contents(&src), (b"b".to_vec(), b"a".to_vec()));
 }
