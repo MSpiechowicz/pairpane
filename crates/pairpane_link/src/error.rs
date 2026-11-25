@@ -17,6 +17,15 @@ pub enum Error {
     InsecureKeyFile,
     /// The stored device key is not 32 bytes long.
     CorruptKey,
+    /// There is no keychain at all on this system (no Secret Service is running); a file may be used instead.
+    KeychainUnavailable(String),
+    /// The device was set up with a key store that cannot be used now (the keychain is locked or refused, or the key is
+    /// gone). No new key is made, because that would give the device a new identity and unpair it from every other.
+    KeyUnavailable(String),
+    /// The stored device key is not the one this device was set up with.
+    KeyMismatch,
+    /// Another link service already runs on the same data folder.
+    AlreadyRunning,
     /// The device list is too large, is not valid JSON, has a field it should not have or holds a bad record.
     CorruptDevices,
     /// A device name is empty, longer than 64 characters or has a control character.
@@ -50,6 +59,15 @@ impl fmt::Display for Error {
         match self {
             Self::Io(_) => out.write_str("a file of the link could not be read or written"),
             Self::Keychain(reason) => write!(out, "the keychain failed: {reason}"),
+            Self::KeychainUnavailable(reason) => write!(out, "there is no keychain: {reason}"),
+            Self::KeyUnavailable(reason) => {
+                write!(
+                    out,
+                    "the device key cannot be read (unlock your keyring and try again): {reason}"
+                )
+            }
+            Self::KeyMismatch => out.write_str("the stored device key is not the key of this device"),
+            Self::AlreadyRunning => out.write_str("the link already runs on this folder"),
             Self::InsecureKeyFile => out.write_str("the key file can be read by other users"),
             Self::CorruptKey => out.write_str("the stored device key is damaged"),
             Self::CorruptDevices => out.write_str("the list of paired devices is damaged"),

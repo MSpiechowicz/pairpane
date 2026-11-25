@@ -2,10 +2,11 @@
 //! other answers with the same, and both close. It is all a device needs to know that a paired device is online (a
 //! connection that gets this far was accepted for its pinned node id), and it is the base later features build on.
 
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use iroh::EndpointAddr;
-use iroh::endpoint::Connection;
+use iroh::endpoint::{Connection, ConnectionError};
 use tokio::time::timeout;
 
 use super::ctx::Ctx;
@@ -50,34 +51,78 @@ fn decode(bytes: &[u8]) -> Result<Hello> {
     })
 }
 
-/// Dials `addr` and says hello. `Some` is what the device answered; `None` means it could not be reached in time, or
-/// refused (it has not paired this device), or did not speak the protocol.
-pub async fn probe(ctx: &Ctx, addr: EndpointAddr) -> Option<Hello> {
-    let exchange = async {
-        let conn = ctx
-            .endpoint
-            .connect(addr, LINK_ALPN)
-            .await
-            .map_err(|_| Error::PairingRejected)?;
+/// How a probe ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Probe {
+    /// The device answered with a hello of the version this one speaks; `addr` is the address the connection used.
+    Answered { hello: Hello, addr: Option<SocketAddr> },
+    /// The device closed the connection because it does not have this one paired.
+    Refused,
+    /// The device could not be reached in time, or did not speak the protocol.
+    Unreachable,
+}
 
-        let answer = async {
-            let mut channel = Channel::open(&conn).await?;
-            channel.send(&encode(&ctx.name)).await?;
-            decode(&channel.recv().await?)
-        }
-        .await;
-
-        conn.close(super::CLOSE_DONE, b"bye");
-        answer
+/// Dials `addr` and says hello. At most [`MAX_PROBES`](super::ctx::MAX_PROBES) probes run at once, and the time limit
+/// [`PROBE_TIMEOUT`] counts from the moment one starts.
+pub async fn probe(ctx: &Ctx, addr: EndpointAddr) -> Probe {
+    let Ok(_permit) = ctx.probes.acquire().await else {
+        return Probe::Unreachable;
     };
 
-    timeout(PROBE_TIMEOUT, exchange).await.ok()?.ok()
+    timeout(PROBE_TIMEOUT, exchange(ctx, addr))
+        .await
+        .unwrap_or(Probe::Unreachable)
+}
+
+async fn exchange(ctx: &Ctx, addr: EndpointAddr) -> Probe {
+    let Ok(conn) = ctx.endpoint.connect(addr, LINK_ALPN).await else {
+        return Probe::Unreachable;
+    };
+
+    let answer = async {
+        let mut channel = Channel::open(&conn).await?;
+        channel.send(&encode(&ctx.name)).await?;
+        decode(&channel.recv().await?)
+    }
+    .await;
+
+    let probe = match answer {
+        Ok(hello) if hello.version == HELLO_VERSION => Probe::Answered {
+            hello,
+            addr: super::used_addr(&conn),
+        },
+        Ok(_) => Probe::Unreachable,
+        Err(_) => refusal_or_unreachable(&conn).await,
+    };
+
+    conn.close(super::CLOSE_DONE, b"bye");
+    probe
+}
+
+/// Why a connection that failed ended: when the device closed it with the code of a refusal, it has no pairing with this
+/// one.
+async fn refusal_or_unreachable(conn: &Connection) -> Probe {
+    // The close usually arrives together with the failure, but not always before it is noticed.
+    let reason = match conn.close_reason() {
+        Some(reason) => Some(reason),
+        None => timeout(Duration::from_millis(500), conn.closed()).await.ok(),
+    };
+
+    match reason {
+        Some(ConnectionError::ApplicationClosed(close)) if close.error_code == super::CLOSE_NOT_ALLOWED => {
+            Probe::Refused
+        }
+        _ => Probe::Unreachable,
+    }
 }
 
 /// Answers the hello of a paired device on `conn`.
 pub async fn answer(ctx: &Ctx, conn: &Connection) -> Result<Hello> {
     let mut channel = Channel::accept(conn).await?;
     let hello = decode(&channel.recv().await?)?;
+    if hello.version != HELLO_VERSION {
+        return Err(Error::Protocol("the hello version is not supported"));
+    }
 
     channel.send(&encode(&ctx.name)).await?;
     channel.finish();

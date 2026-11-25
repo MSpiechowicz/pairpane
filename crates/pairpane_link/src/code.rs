@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+use zeroize::{Zeroize, Zeroizing};
+
 use crate::error::{Error, Result};
 
 /// The number of characters of a code, without the dash.
@@ -14,15 +16,15 @@ pub const CODE_LEN: usize = 8;
 pub const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 /// A pairing code, kept as its 8 normalised characters. It is the password of the key exchange; it is never printed by
-/// `Debug`.
+/// `Debug`, and it is wiped from memory when dropped.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PairingCode([u8; CODE_LEN]);
 
 impl PairingCode {
     /// A new random code.
     pub fn generate() -> Result<Self> {
-        let mut bytes = [0u8; CODE_LEN];
-        getrandom::fill(&mut bytes).map_err(|_| Error::Random)?;
+        let mut bytes = Zeroizing::new([0u8; CODE_LEN]);
+        getrandom::fill(&mut *bytes).map_err(|_| Error::Random)?;
 
         // 256 is a multiple of 32, so the low five bits of a random byte are uniform over the alphabet.
         Ok(Self(bytes.map(|byte| ALPHABET[usize::from(byte & 31)])))
@@ -31,7 +33,7 @@ impl PairingCode {
     /// Reads a code a user typed: case does not matter, dashes and spaces are ignored, and as in Crockford's
     /// encoding `O` reads as `0` and `I` and `L` as `1`. Any other character, or a length other than 8, is refused.
     pub fn parse(input: &str) -> Result<Self> {
-        let mut code = [0u8; CODE_LEN];
+        let mut code = Zeroizing::new([0u8; CODE_LEN]);
         let mut length = 0;
 
         for character in input.chars().filter(|c| *c != '-' && !c.is_whitespace()) {
@@ -53,7 +55,7 @@ impl PairingCode {
             return Err(Error::InvalidCode);
         }
 
-        Ok(Self(code))
+        Ok(Self(*code))
     }
 
     /// The normalised characters, which are the password of the key exchange.
@@ -74,6 +76,12 @@ impl fmt::Display for PairingCode {
             String::from_utf8_lossy(first),
             String::from_utf8_lossy(second)
         )
+    }
+}
+
+impl Drop for PairingCode {
+    fn drop(&mut self) {
+        self.0.zeroize();
     }
 }
 

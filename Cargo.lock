@@ -5474,12 +5474,15 @@ dependencies = [
  "keyring",
  "n0-future",
  "pretty_assertions",
+ "rustix",
  "serde",
  "serde_json",
  "spake2",
  "tempfile",
  "tokio",
  "tracing",
+ "unicode-normalization",
+ "zeroize",
 ]
 
 [[package]]

@@ -9,9 +9,13 @@ mod host;
 mod proto;
 mod session;
 
-pub use host::{CODE_TTL, MAX_FAILURES, PairingHost, PairingOffer, PairingState};
+pub use host::{CODE_TTL, Change, MAX_FAILURES, PairingEndReason, PairingHost, PairingOffer, PairingState};
 pub use proto::{Handshake, Role, tags_match};
 
+#[cfg(test)]
+pub(crate) use proto::{MESSAGE_LEN, TAG_LEN};
+#[cfg(test)]
+pub(crate) use session::FIRST_FRAME_TIMEOUT;
 pub(crate) use session::{SESSION_TIMEOUT, host_session, join_session};
 
 /// The ALPN of the pairing protocol.

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use iroh::EndpointId;
 use serde::{Deserialize, Serialize};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::error::{Error, Result};
 use crate::fsutil;
@@ -51,16 +52,59 @@ struct Body {
     devices: Vec<Device>,
 }
 
-/// A device name as it is kept: trimmed, 1 to [`MAX_NAME_CHARS`] characters, none of them a control character.
+/// A device name as it is kept: trimmed, in Unicode normal form C, 1 to [`MAX_NAME_CHARS`] characters, none of them a
+/// control character, a format character or a line or paragraph separator. Those can make a name look like another
+/// (a right-to-left override reverses what follows it) or hide characters (a zero-width space), which matters where the
+/// user decides which device to trust by its name.
 pub fn validate_name(name: &str) -> Result<String> {
-    let name = name.trim();
+    let name: String = name.trim().nfc().collect();
 
     let length = name.chars().count();
-    if length == 0 || length > MAX_NAME_CHARS || name.chars().any(char::is_control) {
+    if length == 0 || length > MAX_NAME_CHARS || name.chars().any(|c| c.is_control() || is_invisible(c)) {
         return Err(Error::InvalidName);
     }
 
-    Ok(name.to_owned())
+    Ok(name)
+}
+
+/// Whether `c` is in Unicode's general category Cf (format), Zl (line separator) or Zp (paragraph separator). There is no
+/// crate for the categories in the dependency tree, so the characters of the categories are listed, with the
+/// unassigned ones of the same blocks (a character that is assigned later is refused already).
+fn is_invisible(c: char) -> bool {
+    matches!(c,
+        // Soft hyphen, Arabic number signs and the Arabic letter mark, the Syriac abbreviation mark, the Arabic
+        // disputed end of ayah and small high marks.
+        '\u{00AD}' | '\u{0600}'..='\u{0605}' | '\u{061C}' | '\u{06DD}' | '\u{070F}' | '\u{0890}'..='\u{0891}' | '\u{08E2}'
+        // Mongolian vowel separator.
+        | '\u{180E}'
+        // Zero-width characters, the direction marks and the embeddings and overrides, the line and paragraph
+        // separators, the word joiner and invisible operators, the isolates, and the deprecated format characters.
+        | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{206F}'
+        // The byte order mark and the interlinear annotation marks.
+        | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}'
+        // Brahmi, Kaithi and Egyptian hieroglyph format controls, shorthand and musical format controls.
+        | '\u{110BD}' | '\u{110CD}' | '\u{13430}'..='\u{1343F}' | '\u{1BCA0}'..='\u{1BCA3}' | '\u{1D173}'..='\u{1D17A}'
+        // The tag characters.
+        | '\u{E0000}'..='\u{E007F}')
+}
+
+/// Moves a list file that cannot be read aside so the service can start with an empty list, and returns where it went:
+/// `link-devices.json.bad-<milliseconds since the Unix epoch>` in the same folder. The file is never deleted, so the
+/// records can still be recovered by hand. Call it only when the service is not running, after
+/// [`Error::CorruptDevices`]; `None` means there was no file.
+pub fn reset_devices(dir: &Path) -> Result<Option<PathBuf>> {
+    let file = dir.join(DEVICES_FILE_NAME);
+    if !file.exists() {
+        return Ok(None);
+    }
+
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis());
+    let aside = dir.join(format!("{DEVICES_FILE_NAME}.bad-{millis}"));
+    std::fs::rename(&file, &aside)?;
+
+    Ok(Some(aside))
 }
 
 /// The list of paired devices and the file it is kept in. Every change is written to the file before it is kept in
@@ -199,7 +243,7 @@ impl DeviceStore {
 
 /// The addresses kept after `fresh` were seen: `fresh` first, then the older ones that are not repeated, cut to
 /// [`MAX_ADDRS`]. `None` when that changes nothing: the fresh ones already are the newest.
-fn merged(kept: &[SocketAddr], fresh: &[SocketAddr]) -> Option<Vec<SocketAddr>> {
+pub(crate) fn merged(kept: &[SocketAddr], fresh: &[SocketAddr]) -> Option<Vec<SocketAddr>> {
     let fresh = deduplicated(fresh);
 
     let newest_already = kept.len() >= fresh.len() && kept.iter().take(fresh.len()).all(|addr| fresh.contains(addr));

@@ -78,6 +78,12 @@ impl Channel {
         Ok(payload)
     }
 
+    /// Tells the peer to stop sending on this stream, so its next write fails. For tests of a peer that goes away.
+    #[cfg(test)]
+    pub fn stop_receiving(&mut self) {
+        let _ = self.recv.stop(iroh::endpoint::VarInt::from_u32(0));
+    }
+
     /// Ends the sending half, so the peer reads what was sent and then the end of the stream.
     pub fn finish(&mut self) {
         let _ = self.send.finish();

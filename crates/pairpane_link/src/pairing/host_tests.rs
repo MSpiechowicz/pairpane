@@ -95,11 +95,11 @@ fn an_attempt_that_is_dropped_counts_as_a_failure() {
 
 #[test]
 fn an_expired_code_is_refused() {
-    let host = PairingHost::new(Duration::from_millis(30));
+    let host = PairingHost::new(Duration::from_millis(250));
     host.begin().unwrap();
     let running = host.start_attempt().unwrap();
 
-    sleep(Duration::from_millis(60));
+    sleep(Duration::from_millis(500));
 
     assert_eq!(host.state(), PairingState::Idle);
     assert!(!running.succeed(), "an attempt that outlives the code does not pair");
@@ -149,4 +149,68 @@ fn a_failure_of_an_old_code_does_not_count_against_the_new_one() {
         panic!("the new code is active");
     };
     assert_eq!(attempts_left, MAX_FAILURES);
+}
+
+#[test]
+fn an_attempt_that_sent_nothing_is_released_without_a_failure() {
+    let host = host();
+    host.begin().unwrap();
+
+    host.start_attempt().unwrap().release();
+
+    let PairingState::Waiting { attempts_left, .. } = host.state() else {
+        panic!("the code is still active");
+    };
+    assert_eq!(attempts_left, MAX_FAILURES);
+    assert!(host.start_attempt().is_some(), "the next attempt can start");
+}
+
+#[test]
+fn the_offer_does_not_print_the_code() {
+    let offer = host().begin().unwrap();
+
+    let shown = format!("{offer:?}");
+
+    assert!(
+        !shown.contains(&offer.code) && !shown.contains(&offer.code[..4]),
+        "{shown}"
+    );
+}
+
+#[test]
+fn the_observer_hears_when_a_code_begins_and_why_it_ends() {
+    use std::sync::{Arc, Mutex};
+
+    use super::{Change, PairingEndReason};
+
+    let host = host();
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&heard);
+    host.observe(move |change| sink.lock().unwrap().push(change));
+
+    host.begin().unwrap();
+    host.start_attempt().unwrap().succeed();
+    host.begin().unwrap();
+    host.begin().unwrap();
+    host.cancel();
+    host.begin().unwrap();
+    for _ in 0..MAX_FAILURES {
+        host.start_attempt().unwrap().fail();
+    }
+    host.cancel();
+
+    use Change::{Began, Ended};
+    assert_eq!(
+        *heard.lock().unwrap(),
+        vec![
+            Began,
+            Ended(PairingEndReason::Used),
+            Began,
+            Ended(PairingEndReason::Cancelled),
+            Began,
+            Ended(PairingEndReason::Cancelled),
+            Began,
+            Ended(PairingEndReason::TooManyAttempts),
+        ]
+    );
 }

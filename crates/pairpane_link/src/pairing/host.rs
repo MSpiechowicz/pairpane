@@ -2,11 +2,13 @@
 //! attempt is using it now.
 //!
 //! A code lives for [`CODE_TTL`], is used up by the first pairing that succeeds, is cancelled when [`MAX_FAILURES`]
-//! attempts in total have failed, and only one attempt runs at a time. Anything that ends an attempt without success
-//! counts as a failure, also an attempt that is dropped half way, so a peer that connects and goes quiet cannot keep a
-//! code alive or get more tries.
+//! attempts in total have failed, and only one attempt runs at a time. An attempt that gets as far as the key exchange
+//! and does not succeed counts as a failure, also one that is dropped half way, so a peer cannot get more tries. An
+//! attempt that never sent anything is [released](Attempt::release) without counting: a connection that only sits
+//! there must not use up the tries of the user who shows the code.
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::fmt;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::code::PairingCode;
@@ -17,8 +19,32 @@ pub const CODE_TTL: Duration = Duration::from_secs(120);
 /// How many failed attempts cancel the code.
 pub const MAX_FAILURES: u8 = 3;
 
+/// Why a code is no longer active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingEndReason {
+    /// A device paired with it.
+    Used,
+    /// Its time ran out.
+    Expired,
+    /// It was cancelled, or replaced by a new code.
+    Cancelled,
+    /// [`MAX_FAILURES`] attempts failed.
+    TooManyAttempts,
+}
+
+/// A change of the active code, for whoever watches it (see [`PairingHost::observe`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Change {
+    /// A code became active.
+    Began,
+    /// The active code ended.
+    Ended(PairingEndReason),
+}
+
+type Observer = Box<dyn Fn(Change) + Send + Sync>;
+
 /// What the user is shown for a new code.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PairingOffer {
     /// The code as `XXXX-XXXX`.
     pub code: String,
@@ -26,6 +52,17 @@ pub struct PairingOffer {
     pub expires_in: Duration,
     /// When the code expires, in milliseconds since the Unix epoch.
     pub expires_at_ms: u64,
+}
+
+/// The code is secret until it is used, so it is not in the debug output.
+impl fmt::Debug for PairingOffer {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        out.debug_struct("PairingOffer")
+            .field("code", &"..")
+            .field("expires_in", &self.expires_in)
+            .field("expires_at_ms", &self.expires_at_ms)
+            .finish()
+    }
 }
 
 /// Whether a code is waiting to be used.
@@ -60,6 +97,7 @@ struct State {
 pub struct PairingHost {
     ttl: Duration,
     state: Mutex<State>,
+    observer: OnceLock<Observer>,
 }
 
 impl PairingHost {
@@ -68,15 +106,23 @@ impl PairingHost {
         Arc::new(Self {
             ttl,
             state: Mutex::new(State::default()),
+            observer: OnceLock::new(),
         })
     }
 
-    /// Makes a new code. A code that is active is replaced; an attempt that is using it ends as a failure of the old
-    /// code, which no longer exists.
+    /// Sets the function that is told when a code becomes active and when it ends, from whatever thread caused it and
+    /// never while the host's state is locked. It can be set once.
+    pub fn observe(&self, observer: impl Fn(Change) + Send + Sync + 'static) {
+        let _ = self.observer.set(Box::new(observer));
+    }
+
+    /// Makes a new code. A code that is active is replaced (and ends as cancelled); an attempt that is using it ends as
+    /// a failure of the old code, which no longer exists.
     pub fn begin(&self) -> Result<PairingOffer> {
         let code = PairingCode::generate()?;
         let mut state = self.lock();
 
+        let replaced = state.active.is_some();
         state.codes_made += 1;
         state.active = Some(Active {
             id: state.codes_made,
@@ -85,6 +131,12 @@ impl PairingHost {
             failures: 0,
             busy: false,
         });
+        drop(state);
+
+        if replaced {
+            self.notify(Change::Ended(PairingEndReason::Cancelled));
+        }
+        self.notify(Change::Began);
 
         let expires_at = SystemTime::now() + self.ttl;
         Ok(PairingOffer {
@@ -98,15 +150,28 @@ impl PairingHost {
 
     /// Cancels the active code, if there is one.
     pub fn cancel(&self) {
-        self.lock().active = None;
+        let ended = self.lock().active.take().is_some();
+        if ended {
+            self.notify(Change::Ended(PairingEndReason::Cancelled));
+        }
+    }
+
+    /// Ends the active code if its time has run out; the observer is told. A timer calls this when the code is due.
+    pub fn check_expiry(&self) {
+        let mut state = self.lock();
+        let expired = Self::drop_if_expired(&mut state);
+        drop(state);
+
+        if expired {
+            self.notify(Change::Ended(PairingEndReason::Expired));
+        }
     }
 
     /// Whether a code is waiting to be used.
     pub fn state(&self) -> PairingState {
-        let mut state = self.lock();
-        Self::drop_if_expired(&mut state);
+        self.check_expiry();
 
-        match &state.active {
+        match &self.lock().active {
             Some(active) => PairingState::Waiting {
                 expires_in: active.expires.saturating_duration_since(Instant::now()),
                 attempts_left: MAX_FAILURES - active.failures,
@@ -118,9 +183,9 @@ impl PairingHost {
     /// Starts an attempt on the active code, or `None` when there is no code, it has expired, or another attempt is
     /// running.
     pub fn start_attempt(self: &Arc<Self>) -> Option<Attempt> {
-        let mut state = self.lock();
-        Self::drop_if_expired(&mut state);
+        self.check_expiry();
 
+        let mut state = self.lock();
         let active = state.active.as_mut().filter(|active| !active.busy)?;
         active.busy = true;
 
@@ -132,13 +197,22 @@ impl PairingHost {
         })
     }
 
-    fn drop_if_expired(state: &mut State) {
-        if state
+    /// Drops the active code when it has expired; whether it did.
+    fn drop_if_expired(state: &mut State) -> bool {
+        let expired = state
             .active
             .as_ref()
-            .is_some_and(|active| Instant::now() >= active.expires)
-        {
+            .is_some_and(|active| Instant::now() >= active.expires);
+        if expired {
             state.active = None;
+        }
+
+        expired
+    }
+
+    fn notify(&self, change: Change) {
+        if let Some(observer) = self.observer.get() {
+            observer(change);
         }
     }
 
@@ -167,20 +241,39 @@ impl Attempt {
         self.ended = true;
 
         let mut state = self.host.lock();
-        PairingHost::drop_if_expired(&mut state);
+        let expired = PairingHost::drop_if_expired(&mut state);
 
-        match &state.active {
+        let used = match &state.active {
             Some(active) if active.id == self.id => {
                 state.active = None;
                 true
             }
             _ => false,
+        };
+        drop(state);
+
+        if used {
+            self.host.notify(Change::Ended(PairingEndReason::Used));
+        } else if expired {
+            self.host.notify(Change::Ended(PairingEndReason::Expired));
         }
+
+        used
     }
 
     /// Ends the attempt as a failure.
     pub fn fail(mut self) {
         self.record_failure();
+    }
+
+    /// Ends an attempt that never sent anything. It does not count against the code, and the next attempt can start.
+    pub fn release(mut self) {
+        self.ended = true;
+
+        let mut state = self.host.lock();
+        if let Some(active) = state.active.as_mut().filter(|active| active.id == self.id) {
+            active.busy = false;
+        }
     }
 
     fn record_failure(&mut self) {
@@ -197,8 +290,14 @@ impl Attempt {
         active.busy = false;
         active.failures += 1;
 
-        if active.failures >= MAX_FAILURES {
+        let cancelled = active.failures >= MAX_FAILURES;
+        if cancelled {
             state.active = None;
+        }
+        drop(state);
+
+        if cancelled {
+            self.host.notify(Change::Ended(PairingEndReason::TooManyAttempts));
         }
     }
 }

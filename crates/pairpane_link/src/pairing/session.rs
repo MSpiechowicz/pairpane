@@ -26,6 +26,10 @@ use crate::wire::Channel;
 /// How long a whole pairing may take on the host, from the connection on.
 pub const SESSION_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long a joiner has to send its first message. A connection that sends nothing in that time does not count as an
+/// attempt, and lets the next one in.
+pub const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// How long the host waits for the joiner to take the last message before it closes the connection.
 const LINGER: Duration = Duration::from_secs(3);
 
@@ -61,8 +65,12 @@ pub async fn join_session(
 }
 
 /// The host's side, for one attempt. `pin` stores the joiner (its node id and name) and is called only once the code is
-/// proved and used up; the host's name goes out only after it succeeds. Returns what `pin` returned. A failure, or an
-/// attempt that is dropped, counts against the code.
+/// proved and used up. Returns what `pin` returned.
+///
+/// An attempt that sends nothing within [`FIRST_FRAME_TIMEOUT`], or whose connection ends before a first message, is
+/// released and does not count against the code. Any other failure, or an attempt that is dropped, does. Once the joiner
+/// is pinned the pairing is done: the host's name is sent after that as a courtesy (the joiner pins the host when it
+/// has it), and a failure to send it is only logged, because the joiner may be gone and the device is paired.
 pub async fn host_session(
     conn: &Connection,
     own_id: &EndpointId,
@@ -72,12 +80,30 @@ pub async fn host_session(
 ) -> Result<Device> {
     let joiner_id = conn.remote_id();
 
-    let work = async {
+    let first = async {
         let mut channel = Channel::accept(conn).await?;
+        let hello = timeout(FIRST_FRAME_TIMEOUT, channel.recv())
+            .await
+            .map_err(|_| Error::PairingTimedOut)??;
 
-        let hello = channel.recv_exact(1 + MESSAGE_LEN).await?;
-        if hello[0] != PAIR_VERSION {
-            return Err(Error::Protocol("the pairing version is not supported"));
+        Ok((channel, hello))
+    };
+    let (mut channel, hello) = match timeout(FIRST_FRAME_TIMEOUT, first).await {
+        Ok(Ok(started)) => started,
+        // The stream or the connection ended, or nothing came: the joiner has not tried the code.
+        Ok(Err(Error::PairingRejected | Error::PairingTimedOut)) | Err(_) => {
+            attempt.release();
+            return Err(Error::PairingTimedOut);
+        }
+        Ok(Err(error)) => {
+            attempt.fail();
+            return Err(error);
+        }
+    };
+
+    let work = async {
+        if hello.len() != 1 + MESSAGE_LEN || hello[0] != PAIR_VERSION {
+            return Err(Error::Protocol("the pairing message is not supported"));
         }
 
         let handshake = Handshake::start(Role::Host, attempt.code());
@@ -92,12 +118,11 @@ pub async fn host_session(
 
         channel.send(&confirmation.tag(Role::Host)).await?;
 
-        let joiner_name = read_name(&mut channel).await?;
-        Ok((channel, joiner_name))
+        read_name(&mut channel).await
     };
 
-    let (mut channel, joiner_name) = match timeout(SESSION_TIMEOUT, work).await {
-        Ok(Ok(done)) => done,
+    let joiner_name = match timeout(SESSION_TIMEOUT, work).await {
+        Ok(Ok(name)) => name,
         Ok(Err(error)) => {
             attempt.fail();
             return Err(error);
@@ -114,10 +139,14 @@ pub async fn host_session(
 
     let device = pin(joiner_id, &joiner_name)?;
 
-    channel.send(own_name.as_bytes()).await?;
-    channel.finish();
-    // Closing the connection now could drop the last message before the joiner has it.
-    let _ = timeout(LINGER, conn.closed()).await;
+    match channel.send(own_name.as_bytes()).await {
+        Ok(()) => {
+            channel.finish();
+            // Closing the connection now could drop the last message before the joiner has it.
+            let _ = timeout(LINGER, conn.closed()).await;
+        }
+        Err(error) => tracing::debug!(%error, "the pairing was saved but the joiner did not take the host's name"),
+    }
 
     Ok(device)
 }

@@ -226,7 +226,11 @@ fn a_failed_write_changes_neither_the_file_nor_the_list() {
     assert!(matches!(store.add(id(), "Two", 2), Err(Error::Io(_))));
 
     assert_eq!(store.list().len(), 1);
-    assert!(!dir.path().join(format!(".{DEVICES_FILE_NAME}.tmp")).exists());
+    let names: Vec<String> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(names.iter().all(|name| !name.contains(".tmp")), "{names:?}");
     assert!(!before.is_empty());
 }
 
@@ -361,4 +365,60 @@ fn a_file_with_too_many_or_repeated_addresses_keeps_the_first_eight() {
         store.get(&node_id).unwrap().addrs,
         (1..=8).map(addr).collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn names_with_format_or_separator_characters_are_refused() {
+    for bad in [
+        "a\u{202E}b",
+        "a\u{202A}b",
+        "a\u{2066}b",
+        "a\u{2069}b",
+        "a\u{2028}b",
+        "a\u{2029}b",
+        "a\u{200B}b",
+        "a\u{200F}b",
+        "a\u{061C}b",
+        "a\u{2060}b",
+        "a\u{206F}b",
+        "a\u{FEFF}b",
+        "a\u{00AD}b",
+        "a\u{180E}b",
+        "a\u{FFF9}b",
+        "a\u{E0041}b",
+        "a\u{0085}b",
+    ] {
+        assert!(matches!(validate_name(bad), Err(Error::InvalidName)), "{bad:?}");
+    }
+
+    // Ordinary text in other scripts, emoji and inner spaces are fine.
+    for good in ["Anna's laptop", "Büro", "書斎のPC", "Kitchen 🍳", "a b"] {
+        assert_eq!(validate_name(good).unwrap(), good);
+    }
+}
+
+#[test]
+fn names_are_kept_in_normal_form_c() {
+    assert_eq!(validate_name("Cafe\u{301}").unwrap(), "Caf\u{e9}");
+    assert_eq!(validate_name("Cafe\u{301}").unwrap().chars().count(), 4);
+}
+
+#[test]
+fn a_bad_list_file_is_moved_aside_never_deleted() {
+    let dir = TempDir::new().unwrap();
+    fs::write(file(dir.path()), b"not json").unwrap();
+    assert!(matches!(DeviceStore::open(dir.path()), Err(Error::CorruptDevices)));
+
+    let aside = super::reset_devices(dir.path()).unwrap().expect("a file was moved");
+
+    assert!(!file(dir.path()).exists());
+    assert_eq!(fs::read(&aside).unwrap(), b"not json");
+    let name = aside.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(name.starts_with(&format!("{DEVICES_FILE_NAME}.bad-")), "{name}");
+    assert!(
+        name[DEVICES_FILE_NAME.len() + 5..].chars().all(|c| c.is_ascii_digit()),
+        "{name}"
+    );
+    assert!(open(&dir).list().is_empty());
+    assert!(super::reset_devices(dir.path()).unwrap().is_none(), "nothing to move");
 }

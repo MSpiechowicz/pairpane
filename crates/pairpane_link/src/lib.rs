@@ -9,11 +9,12 @@
 //!
 //! The usual use:
 //!
-//! 1. [`Link::start`] with a [`LinkConfig`] and a [`KeyStore`] (see [`default_store`]).
+//! 1. [`Link::start`] with a [`LinkConfig`] and the [`KeyStores`] ([`default_stores`]).
 //! 2. On the device that is paired from, [`Link::begin_pairing`] and show [`PairingOffer::code`] and
 //!    [`ThisDevice::target`]; on the other, [`Link::join`] with the typed code and a [`Target`] (a device found by
 //!    [`Link::discovered`], or the text another device showed).
-//! 3. [`Link::devices`], [`Link::status`], [`Link::rename_device`] and [`Link::unpair`] for the list.
+//! 3. [`Link::devices`], [`Link::status`], [`Link::rename_device`] and [`Link::unpair`] for the list, and
+//!    [`Link::subscribe`] for what happens (a pairing, an unpairing, the end of a code).
 //! 4. [`Link::shutdown`].
 
 pub mod code;
@@ -26,15 +27,17 @@ pub mod pairing;
 mod wire;
 
 pub use code::PairingCode;
-pub use devices::{Device, DeviceStore, MAX_NAME_CHARS};
+pub use devices::{Device, DeviceStore, MAX_NAME_CHARS, reset_devices};
 pub use error::{Error, Result};
 #[cfg(unix)]
 pub use identity::FileStore;
-pub use identity::{KeyStore, KeychainStore, MemoryStore, StoreKind, default_store, load_or_create};
+pub use identity::{
+    KeyStore, KeyStores, KeychainStore, MemoryStore, StoreKind, default_stores, load_or_create, open_identity,
+};
 pub use link::{
     DEFAULT_PORT, Discovery, Found, HELLO_VERSION, LINK_ALPN, Link, LinkConfig, LinkEvent, Status, Target, ThisDevice,
 };
-pub use pairing::{PAIR_ALPN, PairingOffer, PairingState};
+pub use pairing::{PAIR_ALPN, PairingEndReason, PairingOffer, PairingState};
 
 /// The node id type of a device (its Ed25519 public key).
 pub use iroh::EndpointId as NodeId;

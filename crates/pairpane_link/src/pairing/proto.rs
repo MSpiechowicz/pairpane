@@ -3,13 +3,15 @@
 //!
 //! SPAKE2 turns the short code into a strong shared key, and an attacker who does not know the code gets one guess per
 //! session, no more. Neither side trusts that key until the other has proved it holds it: each sends a BLAKE3 keyed
-//! hash of a transcript that has both SPAKE2 messages, both node ids as the authenticated QUIC connection reported them,
-//! a label of the sender's role and the protocol version. Because the node ids are in it, a man in the middle who relays
+//! hash of a transcript that has the protocol label and version, both SPAKE2 messages, both node ids as the authenticated
+//! QUIC connection reported them, and a label of the sender's role. Because the node ids are in it, a man in the middle who relays
 //! the exchange between two connections cannot make the tags match: the two sides saw different ids.
 
 use iroh::EndpointId;
 use spake2::{Ed25519Group, Identity, Password, Spake2};
+use zeroize::Zeroizing;
 
+use super::PAIR_VERSION;
 use crate::code::PairingCode;
 use crate::error::{Error, Result};
 
@@ -86,6 +88,7 @@ impl Handshake {
         let mut transcript = Vec::new();
         for part in [
             TRANSCRIPT_LABEL,
+            &[PAIR_VERSION],
             join_message,
             host_message,
             join_id.as_bytes(),
@@ -96,13 +99,14 @@ impl Handshake {
             transcript.extend_from_slice(part);
         }
 
-        let shared = self
-            .state
-            .finish(peer_message)
-            .map_err(|_| Error::Protocol("the key exchange message is bad"))?;
+        let shared = Zeroizing::new(
+            self.state
+                .finish(peer_message)
+                .map_err(|_| Error::Protocol("the key exchange message is bad"))?,
+        );
 
         Ok(Confirmation {
-            key: blake3::derive_key(KEY_CONTEXT, &shared),
+            key: Zeroizing::new(blake3::derive_key(KEY_CONTEXT, &shared)),
             transcript,
         })
     }
@@ -110,7 +114,7 @@ impl Handshake {
 
 /// The shared key and the transcript of a finished exchange, which can make the tag of a role and check the other's.
 pub struct Confirmation {
-    key: [u8; 32],
+    key: Zeroizing<[u8; 32]>,
     transcript: Vec<u8>,
 }
 
