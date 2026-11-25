@@ -73,6 +73,7 @@ fn a_move_across_disks_takes_the_file_s_extended_attributes_along() {
         attributes::read_mark(&dst.join("folder/b.txt")).as_deref(),
         Some(&b"tag-b"[..])
     );
+    assert_eq!(read(&dst.join("folder/b.txt")), b"b");
     assert_eq!(tree(&src), Vec::<String>::new());
 }
 
@@ -117,18 +118,6 @@ fn a_copy_to_a_disk_that_cannot_hold_them_still_copies() {
     let mut rig = Rig::hooked(|hooks| hooks.refuse_extras = true);
 
     let ended = rig.run_copy(root.path(), &["a.txt"]);
-
-    assert!(ended.errors.is_empty(), "{:?}", ended.errors);
-    assert_eq!(read(&root.path().join("dst/a.txt")), b"a");
-}
-
-#[test]
-fn a_plain_file_moves_across_disks_as_before() {
-    let root = temp();
-    write(&root.path().join("src/a.txt"), b"a");
-    let mut rig = Rig::hooked(|hooks| hooks.cross_device = true);
-
-    let ended = rig.run_move(root.path(), &["a.txt"]);
 
     assert!(ended.errors.is_empty(), "{:?}", ended.errors);
     assert_eq!(read(&root.path().join("dst/a.txt")), b"a");
