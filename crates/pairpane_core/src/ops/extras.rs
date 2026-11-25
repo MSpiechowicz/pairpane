@@ -21,25 +21,24 @@ use super::win_streams;
 pub(super) struct NotKept(pub(super) String);
 
 /// Writes the extended attributes (or alternate streams) of `source` onto `copy`, the new file at `copy_path` made from
-/// the file at `source_path`. `refuse` makes every write fail, for tests. Gives the first one that should have been kept
-/// and was not.
+/// the file at `source_path`. `refuse` makes every write fail, for tests; `stopped` says the job was cancelled, which
+/// ends the work early. Goes on past one that cannot be written (a copy takes all it can) and gives the first that
+/// should have been kept and was not.
 pub(super) fn carry(
     source: &File,
     copy: &File,
     (source_path, copy_path): (&Path, &Path),
-    refuse: bool,
+    (refuse, stopped): (bool, &dyn Fn() -> bool),
 ) -> Result<(), NotKept> {
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios"))]
     {
-        let _ = (source_path, copy_path);
+        let _ = (source_path, copy_path, stopped);
 
         xattrs::carry(source, copy, refuse)
     }
     #[cfg(windows)]
     {
-        let _ = copy;
-
-        win_streams::carry(source, source_path, copy_path, refuse)
+        win_streams::carry((source, source_path), (copy, copy_path), (refuse, stopped))
     }
     #[cfg(not(any(
         target_os = "linux",
@@ -49,7 +48,7 @@ pub(super) fn carry(
         windows
     )))]
     {
-        let _ = (source, copy, source_path, copy_path, refuse);
+        let _ = (source, copy, source_path, copy_path, refuse, stopped);
 
         Ok(())
     }
@@ -89,18 +88,20 @@ mod xattrs {
             Ok(names) => names,
             // A file system without extended attributes has none to carry.
             Err(error) if error == Errno::NOTSUP || error == Errno::OPNOTSUPP || error == Errno::NOSYS => return Ok(()),
-            Err(error) => return Err(NotKept(format!("its extended attributes ({error})"))),
+            Err(error) => return Err(NotKept(format!("extended attributes ({error})"))),
         };
 
         let linux = cfg!(any(target_os = "linux", target_os = "android"));
+        let mut first_missing = None;
         for name in names.split(|byte| *byte == 0).filter(|name| !name.is_empty()) {
             if !is_carried(name, linux) {
                 continue;
             }
 
-            let shown = String::from_utf8_lossy(name).into_owned();
+            let shown = format!("extended attribute {:?}", String::from_utf8_lossy(name));
             let Ok(c_name) = CString::new(name) else {
-                return Err(NotKept(shown));
+                first_missing.get_or_insert(NotKept(shown));
+                continue;
             };
             let value = match read(
                 || fgetxattr_query(source, c_name.as_c_str()),
@@ -109,11 +110,21 @@ mod xattrs {
                 Ok(value) => value,
                 // Gone since the names were read.
                 Err(Errno::NODATA) => continue,
-                Err(_) => return Err(NotKept(shown)),
+                Err(_) => {
+                    first_missing.get_or_insert(NotKept(shown));
+                    continue;
+                }
             };
 
+            // A clone (APFS) already has the attribute, and may already be read-only: nothing to write.
+            let present = read(
+                || fgetxattr_query(copy, c_name.as_c_str()),
+                |buffer| fgetxattr(copy, c_name.as_c_str(), buffer),
+            );
             let written = if refuse {
                 Err(Errno::NOTSUP)
+            } else if present.is_ok_and(|there| there == value) {
+                Ok(())
             } else {
                 fsetxattr(copy, c_name.as_c_str(), &value, XattrFlags::empty())
             };
@@ -122,11 +133,13 @@ mod xattrs {
                 // On macOS the system keeps the provenance of a file to itself and refuses to let a process set it; it
                 // gives the copy its own. Only that one is let go of: a refused quarantine flag keeps the source.
                 Err(Errno::PERM) if is_system_set(name) => {}
-                Err(_) => return Err(NotKept(shown)),
+                Err(_) => {
+                    first_missing.get_or_insert(NotKept(shown));
+                }
             }
         }
 
-        Ok(())
+        first_missing.map_or(Ok(()), Err)
     }
 
     /// Whether the system sets the attribute `name` itself and refuses a process that tries (macOS).
@@ -134,9 +147,9 @@ mod xattrs {
         cfg!(any(target_os = "macos", target_os = "ios")) && name == b"com.apple.provenance"
     }
 
-    /// The whole of what `fill` reads, its size asked for first with `size`. A read that fills the buffer, which is one
-    /// byte larger than the size, may have been cut short (macOS reads a resource fork in part without saying so): the
-    /// size is asked for again. Larger than `MOST` is refused.
+    /// The whole of what `fill` reads, its size asked for first with `size`. Only a read of exactly that size is taken
+    /// (macOS may read a resource fork in part without saying so); anything else asks again, a few times. Larger than
+    /// `MOST` is refused.
     fn read(
         mut size: impl FnMut() -> Result<usize, Errno>,
         mut fill: impl FnMut(&mut [u8]) -> Result<usize, Errno>,
@@ -149,11 +162,12 @@ mod xattrs {
 
             let mut buffer = vec![0; wanted + 1];
             match fill(&mut buffer) {
-                Ok(length) if length < buffer.len() => {
+                // Exactly the size asked for, or the size asked for again (it changed between the two calls): whole.
+                Ok(length) if length == wanted || (length < wanted && size()? == length) => {
                     buffer.truncate(length);
                     return Ok(buffer);
                 }
-                // Grown since its size was read.
+                // Grown since its size was read, or cut short.
                 Ok(_) | Err(Errno::RANGE) => {}
                 Err(error) => return Err(error),
             }

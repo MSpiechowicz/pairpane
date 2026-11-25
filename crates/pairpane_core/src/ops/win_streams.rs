@@ -2,11 +2,14 @@
 //!
 //! This is one of the few modules of the workspace that may use `unsafe` (the lint is denied everywhere else): the
 //! standard library cannot list a file's streams, which `FindFirstStreamW` and `FindNextStreamW` do. Each stream is then
-//! read and written with the standard library, as `file:name:$DATA`, never following a link. What is done with a
-//! listed name is decided by [`stream_name`] and [`may_drop`], which are safe and tested on every system.
+//! read and written with the standard library, as `file:name:$DATA`. What is done with a listed name is decided by
+//! [`stream_name`] and [`may_drop`], which are safe and tested on every system.
 //!
 //! A listed name comes from the source's file system, which may not be a trusted one (a network share, a disk image
-//! someone made): it is used only when it is a plain stream name, so it can never make the open reach another file.
+//! someone made): it is used only when it is a plain stream name, so it cannot name another file. The streams are found
+//! and opened by path, which is checked to lead to the file the copy was made from, and each stream opened is checked to
+//! belong to that file (and to the copy): a folder on the way swapped for a link while this runs can make the listing
+//! look elsewhere, but no data from another file reaches the copy. Listing by handle would close that window too.
 #![allow(
     unsafe_code,
     reason = "the calls of FindFirstStreamW, FindNextStreamW, FindClose and GetLastError; see `names`"
@@ -29,8 +32,8 @@ pub(super) fn stream_name(listed: &str) -> Option<&str> {
     plain.then_some(name)
 }
 
-/// Whether the stream `name` (see [`stream_name`]) may be left out where the target holds no streams: the zone a
-/// download came from, which Explorer drops too.
+/// Whether the stream `name` (see [`stream_name`]) may be left out when it cannot be copied: the zone a download came
+/// from, which Explorer drops too where the target holds no streams.
 #[cfg_attr(not(windows), allow(dead_code, reason = "used on Windows; tested everywhere"))]
 pub(super) fn may_drop(name: &str) -> bool {
     name.eq_ignore_ascii_case("Zone.Identifier")
@@ -43,7 +46,7 @@ pub(super) use imp::carry;
 mod imp {
     use std::ffi::OsString;
     use std::fs::{File, OpenOptions};
-    use std::io::{self, Read};
+    use std::io::{self, Read, Write};
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
     use std::os::windows::fs::OpenOptionsExt;
     use std::path::Path;
@@ -66,15 +69,22 @@ mod imp {
     /// The most streams a file is read for; a file with more fails to move whole.
     const MOST: usize = 4096;
 
-    /// The most bytes of one stream that are copied; a larger one is not, so its file's move keeps the source. Streams
-    /// hold small things (where a file came from, a thumbnail, a sync tool's state); this bounds a hostile one.
-    const MOST_BYTES: u64 = 256 * 1024 * 1024;
+    /// The most bytes of all the streams of one file that are copied; past it the rest are not, so its file's move keeps
+    /// the source. Streams hold small things (where a file came from, a thumbnail, a sync tool's state); this bounds a
+    /// hostile file whose sparse streams would be written out in full.
+    const MOST_BYTES: u64 = 1024 * 1024 * 1024;
 
-    pub(in super::super) fn carry(source: &File, source_path: &Path, copy: &Path, refuse: bool) -> Result<(), NotKept> {
+    /// Bytes copied between two looks at whether the job was cancelled.
+    const CHUNK: usize = 1024 * 1024;
+
+    pub(in super::super) fn carry(
+        (source, source_path): (&File, &Path),
+        (copy, copy_path): (&File, &Path),
+        (refuse, stopped): (bool, &dyn Fn() -> bool),
+    ) -> Result<(), NotKept> {
         // The streams are found and opened by path: the path must still lead to the file the copy was made from, and
         // not to a link put there since (which could lead the listing to another file, or to a network host).
-        let same = matches!((FileId::of_file(source), FileId::of_path(source_path)), (Some(open), Some(named)) if open == named);
-        if !same {
+        if !same_file(source, source_path) {
             return Err(NotKept(
                 "alternate data streams (it changed while it was copied)".to_owned(),
             ));
@@ -87,42 +97,78 @@ mod imp {
             Err(error) => return Err(NotKept(format!("alternate data streams ({error})"))),
         };
 
+        // A copy takes every stream it can; the first that should have gone and did not is what a move reports.
+        let mut first_missing = None;
+        let mut budget = MOST_BYTES;
         for listed in listed.iter().filter(|name| name.as_str() != MAIN) {
+            if stopped() {
+                return Err(NotKept("alternate data streams (cancelled)".to_owned()));
+            }
             let Some(name) = stream_name(listed) else {
-                return Err(NotKept(format!("alternate data stream {listed:?}")));
+                first_missing.get_or_insert(NotKept(format!("alternate data stream {listed:?}")));
+                continue;
             };
             let written = if refuse {
                 Err(io::Error::from(io::ErrorKind::Unsupported))
             } else {
-                copy_stream(source_path, copy, name)
+                copy_stream((source, source_path), (copy, copy_path), name, (&mut budget, stopped))
             };
             if written.is_err() && !may_drop(name) {
-                return Err(NotKept(format!("alternate data stream {name}")));
+                first_missing.get_or_insert(NotKept(format!("alternate data stream {name:?}")));
             }
         }
 
-        Ok(())
+        first_missing.map_or(Ok(()), Err)
     }
 
-    /// Copies the stream `name` of the file at `source` to the same stream of the new file at `copy`, which must not
-    /// have it yet. Neither open follows a link.
-    fn copy_stream(source: &Path, copy: &Path, name: &str) -> io::Result<()> {
-        let from = OpenOptions::new()
+    /// Whether `path` leads to the file open as `file`.
+    fn same_file(file: &File, path: &Path) -> bool {
+        matches!((FileId::of_file(file), FileId::of_path(path)), (Some(open), Some(named)) if open == named)
+    }
+
+    /// Whether the stream open as `stream` belongs to the file open as `file` (a stream's handle tells its file).
+    fn stream_of(stream: &File, file: &File) -> bool {
+        matches!((FileId::of_file(stream), FileId::of_file(file)), (Some(stream), Some(file)) if stream == file)
+    }
+
+    /// Copies the stream `name` of `source` to the same stream of `copy`, which must not have it yet, taking its bytes
+    /// from `budget` and stopping once the job is cancelled. Neither open follows a link at the file, and each stream
+    /// must belong to its file.
+    fn copy_stream(
+        (source, source_path): (&File, &Path),
+        (copy, copy_path): (&File, &Path),
+        name: &str,
+        (budget, stopped): (&mut u64, &dyn Fn() -> bool),
+    ) -> io::Result<()> {
+        let mut from = OpenOptions::new()
             .read(true)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(with_stream(source, name))?;
+            .open(with_stream(source_path, name))?;
         let mut to = OpenOptions::new()
             .write(true)
             .create_new(true)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(with_stream(copy, name))?;
-
-        let copied = io::copy(&mut from.take(MOST_BYTES + 1), &mut to)?;
-        if copied > MOST_BYTES {
-            return Err(io::Error::other("the stream is too large"));
+            .open(with_stream(copy_path, name))?;
+        if !stream_of(&from, source) || !stream_of(&to, copy) {
+            return Err(io::Error::other("the stream is not of the file being copied"));
         }
 
-        Ok(())
+        let mut buffer = vec![0; CHUNK];
+        loop {
+            if stopped() {
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            let read = from.read(&mut buffer)?;
+            if read == 0 {
+                return Ok(());
+            }
+            let read_bytes = read as u64;
+            if read_bytes > *budget {
+                return Err(io::Error::other("the streams are too large"));
+            }
+            *budget -= read_bytes;
+            to.write_all(&buffer[..read])?;
+        }
     }
 
     /// `path` with the stream `name` (a plain one, see `stream_name`) named after it: `path:name:$DATA`.

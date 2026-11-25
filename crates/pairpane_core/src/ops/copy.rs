@@ -207,7 +207,14 @@ impl Run<'_> {
         // What the file holds besides its bytes (see `extras`): a copy takes what the target can hold, a move keeps its
         // source unless everything that should go with the file went. Before the permissions and times are given: a
         // read-only copy takes no attribute (nor, on Windows, a stream), and writing a stream changes the file's time.
-        let carried = extras::carry(source, &copy, (source_path, &temp), self.inner.hooks.refuse_extras);
+        let control = &self.job.control;
+        let carried = extras::carry(
+            source,
+            &copy,
+            (source_path, &temp),
+            (self.inner.hooks.refuse_extras, &|| control.is_cancelled()),
+        );
+        self.checkpoint()?;
         if let (Err(extras::NotKept(what)), true) = (carried, self.moving()) {
             return Err(io::Error::other(format!("Kept the original: the target cannot hold its {what}")).into());
         }
