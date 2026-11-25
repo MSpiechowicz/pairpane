@@ -25,8 +25,8 @@ to run.
   3.8×, depending on the runner. Neither an absolute 100 ms limit nor a ratio was stable enough to gate CI. The tripwire
   catches a gross regression. Both the aim and the ratio are shown in the summary, and #71 is to make the aim hold on
   every runner so it can be enforced.
-- **The listing is read once before it is timed,** so the system's caches are warm, as they are for a folder you open
-  again.
+- **The listing and the bare read are each done once before they are timed,** so the system's caches are warm, as they
+  are for a folder you open again.
 - **The palette budget runs in the UI tests' DOM (happy-dom),** not in the app's webview. It catches the palette's own
   work growing (matching, ranking, drawing), not the speed of a particular webview.
 

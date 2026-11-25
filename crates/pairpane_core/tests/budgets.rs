@@ -46,9 +46,14 @@ fn millis(duration: Duration) -> String {
     format!("{:.1} ms", duration.as_secs_f64() * 1000.0)
 }
 
-/// Prints one measured budget and adds it to the CI job summary when there is one.
-fn report(name: &str, measured: &str, budget: &str, met: bool) {
-    let verdict = if met { "met" } else { "MISSED" };
+/// Prints one measured budget and adds it to the CI job summary when there is one. `met` is `None` for a number that is
+/// reported only, which no limit applies to.
+fn report(name: &str, measured: &str, budget: &str, met: Option<bool>) {
+    let verdict = match met {
+        Some(true) => "met",
+        Some(false) => "MISSED",
+        None => "reported",
+    };
     println!("budget {name}: {measured} (budget {budget}) {verdict}");
 
     if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
@@ -123,16 +128,16 @@ fn a_folder_of_100k_entries_shows_its_first_batch_within_budget() {
             millis(FIRST_BATCH_TRIPWIRE),
             millis(FIRST_BATCH_AIM)
         ),
-        met,
+        Some(met),
     );
     // The listing's own work above a bare read of the folder, which #71 is to cut.
     report(
         "listing 100k: first batch vs bare read",
         &format!("{} vs {} ({over:.2}×)", millis(first), millis(bare)),
         "reported only",
-        true,
+        None,
     );
-    report("listing 100k: all entries", &millis(whole), "reported only", true);
+    report("listing 100k: all entries", &millis(whole), "reported only", None);
     assert!(
         met,
         "the first batch of {ENTRIES} entries took {first:?}, over {FIRST_BATCH_TRIPWIRE:?} (a bare read: {bare:?})"
@@ -282,7 +287,7 @@ fn the_engine_copies_a_large_file_near_the_speed_of_a_plain_copy() {
             share * 100.0
         ),
         &format!("≥ {:.0} %", COPY_SHARE * 100.0),
-        met,
+        Some(met),
     );
     assert!(engine.shutdown(Duration::from_secs(10)), "the engine stops");
     assert!(
