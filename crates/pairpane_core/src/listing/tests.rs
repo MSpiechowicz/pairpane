@@ -394,3 +394,67 @@ fn a_folder_that_never_pauses_is_still_reported() {
         DEBOUNCE / 3
     );
 }
+
+#[test]
+fn a_folder_larger_than_the_first_batch_is_in_order_across_the_batches() {
+    // Folders and files on both sides of the first batch's end, created out of order, so picking out the first screen
+    // and sorting the rest later must still give one order: folders first, then names.
+    let dir_names: Vec<String> = (0..FIRST_BATCH + 50)
+        .rev()
+        .map(|index| format!("d{index:04}"))
+        .collect();
+    let file_names: Vec<String> = (0..FIRST_BATCH * 2).rev().map(|index| format!("a{index:04}")).collect();
+    let dirs: Vec<&str> = dir_names.iter().map(String::as_str).collect();
+    let files: Vec<&str> = file_names.iter().map(String::as_str).collect();
+    let temp = folder(&files, &dirs);
+
+    let mut expected = dir_names.clone();
+    expected.sort();
+    let mut sorted_files = file_names.clone();
+    sorted_files.sort();
+    expected.extend(sorted_files);
+
+    assert_eq!(names(&events(temp.path(), false)), expected);
+}
+
+/// Two names that both read as `a\u{FFFD}`, the first in the system's own order first: on Linux bytes that are not
+/// UTF-8, on Windows lone UTF-16 surrogates (macOS refuses either kind of name).
+#[cfg(target_os = "linux")]
+fn names_alike() -> [std::ffi::OsString; 2] {
+    use std::os::unix::ffi::OsStrExt;
+
+    [b"a\xfe", b"a\xff"].map(|bytes| std::ffi::OsStr::from_bytes(bytes).to_os_string())
+}
+
+#[cfg(windows)]
+fn names_alike() -> [std::ffi::OsString; 2] {
+    use std::os::windows::ffi::OsStringExt;
+
+    [0xD800, 0xDC00].map(|surrogate| std::ffi::OsString::from_wide(&[u16::from(b'a'), surrogate]))
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
+fn names_that_read_alike_keep_one_order() {
+    // With enough names around them to take the first-batch path, the two come out in the system's order on every
+    // listing.
+    let temp = TempDir::new().expect("temp dir");
+    for index in 0..FIRST_BATCH * 2 {
+        fs::write(temp.path().join(format!("a{index:04}")), b"").expect("file");
+    }
+    let [first, second] = names_alike();
+    assert!(first < second);
+    // Told apart by their sizes, as their shown names are the same; the second is written first.
+    fs::write(temp.path().join(&second), b"ff").expect("odd name");
+    fs::write(temp.path().join(&first), b"e").expect("odd name");
+
+    for _ in 0..5 {
+        let listed = entries(&events(temp.path(), false));
+        let odd: Vec<u64> = listed
+            .iter()
+            .filter(|entry| entry.name == "a\u{FFFD}")
+            .map(|entry| entry.size)
+            .collect();
+        assert_eq!(odd, [1, 2], "the names in the system's order");
+    }
+}

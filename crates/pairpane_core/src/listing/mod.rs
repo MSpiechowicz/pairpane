@@ -2,9 +2,11 @@
 //!
 //! [`list`] works in two passes so the first screen arrives long before a huge folder is fully read:
 //!
-//! 1. Read every name and kind (one `readdir` pass; no per-entry `stat` on Unix except for symbolic links),
-//!    drop hidden entries unless asked for, and sort: folders first, then by name ([`platform`] rules).
-//!    The total is known now, so the UI can size its scrollbar from the first event.
+//! 1. Read every name and kind (one `readdir` pass; no per-entry `stat` on Unix except for symbolic links) and
+//!    drop hidden entries unless asked for. The total is known now, so the UI can size its scrollbar from the first
+//!    event. Only the first screen is put in order now (`order_first`: folders first, then by name, [`platform`]
+//!    rules); the rest is sorted once the first batch is sent, as sorting a huge folder takes longer than picking out
+//!    its first screen.
 //! 2. Read the metadata of the sorted entries in parallel, in batches, in order: a small first batch (the
 //!    first screen), then larger ones. A cancelled listing stops between batches.
 //!
@@ -77,7 +79,7 @@ pub fn list_at(
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "the path must be absolute"));
     }
 
-    let Some(names) = read_names(actual, show_hidden, cancel)? else {
+    let Some(mut names) = read_names(actual, show_hidden, cancel)? else {
         return Ok(Outcome::Cancelled);
     };
 
@@ -93,10 +95,16 @@ pub fn list_at(
     let (mut dirs, mut files, mut bytes) = (0_u32, 0_u32, 0_u64);
     let mut offset = 0;
     let pool = (names.len() > SEQUENTIAL_MAX).then(describe_pool).flatten();
+    order_first(&mut names);
 
     while offset < names.len() {
         if cancel.load(Ordering::Relaxed) {
             return Ok(Outcome::Cancelled);
+        }
+
+        // The first batch is out: now the rest is put in order, behind it.
+        if offset == FIRST_BATCH {
+            names[FIRST_BATCH..].par_sort_unstable_by(order);
         }
 
         let size = if offset == 0 { FIRST_BATCH } else { BATCH };
@@ -132,7 +140,7 @@ pub fn list_at(
     Ok(Outcome::Done)
 }
 
-/// The first pass: names and kinds, filtered and sorted. `None` when cancelled.
+/// The first pass: names and kinds, filtered, in the order the system gave them. `None` when cancelled.
 fn read_names(path: &Path, show_hidden: bool, cancel: &AtomicBool) -> io::Result<Option<Vec<Name>>> {
     let mut names = Vec::new();
 
@@ -174,13 +182,29 @@ fn read_names(path: &Path, show_hidden: bool, cancel: &AtomicBool) -> io::Result
         });
     }
 
-    names.par_sort_unstable_by(|a, b| {
-        b.dir
-            .cmp(&a.dir)
-            .then_with(|| platform::compare(&a.key, &a.name, &b.key, &b.name))
-    });
-
     Ok(Some(names))
+}
+
+/// The order of a listing: folders first, then by name ([`platform::compare`]).
+fn order(a: &Name, b: &Name) -> std::cmp::Ordering {
+    b.dir
+        .cmp(&a.dir)
+        .then_with(|| platform::compare(&a.key, &a.name, &b.key, &b.name))
+        // Two names that are not UTF-8 can read alike once made readable (`a\xff` and `a\xfe` are both `a\u{FFFD}`): the
+        // system's own bytes order them, so they keep one order however the listing is sorted.
+        .then_with(|| a.os_name.cmp(&b.os_name))
+}
+
+/// Puts the first [`FIRST_BATCH`] names in their final order and every later one after them, unsorted (see the
+/// module docs). Picking them out is linear, where sorting the whole of a huge folder is not; a folder that fits in
+/// the first batch is sorted whole.
+fn order_first(names: &mut [Name]) {
+    if names.len() > FIRST_BATCH {
+        names.select_nth_unstable_by(FIRST_BATCH, order);
+        names[..FIRST_BATCH].sort_unstable_by(order);
+    } else {
+        names.sort_unstable_by(order);
+    }
 }
 
 /// A pool for one listing's second pass: its own threads, so folders that do not respond (a stale mount inside the
