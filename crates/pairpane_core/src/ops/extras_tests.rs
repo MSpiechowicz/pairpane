@@ -142,3 +142,35 @@ fn a_read_only_file_moves_across_disks_with_its_attributes() {
     assert_eq!(attributes::read_mark(&moved).as_deref(), Some(&b"tag-a"[..]));
     assert!(std::fs::metadata(&moved).expect("moved").permissions().readonly());
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_move_across_disks_keeps_a_macos_acl() {
+    use std::process::Command;
+
+    // macOS keeps an ACL apart from the extended attributes (#80).
+    let acl_of = |path: &std::path::Path| -> String {
+        let listed = Command::new("ls").arg("-le").arg(path).output().expect("ls");
+        String::from_utf8_lossy(&listed.stdout).into_owned()
+    };
+    let root = temp();
+    let src = root.path().join("src");
+    write(&src.join("a.txt"), b"a");
+    let given = Command::new("chmod")
+        .args(["+a", "everyone allow read"])
+        .arg(src.join("a.txt"))
+        .status()
+        .expect("chmod");
+    assert!(given.success());
+    assert!(acl_of(&src.join("a.txt")).contains("allow read"));
+    // A new file, not a clone (which may bring the ACL by itself).
+    let mut rig = Rig::hooked(|hooks| {
+        hooks.cross_device = true;
+        hooks.buffered_only = true;
+    });
+
+    let ended = rig.run_move(root.path(), &["a.txt"]);
+
+    assert!(ended.errors.is_empty(), "{:?}", ended.errors);
+    assert!(acl_of(&root.path().join("dst/a.txt")).contains("allow read"));
+}

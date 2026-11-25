@@ -126,6 +126,8 @@ mod identity;
 mod items;
 mod job;
 mod listed;
+#[cfg(target_os = "macos")]
+mod mac_acl;
 mod meta;
 mod open;
 mod origin;

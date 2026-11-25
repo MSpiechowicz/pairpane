@@ -221,6 +221,23 @@ impl Run<'_> {
 
         self.finish_copy(source, &mut copy, meta)?;
 
+        // A macOS ACL goes after the permissions and times, which a deny entry could otherwise keep from being set (#80).
+        #[cfg(target_os = "macos")]
+        {
+            let acl = if self.inner.hooks.refuse_extras {
+                Err(io::Error::from(io::ErrorKind::Unsupported))
+            } else {
+                super::mac_acl::carry(source, &copy)
+            };
+            if let (Err(error), true) = (acl, self.moving()) {
+                return Err(in_context(
+                    "Kept the original: the target cannot hold its access control list",
+                    &error,
+                )
+                .into());
+            }
+        }
+
         // A move removes the source once the copy is committed, so the copy must be on the disk first: a write that
         // only fails when it reaches the disk (a full or pulled drive, a network share that reports at the flush) then
         // fails the item and keeps the source.

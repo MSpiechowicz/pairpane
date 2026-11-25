@@ -8,7 +8,10 @@
 //!   the trusted ones need privileges) and the other `system.*` ones;
 //! - the Windows `Zone.Identifier` stream (where a file came from), dropped where the target holds no streams, as
 //!   Explorer does;
-//! - ACLs that are not extended attributes (macOS) and explicit Windows ACLs: the copy gets those of its new folder.
+//! - explicit Windows ACLs: the copy gets those of its new folder.
+//!
+//! A macOS ACL is not an extended attribute: it is carried on its own, after the copy's permissions and times (`mac_acl`,
+//! `copy::copy_to_temp`, #80), and a copy whose disk cannot hold the source's ACL is like one that cannot hold an attribute.
 
 use std::fs::File;
 use std::path::Path;
