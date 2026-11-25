@@ -1,3 +1,10 @@
+## [0.33.1](https://github.com/MSpiechowicz/pairpane/compare/v0.33.0...v0.33.1) (2026-11-25)
+
+
+### Performance Improvements
+
+* **listing:** order only the first screen before the first batch (#72) ([8ee5546](https://github.com/MSpiechowicz/pairpane/commit/8ee5546f67a8566be23ee64cd5ec5cdb75d5cab1))
+
 # [0.33.0](https://github.com/MSpiechowicz/pairpane/compare/v0.32.0...v0.33.0) (2026-11-24)
 
 
