@@ -151,10 +151,7 @@ impl Ops {
             // The job checks the archive against this state at its start and before it replaces it: it must be the file
             // the comparison read, so what the user chose is what is in it.
             if read.is_none() || source.fingerprint.as_ref() != read {
-                return Err(CommandError::new(
-                    IpcErrorCode::InvalidInput,
-                    "The archive changed since the comparison: compare again.",
-                ));
+                return Err(changed_since_compare());
             }
 
             return Ok(SyncRoot::Archive {
@@ -164,11 +161,16 @@ impl Ops {
             });
         }
 
+        // A mirror removes from the folder what the archive did not hold when it was compared; the job checks the archive
+        // against this state before it removes anything (#75), so it must be what the comparison read.
         if names.is_empty() {
             return Ok(SyncRoot::Archive {
                 name: target.name.clone(),
                 inner: dir,
-                source: ArchiveJob::default(),
+                source: ArchiveJob {
+                    fingerprint: read.cloned(),
+                    ..ArchiveJob::default()
+                },
             });
         }
 
@@ -179,6 +181,11 @@ impl Ops {
         let source = blocking(permit, move || prepare(&shared, &path, &inner, &chosen))
             .await?
             .map_err(failed)?;
+        // The removals of a mirror are checked against this state (#75): an archive changed since the comparison is
+        // refused. A comparison that is no longer kept says nothing, and the job keeps the state it read itself.
+        if read.is_some() && source.fingerprint.as_ref() != read {
+            return Err(changed_since_compare());
+        }
 
         Ok(SyncRoot::Archive {
             name: target.name.clone(),
@@ -204,3 +211,11 @@ fn archive_password(request: &Request) -> Option<std::sync::Arc<archive::Passwor
 mod tests;
 #[cfg(test)]
 mod undo_tests;
+
+/// The refusal of a job whose archive is no longer the file the comparison read.
+fn changed_since_compare() -> CommandError {
+    CommandError::new(
+        IpcErrorCode::InvalidInput,
+        "The archive changed since the comparison: compare again.",
+    )
+}

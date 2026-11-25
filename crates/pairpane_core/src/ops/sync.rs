@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use crate::listing::{modified_millis, platform};
 use crate::model::{EntryKind, JobPhase, PaneId, SyncDirection, SyncFacts};
 
-use super::extract::ArchiveJob;
+use super::extract::{ArchiveJob, open_archive};
 use super::plan::{Child, Kind, is_inside, real};
 use super::report::refusal;
 use super::sync_remove::Removal;
@@ -151,6 +151,10 @@ impl Run<'_> {
             Side::Archive(archive) => Some(archive),
             Side::Disk(_) => None,
         });
+        // An archive the folder is mirrored from is not read for the removals, so it must still be the file the comparison
+        // read: a removal of a name it may have by now is not made (data loss audit, #68; #75). Looked at before the job
+        // writes to the archive itself, which checks it again right before it replaces it.
+        let archive_unchanged = archive_side.is_none_or(|archive| self.archive_unchanged(archive));
         if let Some(archive) = archive_side {
             let disk = [&left, &right].into_iter().find_map(|side| match side {
                 Side::Disk(folder) => Some(folder.as_path()),
@@ -171,6 +175,7 @@ impl Run<'_> {
             self.sync_into_archive(archive, disk, &into_archive, &removed_from_archive)?;
         }
 
+        let mut kept_for_archive = 0;
         let removed: Vec<Removal<'_>> = names_of_removals
             .iter()
             .zip(removals)
@@ -182,6 +187,10 @@ impl Run<'_> {
                 let Side::Disk(root) = side else { return None };
                 let source = match other {
                     Side::Disk(folder) => Some(folder.as_path()),
+                    Side::Archive(_) if !archive_unchanged => {
+                        kept_for_archive += 1;
+                        return None;
+                    }
                     Side::Archive(_) => None,
                 };
 
@@ -199,7 +208,21 @@ impl Run<'_> {
             Side::Disk(_) => None,
         });
 
+        for _ in 0..kept_for_archive {
+            self.changed()?;
+        }
+
         self.sync_removals(&removed, permanent, archive.as_deref())
+    }
+
+    /// Whether the archive of `side` is still the file the comparison read: what the job was given of it says, and
+    /// nothing given is not trusted.
+    fn archive_unchanged(&self, side: &ArchiveSide<'_>) -> bool {
+        let Some(read) = side.source.fingerprint.as_ref() else {
+            return false;
+        };
+
+        open_archive(&side.folder, &self.job.request.from, side.name).is_ok_and(|(_, _, now)| now == *read)
     }
 
     /// The folder `path` a side is in: it must pass the folder rules and be a folder now.
