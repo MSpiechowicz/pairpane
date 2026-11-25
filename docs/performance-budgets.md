@@ -7,9 +7,9 @@ to run.
 
 | Budget | Limit | Where it is measured | CI job |
 |---|---|---|---|
-| A folder of 100 000 entries shows its first batch | ≤ 100 ms (median of 5) | `crates/pairpane_core/tests/budgets.rs` | Performance budgets (each system) |
-| The same folder, listed to its end | reported only | `crates/pairpane_core/tests/budgets.rs` | Performance budgets (each system) |
-| A 256 MiB file copied by the engine | ≥ 80 % of the speed of a plain copy on the same disk (median of 5) | `crates/pairpane_core/tests/budgets.rs` | Performance budgets (each system) |
+| A folder of 100 000 entries shows its first batch | ≤ 100 ms (median of 5) | `crates/pairpane_core/tests/budgets.rs` | Performance budgets (ubuntu-latest, macos-latest, windows-latest) |
+| The same folder, listed to its end | reported only | `crates/pairpane_core/tests/budgets.rs` | Performance budgets (ubuntu-latest, macos-latest, windows-latest) |
+| A 256 MiB file copied by the engine | ≥ 80 % of the speed of a plain copy on the same disk (median of 5) | `crates/pairpane_core/tests/budgets.rs` | Performance budgets (ubuntu-latest, macos-latest, windows-latest) |
 | The command palette matches a query over every command and 20 000 names | ≤ 50 ms (median of 7) | `ui/src/lib/palette/budget.test.ts` | UI tests |
 | The command palette opens and draws its list | ≤ 100 ms (median of 7) | `ui/src/lib/palette/budget.test.ts` | UI tests |
 
