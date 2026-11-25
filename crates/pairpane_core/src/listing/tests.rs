@@ -416,3 +416,30 @@ fn a_folder_larger_than_the_first_batch_is_in_order_across_the_batches() {
 
     assert_eq!(names(&events(temp.path(), false)), expected);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn names_that_read_alike_keep_one_order() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    // `a\xfe` and `a\xff` both read as `a\u{FFFD}`; with enough names around them to take the first-batch path, they
+    // come out in the order of their bytes on every listing.
+    let temp = TempDir::new().expect("temp dir");
+    for index in 0..FIRST_BATCH * 2 {
+        fs::write(temp.path().join(format!("a{index:04}")), b"").expect("file");
+    }
+    // Told apart by their sizes, as their shown names are the same.
+    fs::write(temp.path().join(OsStr::from_bytes(b"a\xff")), b"ff").expect("odd name");
+    fs::write(temp.path().join(OsStr::from_bytes(b"a\xfe")), b"e").expect("odd name");
+
+    for _ in 0..5 {
+        let listed = entries(&events(temp.path(), false));
+        let odd: Vec<u64> = listed
+            .iter()
+            .filter(|entry| entry.name == "a\u{FFFD}")
+            .map(|entry| entry.size)
+            .collect();
+        assert_eq!(odd, [1, 2], "a\\xfe before a\\xff");
+    }
+}

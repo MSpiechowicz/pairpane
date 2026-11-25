@@ -190,6 +190,9 @@ fn order(a: &Name, b: &Name) -> std::cmp::Ordering {
     b.dir
         .cmp(&a.dir)
         .then_with(|| platform::compare(&a.key, &a.name, &b.key, &b.name))
+        // Two names that are not UTF-8 can read alike once made readable (`a\xff` and `a\xfe` are both `a\u{FFFD}`): the
+        // system's own bytes order them, so they keep one order however the listing is sorted.
+        .then_with(|| a.os_name.cmp(&b.os_name))
 }
 
 /// Puts the first [`FIRST_BATCH`] names in their final order and every later one after them, unsorted (see the
