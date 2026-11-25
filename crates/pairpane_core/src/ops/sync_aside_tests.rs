@@ -11,6 +11,7 @@ use crate::model::{OpsEvent, SyncDirection};
 
 use super::hooks::Hooks;
 use super::sync_tests::{Pair, file, is_done, plan};
+use super::sync_undo_tests::undo_of;
 use super::testing::{Rig, pattern, read, task};
 use super::{SyncLog, SyncPlan, SyncRoot, Task};
 
@@ -64,12 +65,7 @@ fn a_file_replaced_by_a_source_that_grew_meanwhile_can_still_be_undone() {
     );
     assert_eq!(log.undoable(), 1, "the replaced file is kept for the undo");
 
-    let undone = Rig::new().run(task(
-        &pair.right(),
-        &log.names().iter().map(String::as_str).collect::<Vec<_>>(),
-        &pair.right(),
-        Task::SyncUndo { log: log.clone() },
-    ));
+    let undone = Rig::new().run(undo_of(&pair, &log));
 
     is_done(&undone, 0);
     assert_eq!(read(&pair.right().join("over.bin")), b"older");

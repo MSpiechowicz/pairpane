@@ -40,13 +40,27 @@ pub(super) fn decode(bytes: &[u8], label: Option<&str>) -> io::Result<Decoded> {
     let mark = bom_len(bytes, encoding);
 
     match encoding.decode_without_bom_handling_and_without_replacement(&bytes[mark..]) {
-        Some(text) => Ok(Decoded::Text {
+        Some(text) if writes_back(encoding, &text, &bytes[mark..]) => Ok(Decoded::Text {
             text: text.into_owned(),
             encoding,
             bom: mark > 0,
         }),
-        None => Ok(Decoded::Undecodable(encoding)),
+        _ => Ok(Decoded::Undecodable(encoding)),
     }
+}
+
+/// Whether `text`, read from `bytes` in `encoding`, is written back as those very bytes. A few legacy encodings read
+/// two byte sequences as one character and write it back as one of them (Shift_JIS reads NEC's `ED 40` as 纊 and
+/// writes it as IBM's `FA 5C`), so saving the file after any edit would change bytes nobody edited: such a file is not
+/// opened as text in that encoding (data loss audit, #68). UTF-8 and UTF-16 always write back what they read.
+fn writes_back(encoding: &'static Encoding, text: &str, bytes: &[u8]) -> bool {
+    if encoding == UTF_8 || is_utf16(encoding) {
+        return true;
+    }
+
+    let (written, _, unmappable) = encoding.encode(text);
+
+    !unmappable && *written == *bytes
 }
 
 /// The line breaks of a text.

@@ -105,7 +105,7 @@ export class EditSession {
   #unreadable(encoding: string) {
     if (this.status === 'ready') {
       // A file that read well stays in the editor; only the choice of encoding failed.
-      this.failure = `The file is not valid ${encoding} text.`;
+      this.failure = `The file is not valid ${encoding} text, or would not be saved byte for byte in it.`;
       return;
     }
 

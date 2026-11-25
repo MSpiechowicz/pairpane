@@ -262,3 +262,13 @@ fn an_unknown_encoding_is_refused_on_save_too() {
         "the encoding is not known"
     );
 }
+
+#[test]
+fn a_file_its_encoding_would_not_write_back_byte_for_byte_is_not_opened_as_text() {
+    // NEC's `ED 40` reads as 纊, which Shift_JIS writes as IBM's `FA 5C`: a save would change bytes nobody edited.
+    let bytes = [b'a', 0xED, 0x40, b'\n'];
+
+    assert!(matches!(decode(&bytes, Some("Shift_JIS")), Ok(Decoded::Undecodable(found)) if found == SHIFT_JIS));
+    // IBM's own bytes are written back as they are.
+    round_trip(&[b'a', 0xFA, 0x5C, b'\n'], Some("Shift_JIS"));
+}

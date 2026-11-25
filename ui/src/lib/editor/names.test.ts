@@ -55,7 +55,7 @@ describe('the editor shows a file name with its characters that reorder text wri
 
     await opened();
 
-    expect(await screen.findByText(`${SHOWN} is not valid UTF-8 text.`)).toBeInTheDocument();
+    expect(await screen.findByText(`${SHOWN} is not valid UTF-8 text, or would not be saved byte for byte in it.`)).toBeInTheDocument();
   });
 
   it('in a failure the backend reports about it', async () => {
