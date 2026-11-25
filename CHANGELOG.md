@@ -1,3 +1,10 @@
+## [0.34.2](https://github.com/MSpiechowicz/pairpane/compare/v0.34.1...v0.34.2) (2026-11-25)
+
+
+### Bug Fixes
+
+* **release:** the release commit check accepts the bump of every workspace crate (#88) ([487c6c3](https://github.com/MSpiechowicz/pairpane/commit/487c6c3973738b429b93eaa6d65e63914bd705fe))
+
 ## [0.34.1](https://github.com/MSpiechowicz/pairpane/compare/v0.34.0...v0.34.1) (2026-11-25)
 
 
