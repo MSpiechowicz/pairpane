@@ -207,7 +207,8 @@ impl Run<'_> {
             if self.inner.hooks.fail_flush {
                 return Err(io::Error::other("the disk failed to keep the copy (a test asked for it)").into());
             }
-            flush(copy.sync_all())?;
+            flush(copy.sync_all())
+                .map_err(|error| in_context("Kept the original: the copy could not be written to the disk", &error))?;
         }
 
         Ok((temp, guard))
@@ -335,7 +336,14 @@ fn cannot_flush(error: &io::Error) -> bool {
     {
         let raw = error.raw_os_error();
         error.kind() == io::ErrorKind::Unsupported
-            || [libc_errno::EINVAL, libc_errno::ENOTSUP, libc_errno::ENOSYS].contains(&raw.unwrap_or(0))
+            || [
+                libc_errno::EINVAL,
+                libc_errno::ENOTSUP,
+                libc_errno::EOPNOTSUPP,
+                libc_errno::ENOSYS,
+                libc_errno::ENOTTY,
+            ]
+            .contains(&raw.unwrap_or(0))
     }
     #[cfg(not(unix))]
     {
@@ -348,6 +356,14 @@ mod libc_errno {
     pub(super) const EINVAL: i32 = rustix::io::Errno::INVAL.raw_os_error();
     pub(super) const ENOTSUP: i32 = rustix::io::Errno::NOTSUP.raw_os_error();
     pub(super) const ENOSYS: i32 = rustix::io::Errno::NOSYS.raw_os_error();
+    // Not the same number as ENOTSUP on macOS; a full flush that a network or FUSE disk refuses can also say ENOTTY.
+    pub(super) const EOPNOTSUPP: i32 = rustix::io::Errno::OPNOTSUPP.raw_os_error();
+    pub(super) const ENOTTY: i32 = rustix::io::Errno::NOTTY.raw_os_error();
+}
+
+/// `error` with what it meant for the item said first, kept as the same kind of error.
+fn in_context(what: &str, error: &io::Error) -> io::Error {
+    io::Error::new(error.kind(), format!("{what}: {error}"))
 }
 
 /// Makes the entries of `folder` (the commit of a copy into it) last on the disk before a move removes the source. Only
@@ -365,7 +381,12 @@ fn flush_folder(folder: &Path) -> io::Result<()> {
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
             Mode::empty(),
         ) {
-            flush(fsync(&opened).map_err(io::Error::from))?;
+            flush(fsync(&opened).map_err(io::Error::from)).map_err(|error| {
+                in_context(
+                    "Kept the original: the copy was made, but its folder could not be written to the disk",
+                    &error,
+                )
+            })?;
         }
     }
     #[cfg(not(unix))]
