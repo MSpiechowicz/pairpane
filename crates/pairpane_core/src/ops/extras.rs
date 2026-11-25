@@ -37,9 +37,9 @@ pub(super) fn carry(
     }
     #[cfg(windows)]
     {
-        let _ = (source, copy);
+        let _ = copy;
 
-        win_streams::carry(source_path, copy_path, refuse)
+        win_streams::carry(source, source_path, copy_path, refuse)
     }
     #[cfg(not(any(
         target_os = "linux",
@@ -75,7 +75,7 @@ mod xattrs {
     use std::ffi::CString;
     use std::fs::File;
 
-    use rustix::fs::{XattrFlags, fgetxattr, flistxattr, fsetxattr};
+    use rustix::fs::{XattrFlags, fgetxattr, fgetxattr_query, flistxattr, flistxattr_query, fsetxattr};
     use rustix::io::Errno;
 
     use super::{NotKept, is_carried};
@@ -85,7 +85,7 @@ mod xattrs {
     const MOST: usize = 16 * 1024 * 1024;
 
     pub(super) fn carry(source: &File, copy: &File, refuse: bool) -> Result<(), NotKept> {
-        let names = match read(|buffer| flistxattr(source, buffer)) {
+        let names = match read(|| flistxattr_query(source), |buffer| flistxattr(source, buffer)) {
             Ok(names) => names,
             // A file system without extended attributes has none to carry.
             Err(error) if error == Errno::NOTSUP || error == Errno::OPNOTSUPP || error == Errno::NOSYS => return Ok(()),
@@ -102,7 +102,10 @@ mod xattrs {
             let Ok(c_name) = CString::new(name) else {
                 return Err(NotKept(shown));
             };
-            let value = match read(|buffer| fgetxattr(source, c_name.as_c_str(), buffer)) {
+            let value = match read(
+                || fgetxattr_query(source, c_name.as_c_str()),
+                |buffer| fgetxattr(source, c_name.as_c_str(), buffer),
+            ) {
                 Ok(value) => value,
                 // Gone since the names were read.
                 Err(Errno::NODATA) => continue,
@@ -116,9 +119,9 @@ mod xattrs {
             };
             match written {
                 Ok(()) => {}
-                // On macOS the system keeps some attributes to itself (its file provenance, for one) and refuses to let a
-                // process set them: those stay behind, as the system gives the copy its own.
-                Err(Errno::PERM) if cfg!(any(target_os = "macos", target_os = "ios")) => {}
+                // On macOS the system keeps the provenance of a file to itself and refuses to let a process set it; it
+                // gives the copy its own. Only that one is let go of: a refused quarantine flag keeps the source.
+                Err(Errno::PERM) if is_system_set(name) => {}
                 Err(_) => return Err(NotKept(shown)),
             }
         }
@@ -126,19 +129,37 @@ mod xattrs {
         Ok(())
     }
 
-    /// The bytes a call that fills a buffer gives, the buffer grown until they fit.
-    fn read(mut call: impl FnMut(&mut [u8]) -> Result<usize, Errno>) -> Result<Vec<u8>, Errno> {
-        let mut buffer = vec![0; 4096];
-        loop {
-            match call(&mut buffer) {
-                Ok(length) => {
+    /// Whether the system sets the attribute `name` itself and refuses a process that tries (macOS).
+    fn is_system_set(name: &[u8]) -> bool {
+        cfg!(any(target_os = "macos", target_os = "ios")) && name == b"com.apple.provenance"
+    }
+
+    /// The whole of what `fill` reads, its size asked for first with `size`. A read that fills the buffer, which is one
+    /// byte larger than the size, may have been cut short (macOS reads a resource fork in part without saying so): the
+    /// size is asked for again. Larger than `MOST` is refused.
+    fn read(
+        mut size: impl FnMut() -> Result<usize, Errno>,
+        mut fill: impl FnMut(&mut [u8]) -> Result<usize, Errno>,
+    ) -> Result<Vec<u8>, Errno> {
+        for _ in 0..4 {
+            let wanted = size()?;
+            if wanted > MOST {
+                return Err(Errno::TOOBIG);
+            }
+
+            let mut buffer = vec![0; wanted + 1];
+            match fill(&mut buffer) {
+                Ok(length) if length < buffer.len() => {
                     buffer.truncate(length);
                     return Ok(buffer);
                 }
-                Err(Errno::RANGE) if buffer.len() < MOST => buffer.resize((buffer.len() * 4).min(MOST), 0),
+                // Grown since its size was read.
+                Ok(_) | Err(Errno::RANGE) => {}
                 Err(error) => return Err(error),
             }
         }
+
+        Err(Errno::AGAIN)
     }
 }
 

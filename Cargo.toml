@@ -11,7 +11,7 @@ repository = "https://github.com/MSpiechowicz/pairpane"
 rust-version = "1.98"
 
 [workspace.lints.rust]
-# Denied, not forbidden: the few modules that call into the system (`pairpane_core::ops::win_attrs`, the `ReplaceFileW`
+# Denied, not forbidden: the few modules that call into the system (`pairpane_core::ops::win_attrs`, the stream listing of `pairpane_core::ops::win_streams`, the `ReplaceFileW`
 # call of `pairpane_core::edit::win_replace` and the HEIC decoders of `pairpane_core::view::heic`) allow it, each with a reason and a `SAFETY` comment on every block.
 unsafe_code = "deny"
 
