@@ -155,6 +155,24 @@ fn engine_copy(engine: &Engine, events: &mpsc::Receiver<OpsEvent>, from: &Path, 
     }
 }
 
+/// Makes `dir` an empty folder. Removing what an earlier run wrote is tried a few times: on Windows a virus scanner or the
+/// indexer may still hold a file it was just written, and the removal fails until it lets go.
+fn fresh_folder(dir: &Path) {
+    let mut tries = 0;
+    while dir.exists() {
+        match fs::remove_dir_all(dir) {
+            Ok(()) => {}
+            Err(error) if tries < 10 => {
+                tries += 1;
+                eprintln!("removing {} failed ({error}); trying again", dir.display());
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            Err(error) => panic!("cannot remove {}: {error}", dir.display()),
+        }
+    }
+    fs::create_dir(dir).expect("target dir");
+}
+
 #[test]
 #[ignore = "a performance budget: run in release mode with --ignored (see the module docs)"]
 fn the_engine_copies_a_large_file_near_the_speed_of_a_plain_copy() {
@@ -181,22 +199,30 @@ fn the_engine_copies_a_large_file_near_the_speed_of_a_plain_copy() {
     let mut plain = Vec::new();
     let mut ours = Vec::new();
 
-    // The two take turns, so a runner that slows down mid-run slows both alike.
-    for _ in 0..RUNS {
+    // The two take turns, and which goes first alternates: a runner that slows down mid-run slows both alike, and the
+    // second copy, which may run while the first one's bytes are still written back, is each of them as often.
+    for run in 0..RUNS {
         for dir in [&plain_dir, &engine_dir] {
-            if dir.exists() {
-                fs::remove_dir_all(dir).expect("clean target");
-            }
-            fs::create_dir(dir).expect("target dir");
+            fresh_folder(dir);
         }
 
-        let start = Instant::now();
-        plain_copy(&source, &plain_dir.join("big.bin")).expect("plain copy");
-        plain.push(start.elapsed());
-
-        let start = Instant::now();
-        engine_copy(&engine, &events, &source_dir, "big.bin", &engine_dir);
-        ours.push(start.elapsed());
+        let mut time_plain = || {
+            let start = Instant::now();
+            plain_copy(&source, &plain_dir.join("big.bin")).expect("plain copy");
+            plain.push(start.elapsed());
+        };
+        let mut time_ours = || {
+            let start = Instant::now();
+            engine_copy(&engine, &events, &source_dir, "big.bin", &engine_dir);
+            ours.push(start.elapsed());
+        };
+        if run % 2 == 0 {
+            time_plain();
+            time_ours();
+        } else {
+            time_ours();
+            time_plain();
+        }
 
         assert_eq!(
             fs::metadata(engine_dir.join("big.bin")).expect("copied").len(),
