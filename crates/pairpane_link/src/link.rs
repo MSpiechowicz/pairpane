@@ -139,6 +139,9 @@ impl Link {
     pub fn begin_pairing(&self) -> Result<PairingOffer> {
         self.open()?;
         let runtime = tokio::runtime::Handle::try_current().map_err(|_| Error::NoRuntime)?;
+        // The timer's slot is held while the code is made, so two calls at once cannot leave the newer code with the
+        // older code's timer (which the newer timer would have replaced): codes and their timers change in one order.
+        let mut slot = lock(&self.expiry);
         let offer = self.ctx.host.begin()?;
 
         let host = Arc::clone(&self.ctx.host);
@@ -147,7 +150,9 @@ impl Link {
             tokio::time::sleep(due).await;
             host.check_expiry();
         });
-        self.replace_timer(Some(timer));
+        if let Some(old) = slot.replace(timer) {
+            old.abort();
+        }
 
         Ok(offer)
     }
@@ -327,10 +332,13 @@ impl Drop for Link {
         }
         self.replace_timer(None);
 
+        // As in `shutdown`: no change of the device list starts after this, and one being written finishes before the
+        // lock on the folder (a field, let go after this) is, so a second service on the folder never races a write.
+        let was_closed = self.ctx.closed.swap(true, Ordering::AcqRel);
+        drop(self.ctx.devices());
+
         // Closing waits for the peers, which Drop cannot do; it is left to the runtime if there is one.
-        if !self.ctx.closed.load(Ordering::Acquire)
-            && let Ok(runtime) = tokio::runtime::Handle::try_current()
-        {
+        if !was_closed && let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let endpoint = self.ctx.endpoint.clone();
             runtime.spawn(async move { endpoint.close().await });
         }

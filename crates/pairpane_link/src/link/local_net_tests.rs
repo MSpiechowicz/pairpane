@@ -69,13 +69,17 @@ fn a_peer_may_be_on_the_local_network_a_vpn_or_this_machine_and_nowhere_else() {
 }
 
 #[test]
-fn an_ipv6_source_is_counted_by_its_64_bit_prefix_and_an_ipv4_one_by_itself() {
-    assert_eq!(source_key(ip("fd00:1:2:3:aaaa:bbbb:cccc:dddd")), ip("fd00:1:2:3::"));
-    assert_eq!(source_key(ip("fd00:1:2:3::9")), source_key(ip("fd00:1:2:3:ffff::1")));
-    assert!(source_key(ip("fd00:1:2:3::9")) != source_key(ip("fd00:1:2:4::9")));
-
-    assert_eq!(source_key(ip("192.168.1.9")), ip("192.168.1.9"));
-    assert!(source_key(ip("192.168.1.9")) != source_key(ip("192.168.1.10")));
+fn every_source_address_is_counted_on_its_own() {
+    // The devices of one network share its /64, so none of them may use up the others' share.
+    for (one, other) in [
+        ("fe80::aaaa", "fe80::bbbb"),
+        ("fd00:1:2:3::9", "fd00:1:2:3::a"),
+        ("fd7a:115c:a1e0::1", "fd7a:115c:a1e0::2"),
+        ("192.168.1.9", "192.168.1.10"),
+    ] {
+        assert!(source_key(ip(one)) != source_key(ip(other)), "{one} {other}");
+    }
+    assert_eq!(source_key(ip("fe80::1:2:3:4")), ip("fe80::1:2:3:4"));
     // An IPv4 address that arrives on an IPv6 socket is the same source as on an IPv4 one.
     assert_eq!(source_key(ip("::ffff:192.168.1.9")), ip("192.168.1.9"));
 }

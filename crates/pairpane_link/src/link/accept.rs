@@ -4,8 +4,8 @@
 //!
 //! A connection is taken only from a source on the user's own networks (or this machine); any other is refused before
 //! anything is done for it. Before the handshake a connection from an address that has not proved it can receive packets
-//! is sent a retry, so a forged source address cannot start handshakes, and one source (an IPv4 address, or an IPv6 /64
-//! prefix) may have only a few connections at once.
+//! is sent a retry, so a forged source address cannot start handshakes, and one source address may have only a few
+//! connections at once.
 
 use std::net::SocketAddr;
 use std::sync::Arc;

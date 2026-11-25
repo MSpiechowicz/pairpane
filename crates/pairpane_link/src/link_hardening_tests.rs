@@ -359,23 +359,19 @@ async fn nothing_is_written_to_the_device_list_after_the_shutdown() {
 }
 
 #[tokio::test]
-async fn the_connections_of_a_source_are_counted_for_the_64_bit_prefix_of_an_ipv6_address() {
+async fn one_address_that_uses_up_its_share_does_not_keep_its_neighbours_out() {
     let node = Node::start("node").await;
     let ctx = &node.link.ctx;
-    let in_prefix = |last: u16| -> std::net::IpAddr { format!("fd00:1:2:3::{last:x}").parse().unwrap() };
+    let busy: std::net::IpAddr = "fe80::a".parse().unwrap();
 
-    let guards: Vec<_> = (1..=ctx::MAX_CONNECTIONS_PER_IP as u16)
-        .map(|last| ctx.admit(in_prefix(last)).unwrap())
+    let guards: Vec<_> = (0..ctx::MAX_CONNECTIONS_PER_IP)
+        .map(|_| ctx.admit(busy).unwrap())
         .collect();
 
-    assert!(
-        ctx.admit(in_prefix(0x99)).is_none(),
-        "another address of the same /64 is the same source"
-    );
-    assert!(
-        ctx.admit("fd00:1:2:4::1".parse().unwrap()).is_some(),
-        "another /64 is another source"
-    );
+    assert!(ctx.admit(busy).is_none(), "the address itself is at its cap");
+    for neighbour in ["fe80::b", "fd7a:115c:a1e0::2", "fd00:1:2:3::2"] {
+        assert!(ctx.admit(neighbour.parse().unwrap()).is_some(), "{neighbour}");
+    }
     drop(guards);
-    assert!(ctx.admit(in_prefix(0x99)).is_some());
+    assert!(ctx.admit(busy).is_some());
 }

@@ -21,8 +21,10 @@ pub const MAX_FAILURES: u8 = 3;
 
 /// Why a code is no longer active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PairingEndReason {
-    /// A device paired with it.
+    /// A device proved it, so it is used up. That device is paired unless saving it failed (a full list, a disk
+    /// error, a shutdown): only a [`crate::LinkEvent::Paired`] says a device was added.
     Used,
     /// Its time ran out.
     Expired,
@@ -34,6 +36,7 @@ pub enum PairingEndReason {
 
 /// A change of the active code, for whoever watches it (see [`PairingHost::observe`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Change {
     /// A code became active.
     Began,

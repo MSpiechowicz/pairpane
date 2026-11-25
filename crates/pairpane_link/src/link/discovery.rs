@@ -21,7 +21,7 @@ use n0_future::StreamExt;
 use tokio::sync::watch;
 
 use super::ctx::{Ctx, MAX_REMEMBERED, lock};
-use super::local_net::{is_local_network, is_local_peer};
+use super::local_net::is_local_network;
 use crate::devices::{MAX_ADDRS, validate_name};
 
 /// The mDNS service name of Pairpane devices.
@@ -156,10 +156,18 @@ pub(crate) fn record(ctx: &Ctx, event: DiscoveryEvent) {
             let name = endpoint_info
                 .user_data()
                 .and_then(|data| validate_name(data.as_ref()).ok());
+            // What mDNS says is unauthenticated, so only addresses of the user's networks are taken, never this machine
+            // (loopback): a spoofed announcement must not make this device dial its own services. A service bound to
+            // loopback only (the tests, one machine) can reach nothing else, so there loopback is what it takes.
+            let on_loopback = ctx
+                .endpoint
+                .bound_sockets()
+                .iter()
+                .all(|socket| socket.ip().is_loopback());
             let addrs = endpoint_info
                 .ip_addrs()
                 .copied()
-                .filter(|addr| is_local_peer(addr.ip()))
+                .filter(|addr| is_local_network(addr.ip()) || (on_loopback && addr.ip().is_loopback()))
                 .take(MAX_ADDRS)
                 .collect();
             found.insert(

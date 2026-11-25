@@ -104,11 +104,12 @@ fn an_attempt_that_is_dropped_counts_as_a_failure() {
 
 #[test]
 fn an_expired_code_is_refused() {
-    let host = PairingHost::new(Duration::from_millis(250));
+    // Long enough that a slow machine still starts the attempt in time, since only the wait after it has to be longer.
+    let host = PairingHost::new(Duration::from_secs(2));
     host.begin().unwrap();
     let running = host.start_attempt().unwrap();
 
-    sleep(Duration::from_millis(500));
+    sleep(Duration::from_millis(2500));
 
     assert_eq!(host.state(), PairingState::Idle);
     assert!(!running.succeed(), "an attempt that outlives the code does not pair");

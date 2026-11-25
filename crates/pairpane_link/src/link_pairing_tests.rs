@@ -108,11 +108,12 @@ async fn connections_that_send_nothing_do_not_keep_a_real_joiner_out() {
     for _ in 0..ctx::MAX_CONNECTIONS_PER_IP - 1 {
         idle.push(silent(&joiner, &host).await);
     }
+    // They are all still waiting when the real joiner comes (they are cut only after the first message's timeout).
+    assert!(idle.iter().all(|conn| conn.close_reason().is_none()));
 
     joiner.link.join(&offer.code, &host.target()).await.unwrap();
 
     assert_eq!(host.link.devices().unwrap().len(), 1);
-    assert!(idle.iter().all(|conn| conn.close_reason().is_none()));
 }
 
 #[tokio::test]
@@ -170,26 +171,9 @@ async fn the_device_is_announced_at_once_and_not_after_the_joiner_has_taken_the_
 
     let device = next_paired(&mut events).await;
     assert_eq!((device.node_id, device.name.as_str()), (joiner.id(), "joiner"));
-    assert!(by_hand.conn.close_reason().is_none());
-}
-
-#[tokio::test]
-async fn the_device_is_saved_even_when_the_joiner_does_not_take_the_hosts_name() {
-    let host = Node::start("host").await;
-    let joiner = Node::start("joiner").await;
-    let mut events = host.link.subscribe().unwrap();
-    let offer = host.link.begin_pairing().unwrap();
-
-    // A joiner that does the whole exchange and then tells the host to stop sending to it.
-    let mut by_hand = ByHand::start(&joiner, &host, &offer.code).await;
-    by_hand.prove().await;
-    by_hand.channel.stop_receiving();
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    by_hand.channel.send(b"joiner").await.unwrap();
-
-    let device = next_paired(&mut events).await;
-    assert_eq!((device.node_id, device.name.as_str()), (joiner.id(), "joiner"));
+    // Saved too, while the host's name has still not been taken: neither depends on that last message.
     assert_eq!(host.link.devices().unwrap(), vec![device]);
+    assert!(by_hand.conn.close_reason().is_none());
 }
 
 #[tokio::test]

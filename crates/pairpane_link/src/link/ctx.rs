@@ -19,7 +19,7 @@ use crate::pairing::{PairingEndReason, PairingHost};
 /// The most devices whose addresses are remembered in memory, and the most devices mDNS finds that are listed.
 pub const MAX_REMEMBERED: usize = 256;
 
-/// The most connections one source may have at once (an IPv4 address, or an IPv6 /64 prefix), of the
+/// The most connections one source may have at once (one address; see [`source_key`]), of the
 /// [`super::MAX_CONNECTIONS`] in all.
 pub const MAX_CONNECTIONS_PER_IP: usize = 4;
 
@@ -131,8 +131,8 @@ impl Ctx {
         self.devices().is_paired(node_id)
     }
 
-    /// Counts a connection from `ip`, or `None` when its source already has [`MAX_CONNECTIONS_PER_IP`]. The source of an
-    /// IPv6 address is its /64 prefix (see [`source_key`]).
+    /// Counts a connection from `ip`, or `None` when its source already has [`MAX_CONNECTIONS_PER_IP`]. A source is its
+    /// address (see [`source_key`]).
     pub fn admit(self: &Arc<Self>, ip: IpAddr) -> Option<IpGuard> {
         let ip = source_key(ip);
         let mut per_ip = lock(&self.per_ip);
@@ -193,13 +193,14 @@ impl Ctx {
         }
     }
 
-    /// [`Ctx::remember`] for the tasks of the runtime: a write of the file is done on a thread meant for blocking work,
-    /// which is not waited for. It is not done at all when the service has been shut down by then.
+    /// [`Ctx::remember`] for the tasks of the runtime, done whole on a thread meant for blocking work, which is not
+    /// waited for: deciding whether the device is paired takes the device list's lock, which a write of the file holds
+    /// while it waits for the disk, so not even that waits on a thread of the runtime. A write is not done at all when
+    /// the service has been shut down by then.
     pub fn remember_in_background(self: &Arc<Self>, node_id: EndpointId, addrs: impl IntoIterator<Item = SocketAddr>) {
-        if let Some(addrs) = self.place(node_id, addrs.into_iter().collect()) {
-            let ctx = Arc::clone(self);
-            drop(tokio::task::spawn_blocking(move || ctx.keep(&node_id, &addrs)));
-        }
+        let ctx = Arc::clone(self);
+        let addrs: Vec<SocketAddr> = addrs.into_iter().collect();
+        drop(tokio::task::spawn_blocking(move || ctx.remember(node_id, addrs)));
     }
 
     /// Notes the addresses of a device that is not paired in the table in memory. A paired device is decided under the

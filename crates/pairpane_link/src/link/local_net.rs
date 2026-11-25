@@ -2,7 +2,7 @@
 //! network, not taken from what mDNS reports, and not accepted as the source of a connection: this link is for devices
 //! that are near each other or on a VPN of the user's.
 
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
 
 /// Whether an address is on a network of the user's own: a private IPv4 range, the shared address space of Tailscale and
 /// carrier-grade NAT (100.64.0.0/10), link-local, or an IPv6 unique local (fc00::/7) or link-local (fe80::/10) address.
@@ -22,16 +22,13 @@ pub fn is_local_peer(ip: IpAddr) -> bool {
     is_local_network(ip) || ip.to_canonical().is_loopback()
 }
 
-/// What a source address is counted as when connections are limited per source: the address itself for IPv4, and for IPv6
-/// its /64 prefix, because one host usually owns a whole /64 and can change the rest of the address at will.
+/// What a source address is counted as when connections are limited per source: the address itself, with an IPv4
+/// address that came on an IPv6 socket read as IPv4. An IPv6 address is not counted by its /64 prefix: only addresses
+/// of the user's own networks are accepted (link-local, unique local, Tailscale's), and there one /64 is shared by every
+/// device of the network, so a prefix would let one of them use up the share of all the others. The cap on all
+/// connections together still bounds a source that has many addresses.
 pub fn source_key(ip: IpAddr) -> IpAddr {
-    match ip.to_canonical() {
-        IpAddr::V6(ip) => {
-            let [a, b, c, d, ..] = ip.segments();
-            IpAddr::V6(Ipv6Addr::new(a, b, c, d, 0, 0, 0, 0))
-        }
-        ip => ip,
-    }
+    ip.to_canonical()
 }
 
 #[cfg(test)]
