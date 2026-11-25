@@ -1,3 +1,10 @@
+## [0.33.2](https://github.com/MSpiechowicz/pairpane/compare/v0.33.1...v0.33.2) (2026-11-25)
+
+
+### Bug Fixes
+
+* **ops:** data-loss fixes from the audit of the local core (#78) ([c364c02](https://github.com/MSpiechowicz/pairpane/commit/c364c021f03c02cada973de0a67a966ac3e2eefa))
+
 ## [0.33.1](https://github.com/MSpiechowicz/pairpane/compare/v0.33.0...v0.33.1) (2026-11-25)
 
 
