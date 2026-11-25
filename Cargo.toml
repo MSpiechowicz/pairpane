@@ -1,7 +1,8 @@
-# Workspace root: the pairpane_core crate and the thin Tauri shell.
+# Workspace root: the pairpane_core crate, the pairpane_link crate (device pairing and direct connection) and the thin
+# Tauri shell.
 [workspace]
 resolver = "3"
-members = ["crates/pairpane_core", "src-tauri"]
+members = ["crates/pairpane_core", "crates/pairpane_link", "src-tauri"]
 
 [workspace.package]
 version = "0.33.7"
@@ -169,6 +170,23 @@ regex = "1.13.2"
 # client, no credentials, no revision machinery, no extras): `status` (index against HEAD and the work tree, with the
 # directory walk and the ignore rules) and `sha1` (object ids). MIT OR Apache-2.0.
 gix = { version = "0.91.0", default-features = false, features = ["status", "sha1"] }
+# Link (pairpane_link): encrypted direct connections between the user's own devices, no cloud. `iroh` is QUIC with TLS 1.3
+# and an Ed25519 key as the device identity. No default features (no metrics, no portmapper, no fast Apple datapath) and
+# only `tls-ring`; the endpoint is built from the empty preset with relays disabled and no DNS or pkarr address lookup,
+# so nothing leaves the user's own networks. `iroh-mdns-address-lookup` finds the devices on the local network (mDNS only).
+iroh = { version = "1.5.0", default-features = false, features = ["tls-ring"] }
+iroh-mdns-address-lookup = "0.6.1"
+# The `StreamExt` the mDNS discovery events (a `Stream`) are read with; the version iroh and its address lookups use.
+n0-future = "0.3.2"
+# The one-time pairing code (pairpane_link::pairing): SPAKE2 over the Ed25519 group, the stable 0.4 line (0.5 is a
+# pre-release). Its `getrandom` default feature draws the secret scalar from the system generator.
+spake2 = "0.4.0"
+# The device key in the OS keychain (pairpane_link::identity): Keychain Services, the Windows Credential Manager or the
+# Secret Service, through the default `v1` feature. Only the `Entry` of a secret is used.
+keyring = "4.2.0"
+# The async runtime iroh runs on: the link service, its accept loop and its timeouts (pairpane_link). `rt-multi-thread`
+# and `macros` are for the service and its tests, `time` for the timeouts and `sync` for the channels and locks.
+tokio = { version = "1.54.1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
 # Dev dependencies
 pretty_assertions = "1.4"
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
