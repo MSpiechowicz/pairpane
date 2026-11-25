@@ -9,6 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::conflict::Place;
+use super::extras;
 use super::fast::{self, Start};
 use super::identity::FileId;
 use super::meta;
@@ -147,7 +148,7 @@ impl Run<'_> {
         }
 
         let (temp, mut guard) = match &mut source {
-            Some(file) => self.copy_to_temp(file, &meta, to_dir)?,
+            Some(file) => self.copy_to_temp(file, &meta, (&node.path, to_dir))?,
             None => self.link_to_temp(node, to_dir)?,
         };
 
@@ -187,7 +188,12 @@ impl Run<'_> {
 
     /// Writes the copy of `source` to a new temporary file in `dir`, with its times and permissions, checked when
     /// the job asks for it. Returns the guard that removes the file unless it is committed.
-    fn copy_to_temp(&mut self, source: &mut File, meta: &Metadata, dir: &Path) -> Result<(PathBuf, Partial), Stop> {
+    fn copy_to_temp(
+        &mut self,
+        source: &mut File,
+        meta: &Metadata,
+        (source_path, dir): (&Path, &Path),
+    ) -> Result<(PathBuf, Partial), Stop> {
         let clone = !self.inner.hooks.buffered_only;
         let (temp, (mut copy, start)) = self.make_temp(dir, |temp| fast::create(source, temp, clone))?;
         let guard = Partial::new(temp.clone());
@@ -197,6 +203,21 @@ impl Run<'_> {
             Start::Empty => self.fill(source, &mut copy, meta.len())?,
         }
         self.checkpoint()?;
+
+        // What the file holds besides its bytes (see `extras`): a copy takes what the target can hold, a move keeps its
+        // source unless everything that should go with the file went. Before the permissions and times are given: a
+        // read-only copy takes no attribute (nor, on Windows, a stream), and writing a stream changes the file's time.
+        let control = &self.job.control;
+        let carried = extras::carry(
+            source,
+            &copy,
+            (source_path, &temp),
+            (self.inner.hooks.refuse_extras, &|| control.is_cancelled()),
+        );
+        self.checkpoint()?;
+        if let (Err(extras::NotKept(what)), true) = (carried, self.moving()) {
+            return Err(io::Error::other(format!("Kept the original: the target cannot hold its {what}")).into());
+        }
 
         self.finish_copy(source, &mut copy, meta)?;
 

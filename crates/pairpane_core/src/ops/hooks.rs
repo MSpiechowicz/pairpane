@@ -41,6 +41,8 @@ pub(super) struct Hooks {
     /// Called with the path of the source of a move once its copy is committed, before the source is removed: a test
     /// changes the source there.
     pub(super) before_removal: Option<PathHook>,
+    /// No extended attribute or alternate stream can be written on a copy, as on a disk that holds none.
+    pub(super) refuse_extras: bool,
     /// No clone and no kernel copy: the buffered loop moves every byte.
     pub(super) buffered_only: bool,
     /// Progress goes out after every chunk, not every 100 ms.

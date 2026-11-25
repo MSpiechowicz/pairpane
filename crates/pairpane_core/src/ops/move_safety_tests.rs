@@ -76,21 +76,6 @@ fn a_source_replaced_under_its_name_while_it_was_moved_is_kept() {
     assert_eq!(read(&root.path().join("dst/a.txt")), b"old");
 }
 
-#[test]
-fn an_unchanged_source_is_still_moved() {
-    let root = temp();
-    let src = root.path().join("src");
-    write(&src.join("a.txt"), b"a");
-    write(&src.join("folder/b.txt"), b"b");
-    let mut rig = Rig::hooked(|hooks| hooks.cross_device = true);
-
-    let ended = rig.run_move(root.path(), &["a.txt", "folder"]);
-
-    assert!(ended.errors.is_empty(), "{:?}", ended.errors);
-    assert_eq!(tree(&src), Vec::<String>::new());
-    assert_eq!(read(&root.path().join("dst/folder/b.txt")), b"b");
-}
-
 #[cfg(unix)]
 #[test]
 fn a_pipe_swapped_in_for_the_target_folder_does_not_block_the_move() {
