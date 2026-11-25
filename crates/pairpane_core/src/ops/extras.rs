@@ -10,8 +10,8 @@
 //!   Explorer does;
 //! - explicit Windows ACLs: the copy gets those of its new folder.
 //!
-//! A macOS ACL is not an extended attribute: it is carried on its own (`mac_acl`, #80), and a copy whose disk cannot
-//! hold the source's ACL is like one that cannot hold an attribute.
+//! A macOS ACL is not an extended attribute: it is carried on its own, after the copy's permissions and times (`mac_acl`,
+//! `copy::copy_to_temp`, #80), and a copy whose disk cannot hold the source's ACL is like one that cannot hold an attribute.
 
 use std::fs::File;
 use std::path::Path;
@@ -37,20 +37,7 @@ pub(super) fn carry(
     {
         let _ = (source_path, copy_path, stopped);
 
-        let attributes = xattrs::carry(source, copy, refuse);
-        #[cfg(target_os = "macos")]
-        {
-            let acl = if refuse {
-                Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
-            } else {
-                super::mac_acl::carry(source, copy)
-            };
-            if let (Ok(()), Err(error)) = (&attributes, acl) {
-                return Err(NotKept(format!("access control list ({error})")));
-            }
-        }
-
-        attributes
+        xattrs::carry(source, copy, refuse)
     }
     #[cfg(windows)]
     {

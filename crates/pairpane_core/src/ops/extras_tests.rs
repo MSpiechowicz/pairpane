@@ -163,7 +163,11 @@ fn a_move_across_disks_keeps_a_macos_acl() {
         .expect("chmod");
     assert!(given.success());
     assert!(acl_of(&src.join("a.txt")).contains("allow read"));
-    let mut rig = Rig::hooked(|hooks| hooks.cross_device = true);
+    // A new file, not a clone (which may bring the ACL by itself).
+    let mut rig = Rig::hooked(|hooks| {
+        hooks.cross_device = true;
+        hooks.buffered_only = true;
+    });
 
     let ended = rig.run_move(root.path(), &["a.txt"]);
 
