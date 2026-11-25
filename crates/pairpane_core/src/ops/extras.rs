@@ -8,7 +8,10 @@
 //!   the trusted ones need privileges) and the other `system.*` ones;
 //! - the Windows `Zone.Identifier` stream (where a file came from), dropped where the target holds no streams, as
 //!   Explorer does;
-//! - ACLs that are not extended attributes (macOS) and explicit Windows ACLs: the copy gets those of its new folder.
+//! - explicit Windows ACLs: the copy gets those of its new folder.
+//!
+//! A macOS ACL is not an extended attribute: it is carried on its own (`mac_acl`, #80), and a copy whose disk cannot
+//! hold the source's ACL is like one that cannot hold an attribute.
 
 use std::fs::File;
 use std::path::Path;
@@ -34,7 +37,20 @@ pub(super) fn carry(
     {
         let _ = (source_path, copy_path, stopped);
 
-        xattrs::carry(source, copy, refuse)
+        let attributes = xattrs::carry(source, copy, refuse);
+        #[cfg(target_os = "macos")]
+        {
+            let acl = if refuse {
+                Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+            } else {
+                super::mac_acl::carry(source, copy)
+            };
+            if let (Ok(()), Err(error)) = (&attributes, acl) {
+                return Err(NotKept(format!("access control list ({error})")));
+            }
+        }
+
+        attributes
     }
     #[cfg(windows)]
     {
