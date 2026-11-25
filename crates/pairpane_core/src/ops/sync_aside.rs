@@ -110,6 +110,23 @@ impl Run<'_> {
             clean && same_facts(Some(facts), Some(&plan.source)) && (before.old.is_none() || *id != before.old)
         });
 
+        // The job wrote the item and the file there is new, but it does not match the source the plan saw: the source
+        // changed while it was copied, or the target's disk keeps coarser times. The old file was replaced all the same,
+        // so it is kept for the undo instead of being let go of (data loss audit, #68).
+        let replaced_otherwise = now.as_ref().filter(|(_, id)| {
+            clean && copied.is_none() && plan.target.is_some() && before.old.is_some() && *id != before.old
+        });
+        if let (Some(&(facts, id)), Some(_)) = (replaced_otherwise, &before.aside) {
+            log.push(Done::Replaced {
+                root: root.to_owned(),
+                rel: rel.to_owned(),
+                id,
+                facts,
+                aside: before.aside,
+            });
+            return;
+        }
+
         match (copied, plan.target) {
             (Some(&(facts, id)), Some(_)) => log.push(Done::Replaced {
                 root: root.to_owned(),

@@ -47,15 +47,24 @@ pub(super) fn identity_of(node: &Node) -> Option<FolderId> {
 /// Makes the holding folder `name` in `top` (the target folder held open) and opens it; gives it with its identity.
 pub(super) fn make(top: &Held, name: &str) -> io::Result<(Held, Option<FolderId>)> {
     make_folder(top, name)?;
-    let node = top.look(name)?;
-    if node.kind != Kind::Dir {
-        return Err(refused());
+    // A folder that cannot be used (on a disk with no Unix permissions it is never private) is removed again while it is
+    // still empty, so each replaced file does not leave one more behind.
+    let made = (|| {
+        let node = top.look(name)?;
+        if node.kind != Kind::Dir {
+            return Err(refused());
+        }
+
+        let held = top.subfolder(&node)?;
+        check_private(&held)?;
+
+        Ok((held, identity_of(&node)))
+    })();
+    if made.is_err() {
+        let _ = unmake_folder(top, name);
     }
 
-    let held = top.subfolder(&node)?;
-    check_private(&held)?;
-
-    Ok((held, identity_of(&node)))
+    made
 }
 
 /// Opens `holding` from `top`, the target folder it is in held open: it must be the folder it was made as.
@@ -124,6 +133,19 @@ fn make_folder(top: &Held, name: &str) -> io::Result<()> {
 #[cfg(windows)]
 fn make_folder(top: &Held, name: &str) -> io::Result<()> {
     std::fs::create_dir(top.path.join(name))
+}
+
+/// Removes the folder `name` of `top` again, only while it is empty.
+#[cfg(unix)]
+fn unmake_folder(top: &Held, name: &str) -> io::Result<()> {
+    use rustix::fs::{AtFlags, unlinkat};
+
+    unlinkat(&top.dir, name, AtFlags::REMOVEDIR).map_err(io::Error::from)
+}
+
+#[cfg(windows)]
+fn unmake_folder(top: &Held, name: &str) -> io::Result<()> {
+    std::fs::remove_dir(top.path.join(name))
 }
 
 /// Fails unless the folder `held` is the job's user's, with no access for the group or others (Unix).

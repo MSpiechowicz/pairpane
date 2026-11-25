@@ -269,6 +269,9 @@ mod sync_remove_tests;
 mod sync_tests;
 #[cfg(test)]
 mod sync_undo_tests;
+
+#[cfg(test)]
+mod sync_aside_tests;
 #[cfg(test)]
 mod testing;
 #[cfg(test)]
