@@ -266,3 +266,27 @@ fn a_rename_cancelled_after_some_items_reports_exactly_those_in_its_last_progres
         "the last progress before the end counts the items done"
     );
 }
+
+#[test]
+fn an_item_aside_says_what_it_was_by_its_temporary_name() {
+    // Were the app to stop here (a crash, the power going off), the item would stay under this name: it holds the old
+    // name, so the item can still be told (#74).
+    let root = folder_with(&["a", "b"]);
+    let src = root.path().join("src");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let names = Arc::clone(&seen);
+    let mut rig = rig_with(move |_, path| {
+        let name = path.file_name().expect("a name").to_string_lossy().into_owned();
+        names.lock().expect("names").push(name);
+    });
+
+    swap_without_errors(&mut rig, &src);
+
+    let seen = seen.lock().expect("names").clone();
+    assert!(!seen.is_empty());
+    assert!(
+        seen.iter().all(|name| name.ends_with("-a") || name.ends_with("-b")),
+        "{seen:?}"
+    );
+    assert_eq!(contents(&src), (b"b".to_vec(), b"a".to_vec()));
+}

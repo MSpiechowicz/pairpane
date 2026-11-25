@@ -124,14 +124,27 @@ fn case_only(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
+/// The temporary name an item `original` is moved aside to while it is renamed: `{prefix}-{original}` when that fits in a
+/// name, so an item left there (the app stopped half way, the machine went off) still says what it was; else
+/// `{prefix}.tmp`. `prefix` starts with `.pairpane-rename-` and makes the name unique (#74).
+pub(super) fn aside_name(prefix: &str, original: &str) -> String {
+    let named = format!("{prefix}-{original}");
+    if super::name_fits(&named) {
+        named
+    } else {
+        format!("{prefix}.tmp")
+    }
+}
+
 /// Moves `from` to a free temporary name beside it, and returns that path. `NotFound` when `from` is gone.
 fn aside(from: &Path) -> io::Result<PathBuf> {
-    let Some(folder) = from.parent() else {
+    let (Some(folder), Some(original)) = (from.parent(), from.file_name()) else {
         return Err(refuse_name());
     };
+    let original = original.to_string_lossy();
 
     for number in 0..MAX_SIDE_NAMES {
-        let side = folder.join(format!(".pairpane-rename-{number}.tmp"));
+        let side = folder.join(aside_name(&format!(".pairpane-rename-{number}"), &original));
 
         match noreplace(from, &side) {
             Ok(()) => return Ok(side),
@@ -342,12 +355,24 @@ mod tests {
     fn a_temporary_name_that_is_taken_is_skipped_and_left_alone() {
         let temp = TempDir::new().expect("temp dir");
         write(&temp.path().join("a.txt"), "a");
-        write(&temp.path().join(".pairpane-rename-0.tmp"), "someone else's");
+        write(&temp.path().join(".pairpane-rename-0-a.txt"), "someone else's");
 
         case_only(&temp.path().join("a.txt"), &temp.path().join("A.TXT")).expect("renames");
 
-        assert_eq!(names(temp.path()), [".pairpane-rename-0.tmp", "A.TXT"]);
-        assert_eq!(read(&temp.path().join(".pairpane-rename-0.tmp")), "someone else's");
+        assert_eq!(names(temp.path()), [".pairpane-rename-0-a.txt", "A.TXT"]);
+        assert_eq!(read(&temp.path().join(".pairpane-rename-0-a.txt")), "someone else's");
+    }
+
+    #[test]
+    fn a_temporary_name_says_what_the_item_was_unless_that_is_too_long() {
+        use super::aside_name;
+
+        assert_eq!(
+            aside_name(".pairpane-rename-3", "report.pdf"),
+            ".pairpane-rename-3-report.pdf"
+        );
+        let long = "x".repeat(250);
+        assert_eq!(aside_name(".pairpane-rename-3", &long), ".pairpane-rename-3.tmp");
     }
 
     #[test]
