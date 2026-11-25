@@ -4,12 +4,14 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { WORKSPACE_PACKAGES } from './set-version';
+
 const repoRoot = resolve(import.meta.dir, '..');
 const script = join(repoRoot, 'scripts', 'set-version.ts');
 
 const TOML = `# Workspace root
 [workspace]
-members = ["crates/pairpane_core", "src-tauri"]
+members = ["crates/pairpane_core", "crates/pairpane_link", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"   # keep me
@@ -28,6 +30,10 @@ version = "0.1.0"
 dependencies = [
  "serde",
 ]
+
+[[package]]
+name = "pairpane_link"
+version = "0.1.0"
 
 [[package]]
 name = "pairpane_app"
@@ -56,20 +62,20 @@ function run(...args: string[]) {
 const read = (name: string) => readFileSync(join(dir, name), 'utf8');
 
 describe('set-version', () => {
-  test('updates only the workspace version and the two workspace lock entries', () => {
+  test('updates only the workspace version and the workspace crates\' lock entries', () => {
     const { code, out } = run('1.2.3');
     expect(code).toBe(0);
     expect(read('Cargo.toml')).toBe(TOML.replace('version = "0.1.0"   # keep me', 'version = "1.2.3"   # keep me'));
     const lock = read('Cargo.lock');
     expect(lock).toBe(
-      LOCK.replace('"pairpane_core"\nversion = "0.1.0"', '"pairpane_core"\nversion = "1.2.3"').replace(
-        '"pairpane_app"\nversion = "0.1.0"',
-        '"pairpane_app"\nversion = "1.2.3"',
-      ),
+      LOCK.replace('"pairpane_core"\nversion = "0.1.0"', '"pairpane_core"\nversion = "1.2.3"')
+        .replace('"pairpane_link"\nversion = "0.1.0"', '"pairpane_link"\nversion = "1.2.3"')
+        .replace('"pairpane_app"\nversion = "0.1.0"', '"pairpane_app"\nversion = "1.2.3"'),
     );
     expect(lock).toContain('name = "serde"\nversion = "0.1.0"');
     expect(out).toContain('Cargo.toml [workspace.package]: 0.1.0 -> 1.2.3');
     expect(out).toContain('Cargo.lock pairpane_core: 0.1.0 -> 1.2.3');
+    expect(out).toContain('Cargo.lock pairpane_link: 0.1.0 -> 1.2.3');
     expect(out).toContain('Cargo.lock pairpane_app: 0.1.0 -> 1.2.3');
   });
 
@@ -116,7 +122,20 @@ describe('set-version', () => {
       expect(after.length).toBe(before.length);
       const changed = after.filter((line, index) => line !== before[index]);
       expect(changed.every((line) => line === 'version = "9.8.7"')).toBe(true);
-      expect(changed.length).toBe(name === 'Cargo.toml' ? 1 : 2);
+      expect(changed.length).toBe(name === 'Cargo.toml' ? 1 : WORKSPACE_PACKAGES.length);
     }
+  });
+
+  test('bumps every crate of the real workspace, so the locked release build finds its lock file current', () => {
+    const toml = readFileSync(join(repoRoot, 'Cargo.toml'), 'utf8');
+    const members = JSON.parse(/^members = (\[.*\])$/m.exec(toml)?.[1] ?? '[]') as string[];
+    const names = members.map((member) => {
+      const manifest = readFileSync(join(repoRoot, member, 'Cargo.toml'), 'utf8');
+      expect(manifest).toContain('version.workspace = true');
+      return /^name = "([^"]+)"$/m.exec(manifest)?.[1];
+    });
+
+    expect(members.length).toBeGreaterThan(0);
+    expect([...names].sort()).toEqual([...WORKSPACE_PACKAGES].sort());
   });
 });

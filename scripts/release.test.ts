@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { apply, bumpFor, bumped, next, notesFor, parseCommit, REPO_URL } from './release';
+import { WORKSPACE_PACKAGES } from './set-version';
 
 describe('release scripts load no packages', () => {
   // The release job has no node_modules and runs Bun with --no-install: a package import would fail there, and
@@ -113,7 +114,7 @@ function scratchRepo(): string {
   writeFileSync(join(root, 'Cargo.toml'), '[workspace.package]\nversion = "0.2.0"\n');
   writeFileSync(
     join(root, 'Cargo.lock'),
-    '[[package]]\nname = "pairpane_app"\nversion = "0.2.0"\n\n[[package]]\nname = "pairpane_core"\nversion = "0.2.0"\n',
+    WORKSPACE_PACKAGES.map((name) => `[[package]]\nname = "${name}"\nversion = "0.2.0"\n`).join('\n'),
   );
   writeFileSync(join(root, 'CHANGELOG.md'), '# [0.2.0](old) (2026-11-20)\n');
 
@@ -164,7 +165,7 @@ describe('next and apply on a repository', () => {
 
     expect(readFileSync(join(root, 'package.json'), 'utf8')).toContain('  "version": "0.2.1",');
     expect(readFileSync(join(root, 'Cargo.toml'), 'utf8')).toContain('version = "0.2.1"');
-    expect(readFileSync(join(root, 'Cargo.lock'), 'utf8').match(/version = "0.2.1"/g)).toHaveLength(2);
+    expect(readFileSync(join(root, 'Cargo.lock'), 'utf8').match(/version = "0.2.1"/g)).toHaveLength(WORKSPACE_PACKAGES.length);
     expect(readFileSync(join(root, 'CHANGELOG.md'), 'utf8')).toStartWith('## [0.2.1]');
     expect(readFileSync(join(root, 'CHANGELOG.md'), 'utf8')).toContain('# [0.2.0](old)');
   });
