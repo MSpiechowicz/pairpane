@@ -153,18 +153,33 @@ pub fn is_hidden(_name: &str, metadata: Option<&Metadata>) -> bool {
 /// Whether hiding needs the metadata (Windows attributes) or only the name (Unix).
 pub const HIDDEN_NEEDS_METADATA: bool = cfg!(windows);
 
-/// The key names sort by: lowercased where sorting ignores case, else empty (the name itself is the key).
+/// The key names sort by: lowercased where sorting ignores case ([`folded_key`]), else empty (the name itself is the
+/// key).
 pub fn sort_key(name: &str) -> String {
     if CASE_INSENSITIVE {
-        name.to_lowercase()
+        folded_key(name)
     } else {
         String::new()
     }
 }
 
-/// Orders two names by their [`sort_key`]s, falling back to the exact name so the order is total and stable.
+/// The lowercase form of `name`, or empty when that is `name` itself: a name of ASCII with no capital letter, as most
+/// names are, needs no copy (a listing of a huge folder makes one key per name). [`compare`] reads an empty key as the
+/// name. A pure function, testable on every system.
+pub fn folded_key(name: &str) -> String {
+    if name.is_ascii() && !name.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        String::new()
+    } else {
+        name.to_lowercase()
+    }
+}
+
+/// Orders two names by their [`sort_key`]s (an empty key stands for the name itself), falling back to the exact name so
+/// the order is total and stable.
 pub fn compare(a_key: &str, a_name: &str, b_key: &str, b_name: &str) -> Ordering {
-    a_key.cmp(b_key).then_with(|| a_name.cmp(b_name))
+    let a = if a_key.is_empty() { a_name } else { a_key };
+    let b = if b_key.is_empty() { b_name } else { b_key };
+    a.cmp(b).then_with(|| a_name.cmp(b_name))
 }
 
 /// Bytes available to the user on the volume holding `path`; `None` when the platform cannot tell.
@@ -225,6 +240,23 @@ mod tests {
         let mut keyed: Vec<(String, &str)> = names.iter().map(|name| (sort_key(name), *name)).collect();
         keyed.sort_by(|(a_key, a), (b_key, b)| compare(a_key, a, b_key, b));
         keyed.into_iter().map(|(_, name)| name.to_owned()).collect()
+    }
+
+    #[test]
+    fn a_folded_key_orders_like_the_lowercase_name() {
+        let names = [
+            "b", "B", "a", "A", "Zeta", "alpha", "ALPHA", "Ärger", "ärger", "Ölig", "z", "\u{1C5}x", "\u{1C6}x", "a1",
+            "a_", "A_", "café", "CAFÉ", "Straße", "STRASSE",
+        ];
+        let mut ours: Vec<(String, &str)> = names.iter().map(|name| (folded_key(name), *name)).collect();
+        ours.sort_by(|(a_key, a), (b_key, b)| compare(a_key, a, b_key, b));
+        let mut lowered: Vec<(String, &str)> = names.iter().map(|name| (name.to_lowercase(), *name)).collect();
+        lowered.sort();
+
+        let ours: Vec<&str> = ours.into_iter().map(|(_, name)| name).collect();
+        let lowered: Vec<&str> = lowered.into_iter().map(|(_, name)| name).collect();
+        assert_eq!(ours, lowered);
+        assert_eq!(folded_key("plain-name.txt"), "", "no copy for a lowercase ASCII name");
     }
 
     #[test]
