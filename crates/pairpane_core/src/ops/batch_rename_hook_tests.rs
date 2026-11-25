@@ -157,14 +157,18 @@ fn an_item_whose_step_fails_leaves_those_that_wait_for_its_name_where_they_were(
 fn a_temporary_name_that_is_taken_is_skipped_and_left_alone() {
     let root = folder_with(&["a", "b"]);
     let src = root.path().join("src");
-    // The first name the job (the first of this engine) would try.
-    let taken = format!(".pairpane-rename-{}-1-1.tmp", run_token());
-    put(root.path(), &format!("src/{taken}"), b"someone else's");
+    // The first name the job (the first of this engine) would try, for whichever item goes aside first.
+    let taken = ["a", "b"].map(|name| format!(".pairpane-rename-{}-1-1-{name}", run_token()));
+    for name in &taken {
+        put(root.path(), &format!("src/{name}"), b"someone else's");
+    }
     let mut rig = Rig::new();
 
     swap_without_errors(&mut rig, &src);
-    assert_eq!(temporary_names(&src), std::slice::from_ref(&taken));
-    assert_eq!(read(&src.join(&taken)), b"someone else's");
+    assert_eq!(temporary_names(&src), taken);
+    for name in &taken {
+        assert_eq!(read(&src.join(name)), b"someone else's");
+    }
     assert_eq!(contents(&src), (b"b".to_vec(), b"a".to_vec()));
 }
 
