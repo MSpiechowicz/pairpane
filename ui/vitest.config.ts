@@ -5,6 +5,7 @@ import { svelteTesting } from '@testing-library/svelte/vite';
 import { defineConfig } from 'vitest/config';
 
 import { appVersion } from './app-version.ts';
+import { BudgetReporter } from './budget-reporter.ts';
 
 // Tests run from the repository root so globs and CI `--shard` stay stable.
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -22,5 +23,7 @@ export default defineConfig({
     environmentOptions: { happyDOM: { settings: { device: { prefersReducedMotion: 'reduce' } } } },
     setupFiles: [fileURLToPath(new URL('./tests/setup.ts', import.meta.url))],
     include: ['ui/src/**/*.test.ts', 'ui/tests/**/*.test.ts'],
+    // The performance budgets (docs/performance-budgets.md) report what they measured next to the usual output.
+    reporters: ['default', new BudgetReporter()],
   },
 });
