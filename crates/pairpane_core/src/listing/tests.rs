@@ -394,3 +394,25 @@ fn a_folder_that_never_pauses_is_still_reported() {
         DEBOUNCE / 3
     );
 }
+
+#[test]
+fn a_folder_larger_than_the_first_batch_is_in_order_across_the_batches() {
+    // Folders and files on both sides of the first batch's end, created out of order, so picking out the first screen
+    // and sorting the rest later must still give one order: folders first, then names.
+    let dir_names: Vec<String> = (0..FIRST_BATCH + 50)
+        .rev()
+        .map(|index| format!("d{index:04}"))
+        .collect();
+    let file_names: Vec<String> = (0..FIRST_BATCH * 2).rev().map(|index| format!("a{index:04}")).collect();
+    let dirs: Vec<&str> = dir_names.iter().map(String::as_str).collect();
+    let files: Vec<&str> = file_names.iter().map(String::as_str).collect();
+    let temp = folder(&files, &dirs);
+
+    let mut expected = dir_names.clone();
+    expected.sort();
+    let mut sorted_files = file_names.clone();
+    sorted_files.sort();
+    expected.extend(sorted_files);
+
+    assert_eq!(names(&events(temp.path(), false)), expected);
+}
