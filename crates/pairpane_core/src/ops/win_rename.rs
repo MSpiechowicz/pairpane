@@ -18,6 +18,10 @@ pub(super) fn verbatim(path: &str) -> Option<String> {
     }
 
     let path = path.replace('/', "\\");
+    // The `\\?\` form takes `.` and `..` as names, not as steps: such a path is not given in it.
+    if path.split('\\').any(|part| part == "." || part == "..") {
+        return None;
+    }
     let bytes = path.as_bytes();
     if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\' {
         return Some(format!(r"\\?\{path}"));
@@ -64,8 +68,14 @@ mod imp {
     }
 
     fn call(from: &OsStr, to: &OsStr) -> io::Result<()> {
-        let from: Vec<u16> = from.encode_wide().chain(Some(0)).collect();
-        let to: Vec<u16> = to.encode_wide().chain(Some(0)).collect();
+        let from: Vec<u16> = from.encode_wide().collect();
+        let to: Vec<u16> = to.encode_wide().collect();
+        // A NUL inside a path would end it early, naming another item.
+        if from.contains(&0) || to.contains(&0) {
+            return Err(io::Error::from(io::ErrorKind::InvalidInput));
+        }
+        let from: Vec<u16> = from.into_iter().chain(Some(0)).collect();
+        let to: Vec<u16> = to.into_iter().chain(Some(0)).collect();
 
         // SAFETY: both are NUL-terminated UTF-16 paths that outlive the call; flags 0 asks for a plain move that
         // replaces nothing and copies nothing.
@@ -93,5 +103,7 @@ mod tests {
         assert_eq!(verbatim(r"data\a.txt"), None);
         assert_eq!(verbatim(r"\\.\pipe\x"), None);
         assert_eq!(verbatim(r"C:data"), None);
+        assert_eq!(verbatim(r"C:\data\..\other"), None);
+        assert_eq!(verbatim(r"C:\data\.\a"), None);
     }
 }

@@ -75,7 +75,8 @@ fn system_noreplace(from: &Path, to: &Path) -> io::Result<()> {
 fn refused_flag(error: &io::Error) -> bool {
     use rustix::io::Errno;
 
-    [Errno::INVAL, Errno::NOSYS, Errno::OPNOTSUPP]
+    // macOS answers ENOTSUP for a filesystem without `EXCL` (on Linux it is the same number as EOPNOTSUPP).
+    [Errno::INVAL, Errno::NOSYS, Errno::OPNOTSUPP, Errno::NOTSUP]
         .into_iter()
         .any(|errno| error.raw_os_error() == Some(errno.raw_os_error()))
 }

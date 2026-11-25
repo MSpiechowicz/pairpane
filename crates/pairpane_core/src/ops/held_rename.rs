@@ -3,10 +3,10 @@
 //! other Windows jobs go.
 //!
 //! Races that remain, as in the other jobs of this crate: where the filesystem cannot refuse a replacing rename itself, a
-//! file is linked to its new name and its old name removed (the link fails when the name is taken), but a folder, a link
-//! and a file on a filesystem without hard links are checked for and then renamed, two steps that someone who can write to
-//! the folder in between can win; and on Windows the folder is a path, so a folder swapped for a link between two renames
-//! is followed.
+//! file is linked to its new name (which fails when the name is taken) and its old name removed while it is still that
+//! file, so another file put at the old name in between is kept; a folder, a link and a file on a filesystem without hard
+//! links are checked for and then renamed, two steps that someone who can write to the folder in between can win; and on
+//! Windows the folder is a path, so a folder swapped for a link between two renames is followed.
 
 use std::io;
 
@@ -18,8 +18,8 @@ impl Held {
     /// and nothing changes. Both are plain names.
     ///
     /// Linux and macOS ask the system to refuse (`renameat2` `NOREPLACE`, `renameatx_np` `EXCL`), so nothing can appear
-    /// at `to` between the check and the rename. Where the filesystem lacks that flag, and on the other systems, it is
-    /// check-then-rename: someone who can write to the folder at that very moment can still win the race.
+    /// at `to` between the check and the rename. Where the filesystem lacks that flag, and on the other systems, see
+    /// [`link_or_check`].
     pub(super) fn rename_noreplace(&self, from: &str, to: &str) -> io::Result<()> {
         system_noreplace(&self.dir, from, to)
     }
@@ -65,10 +65,37 @@ pub(super) fn link_or_check<D: rustix::fd::AsFd + Copy, P: rustix::path::Arg + C
     use rustix::fs::{AtFlags, FileType, linkat, renameat, statat, unlinkat};
     use rustix::io::Errno;
 
+    let id = |name: P| statat(dir, name, AtFlags::SYMLINK_NOFOLLOW).map(|stat| (stat.st_dev, stat.st_ino));
     let kind = statat(dir, from, AtFlags::SYMLINK_NOFOLLOW).map(|stat| FileType::from_raw_mode(stat.st_mode))?;
     if kind == FileType::RegularFile {
         match linkat(dir, from, dir, to, AtFlags::empty()) {
-            Ok(()) => return unlinkat(dir, from, AtFlags::empty()).map_err(io::Error::from),
+            Ok(()) => {
+                #[cfg(test)]
+                BETWEEN.with(|hook| {
+                    if let Some(hook) = hook.borrow_mut().take() {
+                        hook();
+                    }
+                });
+                // The old name goes only while it is still the file now at the new one: a file another program put there
+                // since (a save that renames a new file over it) is kept, and so are both names.
+                let linked = id(to);
+                if linked.is_err() || id(from).ok() != linked.as_ref().ok().copied() {
+                    return Err(io::Error::other(
+                        "the item changed while it was being renamed; it is under both names",
+                    ));
+                }
+
+                return match unlinkat(dir, from, AtFlags::empty()) {
+                    Ok(()) => Ok(()),
+                    Err(errno) => {
+                        // The new name is taken back while it is still that file, so the item is as it was.
+                        if id(to).ok() == linked.ok() {
+                            let _ = unlinkat(dir, to, AtFlags::empty());
+                        }
+                        Err(io::Error::from(errno))
+                    }
+                };
+            }
             Err(Errno::EXIST) => return Err(io::Error::from(io::ErrorKind::AlreadyExists)),
             // No hard links here (FAT, exFAT, some network filesystems): the two steps below.
             Err(_) => {}
@@ -80,6 +107,12 @@ pub(super) fn link_or_check<D: rustix::fd::AsFd + Copy, P: rustix::path::Arg + C
         Err(Errno::NOENT) => renameat(dir, from, dir, to).map_err(io::Error::from),
         Err(errno) => Err(io::Error::from(errno)),
     }
+}
+
+#[cfg(all(test, unix))]
+thread_local! {
+    /// Run once between the link and the removal of the old name, on this thread: a test changes the folder there.
+    static BETWEEN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(all(test, unix))]
@@ -103,6 +136,27 @@ mod tests {
         link_or_check(&dir, "a", "b").expect("moves");
         assert!(!temp.path().join("a").exists());
         assert_eq!(fs::read(temp.path().join("b")).expect("b"), b"a");
+    }
+
+    #[test]
+    fn a_file_saved_at_the_old_name_in_between_is_kept() {
+        // Another program renames a new file over the old name between the link and its removal (#77).
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let dir = fs::File::open(temp.path()).expect("folder");
+        fs::write(temp.path().join("a"), b"old").expect("a");
+        let folder = temp.path().to_owned();
+        super::BETWEEN.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                fs::write(folder.join("saved"), b"saved meanwhile").expect("saved");
+                fs::rename(folder.join("saved"), folder.join("a")).expect("over the old name");
+            }));
+        });
+
+        let error = link_or_check(&dir, "a", "b").expect_err("changed");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_eq!(fs::read(temp.path().join("a")).expect("a"), b"saved meanwhile");
+        assert_eq!(fs::read(temp.path().join("b")).expect("b"), b"old");
     }
 
     #[test]
