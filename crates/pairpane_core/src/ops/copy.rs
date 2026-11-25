@@ -162,7 +162,7 @@ impl Run<'_> {
             if let Some(hook) = &self.inner.hooks.before_removal {
                 hook(&node.path);
             }
-            flush_folder(to_dir)?;
+            flush_folder(to_dir);
             self.remove_source(node, place.path(), source.as_ref().map(|file| (file, &meta)))?;
         }
 
@@ -207,7 +207,7 @@ impl Run<'_> {
             if self.inner.hooks.fail_flush {
                 return Err(io::Error::other("the disk failed to keep the copy (a test asked for it)").into());
             }
-            copy.sync_all()?;
+            flush(copy.sync_all())?;
         }
 
         Ok((temp, guard))
@@ -321,19 +321,55 @@ fn unchanged_since_read(file: &File, meta: &Metadata, path: &Path) -> io::Result
     }
 }
 
-/// Makes the entries of `folder` (the commit of a copy into it) last on the disk before a move removes the source. Only
-/// on Unix, where a folder can be opened and flushed; on Windows the flush of the file is what the system offers.
-fn flush_folder(folder: &Path) -> io::Result<()> {
+/// The result of a flush, where a disk that cannot flush at all (some network shares, FAT on macOS, which refuse the full
+/// flush) is no failure: its writes reported their errors already. A flush that fails for any other reason fails.
+fn flush(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        Err(error) if cannot_flush(&error) => Ok(()),
+        other => other,
+    }
+}
+
+fn cannot_flush(error: &io::Error) -> bool {
     #[cfg(unix)]
     {
-        File::open(folder)?.sync_all()
+        let raw = error.raw_os_error();
+        error.kind() == io::ErrorKind::Unsupported
+            || [libc_errno::EINVAL, libc_errno::ENOTSUP, libc_errno::ENOSYS].contains(&raw.unwrap_or(0))
     }
     #[cfg(not(unix))]
     {
-        let _ = folder;
-
-        Ok(())
+        error.kind() == io::ErrorKind::Unsupported
     }
+}
+
+#[cfg(unix)]
+mod libc_errno {
+    pub(super) const EINVAL: i32 = rustix::io::Errno::INVAL.raw_os_error();
+    pub(super) const ENOTSUP: i32 = rustix::io::Errno::NOTSUP.raw_os_error();
+    pub(super) const ENOSYS: i32 = rustix::io::Errno::NOSYS.raw_os_error();
+}
+
+/// Makes the entries of `folder` (the commit of a copy into it) last on the disk before a move removes the source. Only
+/// on Unix, where a folder can be opened and flushed; on Windows the flush of the file is what the system offers. Done
+/// as well as it can be: a folder that cannot be opened for it (no read permission, as in a drop box) or a disk that
+/// cannot flush a folder does not fail a copy that is already committed and flushed itself.
+fn flush_folder(folder: &Path) {
+    // Opened as a folder only: anything else swapped in at its path (a pipe would block the open) is not opened.
+    #[cfg(unix)]
+    {
+        use rustix::fs::{Mode, OFlags, fsync, open};
+
+        if let Ok(opened) = open(
+            folder,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            let _ = fsync(&opened);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = folder;
 }
 
 impl Run<'_> {

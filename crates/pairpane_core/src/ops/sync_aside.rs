@@ -110,11 +110,19 @@ impl Run<'_> {
             clean && same_facts(Some(facts), Some(&plan.source)) && (before.old.is_none() || *id != before.old)
         });
 
-        // The job wrote the item and the file there is new, but it does not match the source the plan saw: the source
-        // changed while it was copied, or the target's disk keeps coarser times. The old file was replaced all the same,
-        // so it is kept for the undo instead of being let go of (data loss audit, #68).
-        let replaced_otherwise = now.as_ref().filter(|(_, id)| {
-            clean && copied.is_none() && plan.target.is_some() && before.old.is_some() && *id != before.old
+        // The job wrote the item and the file there is new, but it does not quite match the source the plan saw: the
+        // source grew while it was copied (the copy still has its time), or the target's disk keeps coarser times (the
+        // copy still has its size). The old file was replaced all the same, so it is kept for the undo instead of being
+        // let go of (data loss audit, #68). A file that matches the source in neither is not taken for the job's copy:
+        // an undo would put the old file back over it.
+        let replaced_otherwise = now.as_ref().filter(|(facts, id)| {
+            clean
+                && copied.is_none()
+                && plan.target.is_some()
+                && before.old.is_some()
+                && *id != before.old
+                && facts.kind == plan.source.kind
+                && (facts.size == plan.source.size || facts.modified == plan.source.modified)
         });
         if let (Some(&(facts, id)), Some(_)) = (replaced_otherwise, &before.aside) {
             log.push(Done::Replaced {
