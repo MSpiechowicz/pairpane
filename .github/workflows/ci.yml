@@ -43,6 +43,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --all --check
       - run: cargo clippy -p pairpane_core --all-targets -- -D warnings
+      # The device link (pairing, the encrypted connection), its own crate so its network stack stays out of the core.
+      - run: cargo clippy -p pairpane_link --all-targets -- -D warnings
 
   rust-test:
     name: Rust tests (${{ matrix.os }})
@@ -74,6 +76,8 @@ jobs:
           fi
           echo "PAIRPANE_REQUIRE_HEIC_DECODER=1" >> "$GITHUB_ENV"
       - run: cargo test -p pairpane_core
+      # Pairs two endpoints on localhost; never the OS keychain, never the internet.
+      - run: cargo test -p pairpane_link
       # The tests regenerate the TypeScript bindings; stale or untracked output means the commit is missing them.
       - name: Generated TypeScript bindings are committed
         if: runner.os == 'Linux'
