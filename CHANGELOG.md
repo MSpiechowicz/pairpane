@@ -1,3 +1,10 @@
+## [0.34.1](https://github.com/MSpiechowicz/pairpane/compare/v0.34.0...v0.34.1) (2026-11-25)
+
+
+### Bug Fixes
+
+* **release:** bump every workspace crate in Cargo.lock (#87) ([c152d4b](https://github.com/MSpiechowicz/pairpane/commit/c152d4b98c6bfa7b3a0bbd4b3d66adbbb1ef28ef))
+
 # [0.34.0](https://github.com/MSpiechowicz/pairpane/compare/v0.33.7...v0.34.0) (2026-11-25)
 
 
