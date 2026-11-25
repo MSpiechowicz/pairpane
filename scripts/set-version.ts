@@ -3,13 +3,16 @@
 //   bun scripts/set-version.ts <semver> [--root <dir>]
 //
 // scripts/release.ts bumps package.json and calls this to keep Cargo.toml ([workspace.package] version) and the
-// two workspace entries in Cargo.lock in step.
+// workspace crates' entries in Cargo.lock in step.
 // Edits are line-precise so every other byte of both files is preserved, and cargo is never run.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-/** Workspace crates whose Cargo.lock entry carries the release version. */
-export const WORKSPACE_PACKAGES = ['pairpane_core', 'pairpane_app'] as const;
+/**
+ * Workspace crates whose Cargo.lock entry carries the release version: every member of the workspace (a test checks this
+ * list against Cargo.toml, so a new crate cannot be left out and fail the release's locked build).
+ */
+export const WORKSPACE_PACKAGES = ['pairpane_core', 'pairpane_link', 'pairpane_app'] as const;
 
 // Official semver.org regular expression (strict: no leading "v", no leading zeros).
 const SEMVER =
