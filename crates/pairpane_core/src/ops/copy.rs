@@ -162,7 +162,7 @@ impl Run<'_> {
             if let Some(hook) = &self.inner.hooks.before_removal {
                 hook(&node.path);
             }
-            flush_folder(to_dir);
+            flush_folder(to_dir)?;
             self.remove_source(node, place.path(), source.as_ref().map(|file| (file, &meta)))?;
         }
 
@@ -351,10 +351,10 @@ mod libc_errno {
 }
 
 /// Makes the entries of `folder` (the commit of a copy into it) last on the disk before a move removes the source. Only
-/// on Unix, where a folder can be opened and flushed; on Windows the flush of the file is what the system offers. Done
-/// as well as it can be: a folder that cannot be opened for it (no read permission, as in a drop box) or a disk that
-/// cannot flush a folder does not fail a copy that is already committed and flushed itself.
-fn flush_folder(folder: &Path) {
+/// on Unix, where a folder can be opened and flushed; on Windows the flush of the file is what the system offers. A
+/// folder that cannot be opened for it (no read permission, as in a drop box) or a disk that cannot flush a folder does
+/// not fail a copy that is committed and flushed itself; a flush that fails otherwise does, and keeps the source.
+fn flush_folder(folder: &Path) -> io::Result<()> {
     // Opened as a folder only: anything else swapped in at its path (a pipe would block the open) is not opened.
     #[cfg(unix)]
     {
@@ -365,11 +365,13 @@ fn flush_folder(folder: &Path) {
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
             Mode::empty(),
         ) {
-            let _ = fsync(&opened);
+            flush(fsync(&opened).map_err(io::Error::from))?;
         }
     }
     #[cfg(not(unix))]
     let _ = folder;
+
+    Ok(())
 }
 
 impl Run<'_> {

@@ -90,3 +90,28 @@ fn an_unchanged_source_is_still_moved() {
     assert_eq!(tree(&src), Vec::<String>::new());
     assert_eq!(read(&root.path().join("dst/folder/b.txt")), b"b");
 }
+
+#[cfg(unix)]
+#[test]
+fn a_pipe_swapped_in_for_the_target_folder_does_not_block_the_move() {
+    use std::process::Command;
+
+    let root = temp();
+    let src = root.path().join("src");
+    write(&src.join("a.txt"), b"a");
+    let mut rig = Rig::hooked(|hooks| {
+        hooks.cross_device = true;
+        hooks.before_removal = Some(Arc::new(|source| {
+            let dst = source.parent().and_then(|src| src.parent()).expect("root").join("dst");
+            fs::rename(&dst, dst.with_file_name("dst-moved")).expect("move the folder away");
+            let made = Command::new("mkfifo").arg(&dst).status().expect("mkfifo");
+            assert!(made.success());
+        }));
+    });
+
+    // Opening the pipe as a folder would wait for a writer for good; the rig gives up on a job that does not end.
+    let ended = rig.run_move(root.path(), &["a.txt"]);
+
+    assert_eq!(ended.errors.len(), 1, "{:?}", ended.errors);
+    assert_eq!(read(&src.join("a.txt")), b"a");
+}
