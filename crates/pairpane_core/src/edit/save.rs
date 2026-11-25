@@ -9,7 +9,7 @@ use crate::model::{EditSaveOptions, EditSaved};
 use crate::ops::{Partial, create_new, run_token};
 use crate::view::{Refusals, open_regular, refusal};
 
-use super::{disk, text};
+use super::{MAX_SAVE_TEXT, disk, text};
 
 /// The words a save refuses a name that is not a regular file in.
 const SAVER: Refusals = Refusals {
@@ -117,9 +117,18 @@ fn replace(folder: &Path, target: &Path, bytes: &[u8], seen: &Metadata, checked:
 /// Writes `bytes` into the file itself (see [`write_into`]), with the old content kept beside the file until the new one is on the disk (#76): a copy is made first
 /// (`.pairpane-edit-…-` and the file's name, so one left by a crash or a power cut says whose it is) and flushed; a write
 /// that fails puts the old content back and removes the copy, and the copy is removed once the new content is flushed.
-/// Where no file can be made beside it (a folder the user cannot write to) the file is written without a copy, as before;
-/// a copy that cannot be made for another reason (a full disk) refuses the save before the file is touched.
+/// Where no file can be made beside it (a folder the user cannot write to), or the file on the disk is larger than any
+/// text the editor saves (it grew since it was opened and the save was forced), the file is written without a copy, as
+/// before; a copy that cannot be made for another reason (a full disk) refuses the save before the file is touched.
 fn in_place_kept(folder: &Path, target: &Path, bytes: &[u8], (seen, checked): (&Metadata, &File)) -> io::Result<()> {
+    // A file that is not the one seen any more is left alone, before anything is read or copied.
+    let mut file = open_checked(target, seen)?;
+
+    let fits = usize::try_from(seen.len()).is_ok_and(|len| len <= MAX_SAVE_TEXT);
+    if !fits {
+        return write_into(&mut file, bytes);
+    }
+
     let old = read_whole(checked, seen)?;
     let name = target
         .file_name()
@@ -134,17 +143,6 @@ fn in_place_kept(folder: &Path, target: &Path, bytes: &[u8], (seen, checked): (&
                 error.kind(),
                 format!("the old content could not be kept while saving, so nothing was written: {error}"),
             ));
-        }
-    };
-
-    // A file that is not the one seen any more is left alone, and so is the copy of the one that was.
-    let mut file = match open_checked(target, seen) {
-        Ok(file) => file,
-        Err(error) => {
-            if let Some(kept) = kept {
-                let _ = fs::remove_file(&kept);
-            }
-            return Err(error);
         }
     };
 
