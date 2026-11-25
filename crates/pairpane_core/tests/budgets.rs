@@ -23,11 +23,13 @@ mod huge_folder;
 
 use huge_folder::{ENTRIES, huge_folder};
 
-/// The longest the first batch of that folder may take: what the pane draws first.
-const FIRST_BATCH_BUDGET: Duration = Duration::from_millis(100);
-/// Whether a missed first-batch budget fails the test. On macOS it is reported only, until #70 makes the first batch
-/// fast enough there (the first CI run measured 111 ms; Linux and Windows 83 ms).
-const FIRST_BATCH_ENFORCED: bool = !cfg!(target_os = "macos");
+/// The aim for the first batch of that folder, what the pane draws first. Reported, not enforced: on shared CI runners the
+/// same folder took 54 to 111 ms from run to run, so an absolute limit fails on the runner's load, not on the code.
+const FIRST_BATCH_AIM: Duration = Duration::from_millis(100);
+/// What is enforced instead: the first batch may take at most this many times a bare `read_dir` of the same folder, run in
+/// turns with it (about 2× on Linux when this was set). The first batch has to read every name (the listing is sorted),
+/// so a bare read is its floor, and the share above it is the listing's own work, which a slow runner does not change.
+const FIRST_BATCH_OVER_READ: f64 = 3.0;
 /// Size of the file the copy budget copies: well beyond any cache line, short enough for a CI disk.
 const COPY_BYTES: usize = 256 * 1024 * 1024;
 /// The engine's copy must run at this share of a plain buffered copy on the same disk, or better.
@@ -81,28 +83,56 @@ fn time_listing(folder: &Path) -> (Duration, Duration) {
     (first.expect("a batch came"), start.elapsed())
 }
 
+/// The time of a bare read of the folder: every name and its kind, the least any listing of it does.
+fn time_bare_read(folder: &Path) -> Duration {
+    let start = Instant::now();
+    let names: Vec<_> = fs::read_dir(folder)
+        .expect("readable")
+        .map(|entry| {
+            let entry = entry.expect("entry");
+            (entry.file_name(), entry.file_type().expect("kind").is_dir())
+        })
+        .collect();
+    assert_eq!(names.len(), ENTRIES);
+    start.elapsed()
+}
+
 #[test]
 #[ignore = "a performance budget: run in release mode with --ignored (see the module docs)"]
 fn a_folder_of_100k_entries_shows_its_first_batch_within_budget() {
     let folder = huge_folder();
     // A first read fills the system's caches, as the folder a user opens again would have them.
     time_listing(folder.path());
+    time_bare_read(folder.path());
 
-    let (firsts, wholes): (Vec<_>, Vec<_>) = (0..RUNS).map(|_| time_listing(folder.path())).unzip();
-    let first = median(firsts);
-    let whole = median(wholes);
+    // The two take turns, so a runner that slows down mid-run slows both alike.
+    let (mut firsts, mut wholes, mut bare) = (Vec::new(), Vec::new(), Vec::new());
+    for _ in 0..RUNS {
+        bare.push(time_bare_read(folder.path()));
+        let (first, whole) = time_listing(folder.path());
+        firsts.push(first);
+        wholes.push(whole);
+    }
+    let (first, whole, bare) = (median(firsts), median(wholes), median(bare));
+    let over = first.as_secs_f64() / bare.as_secs_f64();
 
-    let met = first <= FIRST_BATCH_BUDGET;
-    let limit = if FIRST_BATCH_ENFORCED {
-        format!("≤ {}", millis(FIRST_BATCH_BUDGET))
-    } else {
-        format!("≤ {}, reported only here (#70)", millis(FIRST_BATCH_BUDGET))
-    };
-    report("listing 100k: first batch", &millis(first), &limit, met);
+    let met = over <= FIRST_BATCH_OVER_READ;
+    report(
+        "listing 100k: first batch vs bare read",
+        &format!("{} vs {} ({over:.2}×)", millis(first), millis(bare)),
+        &format!("≤ {FIRST_BATCH_OVER_READ:.1}×"),
+        met,
+    );
+    report(
+        "listing 100k: first batch",
+        &millis(first),
+        &format!("aim ≤ {}, reported only", millis(FIRST_BATCH_AIM)),
+        first <= FIRST_BATCH_AIM,
+    );
     report("listing 100k: all entries", &millis(whole), "reported only", true);
     assert!(
-        met || !FIRST_BATCH_ENFORCED,
-        "the first batch of {ENTRIES} entries took {first:?}, over {FIRST_BATCH_BUDGET:?}"
+        met,
+        "the first batch of {ENTRIES} entries took {first:?}, {over:.2} times a bare read ({bare:?}), over {FIRST_BATCH_OVER_READ}"
     );
 }
 

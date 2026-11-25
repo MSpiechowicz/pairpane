@@ -7,7 +7,7 @@ to run.
 
 | Budget | Limit | Where it is measured | CI job |
 |---|---|---|---|
-| A folder of 100 000 entries shows its first batch | ≤ 100 ms (median of 5); on macOS reported only until #70 | `crates/pairpane_core/tests/budgets.rs` | Performance budgets (ubuntu-latest, macos-latest, windows-latest) |
+| A folder of 100 000 entries shows its first batch | ≤ 3× a bare `read_dir` of the same folder (median of 5); the aim of ≤ 100 ms is reported | `crates/pairpane_core/tests/budgets.rs` | Performance budgets (ubuntu-latest, macos-latest, windows-latest) |
 | The same folder, listed to its end | reported only | `crates/pairpane_core/tests/budgets.rs` | Performance budgets (ubuntu-latest, macos-latest, windows-latest) |
 | A 256 MiB file copied by the engine | ≥ 80 % of the speed of a plain copy on the same disk (median of 5) | `crates/pairpane_core/tests/budgets.rs` | Performance budgets (ubuntu-latest, macos-latest, windows-latest) |
 | The command palette matches a query over every command and 20 000 names | ≤ 50 ms (median of 7) | `ui/src/lib/palette/budget.test.ts` | UI tests |
@@ -20,6 +20,10 @@ to run.
   over a 1 MiB buffer on the same disk, run in turns with the engine's copy. A slow runner therefore slows both copies,
   and the result does not depend on how fast the runner's disk is. The engine may use the system's fast paths (reflink,
   `copy_file_range`, `clonefile`), so on some systems it beats the plain copy.
+- **The listing is compared to a bare read of the same folder.** On shared runners the first batch of the same folder took
+  54 to 111 ms from run to run, so an absolute limit would fail on the runner's load. A sorted listing has to read every
+  name before its first batch, so a bare `read_dir` (each name and its kind) is its floor; the budget is the listing's own
+  work above that, run in turns with the bare read. The 100 ms aim is still measured and shown in the summary.
 - **The listing is read once before it is timed,** so the system's caches are warm, as they are for a folder you open
   again.
 - **The palette budget runs in the UI tests' DOM (happy-dom),** not in the app's webview. It catches the palette's own
