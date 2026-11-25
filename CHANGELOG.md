@@ -1,3 +1,10 @@
+## [0.33.3](https://github.com/MSpiechowicz/pairpane/compare/v0.33.2...v0.33.3) (2026-11-25)
+
+
+### Bug Fixes
+
+* **ops:** a move across disks takes extended attributes and streams along (#79) ([7f55932](https://github.com/MSpiechowicz/pairpane/commit/7f559322363de7bde9915860c20279a89e1f0146)), closes [#73](https://github.com/MSpiechowicz/pairpane/issues/73)
+
 ## [0.33.2](https://github.com/MSpiechowicz/pairpane/compare/v0.33.1...v0.33.2) (2026-11-25)
 
 
