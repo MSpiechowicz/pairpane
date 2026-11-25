@@ -286,14 +286,19 @@ fn the_archive_or_a_folder_that_holds_it_is_never_copied_into_it() {
     assert_eq!(fs::read(root.path().join("arch/x.tar")).expect("the archive"), before);
 }
 
+/// The job that removes the file `a.txt`, as the scan saw it, from the archive.
+fn remove_a_txt(root: &Path) -> Ended {
+    let removals = [removal("a.txt", entry(EntryKind::File, 5), (0, 0))];
+
+    run(root, "", (&[], &removals), Hooks::default())
+}
+
 #[test]
 fn removals_alone_rewrite_the_archive_without_reading_the_folder() {
     let root = scene(&fixture());
     fs::remove_dir(root.path().join("disk")).expect("no folder to read");
     fs::create_dir(root.path().join("disk")).expect("an empty one");
-    let removals = [removal("a.txt", entry(EntryKind::File, 5), (0, 0))];
-
-    let ended = run(root.path(), "", (&[], &removals), Hooks::default());
+    let ended = remove_a_txt(root.path());
 
     is_done(&ended, 0);
     assert!(contents(root.path()).iter().all(|(path, _)| path != "a.txt"));
@@ -315,4 +320,78 @@ fn one_job_copies_out_of_the_archive_and_into_it() {
     is_done(&ended, 0);
     assert_eq!(fs::read(root.path().join("disk/a.txt")).expect("extracted"), b"alpha");
     assert!(contents(root.path()).contains(&("new.txt".to_owned(), b"new".to_vec())));
+}
+
+#[test]
+fn an_entry_whose_name_the_source_folder_has_by_now_stays_in_the_archive() {
+    // The scan saw `a.txt` only in the archive; the folder mirrored from has one by now (#75).
+    let root = scene(&fixture());
+    file(&root.path().join("disk/a.txt"), b"made since", 100);
+    let ended = remove_a_txt(root.path());
+
+    is_done(&ended, 1);
+    assert!(contents(root.path()).iter().any(|(path, _)| path == "a.txt"));
+}
+
+/// The mirror from the archive to the folder that removes `only.txt` from the folder, with what the caller read of the
+/// archive.
+fn mirror_from_archive(root: &Path, source: ArchiveJob) -> Ended {
+    let removal = SyncRemove {
+        side: PaneId::Right,
+        seen: on_disk(&root.join("disk/only.txt")),
+        files: 0,
+        bytes: 0,
+        scanned: i64::MAX,
+    };
+    let request = task(
+        &root.join("arch"),
+        &["only.txt"],
+        &root.join("disk"),
+        Task::Sync {
+            left: SyncRoot::Archive {
+                name: "x.tar".to_owned(),
+                inner: String::new(),
+                source,
+            },
+            right: SyncRoot::Folder,
+            plans: Vec::new(),
+            removals: vec![removal],
+            permanent: true,
+            log: super::SyncLog::default(),
+        },
+    );
+
+    Rig::new().run(request)
+}
+
+#[test]
+fn a_mirror_from_an_archive_removes_from_the_folder_while_the_archive_is_the_one_compared() {
+    let root = scene(&fixture());
+    file(&root.path().join("disk/only.txt"), b"only here", 100);
+
+    let ended = mirror_from_archive(root.path(), listed(&root.path().join("arch/x.tar")));
+
+    is_done(&ended, 0);
+    assert!(!root.path().join("disk/only.txt").exists());
+}
+
+#[test]
+fn a_mirror_from_an_archive_that_changed_since_the_comparison_removes_nothing() {
+    // The archive may hold `only.txt` by now: it is not read for the removals, so nothing is removed (#75).
+    let root = scene(&fixture());
+    file(&root.path().join("disk/only.txt"), b"only here", 100);
+    let compared = listed(&root.path().join("arch/x.tar"));
+    let mut grown = fs::read(root.path().join("arch/x.tar")).expect("the archive");
+    grown.extend_from_slice(&[0; 512]);
+    fs::write(root.path().join("arch/x.tar"), grown).expect("the archive changes");
+
+    let ended = mirror_from_archive(root.path(), compared);
+
+    is_done(&ended, 1);
+    assert!(root.path().join("disk/only.txt").exists());
+
+    // What the caller did not say of the archive is not trusted either.
+    let ended = mirror_from_archive(root.path(), ArchiveJob::default());
+    is_done(&ended, 1);
+    assert!(root.path().join("disk/only.txt").exists());
 }

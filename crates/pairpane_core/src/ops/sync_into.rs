@@ -29,7 +29,7 @@ use super::held::Held;
 use super::pack::Plan;
 use super::plan::{is_inside, real};
 use super::report::refusal;
-use super::sync::{ArchiveSide, same_facts};
+use super::sync::{ArchiveSide, lookup_below, same_facts};
 use super::sync_archive::entry_facts;
 use super::sync_remove::facts_of;
 use super::transfer::{Run, Stop};
@@ -83,7 +83,7 @@ impl Run<'_> {
                 }
                 _ => None,
             };
-            let removed = self.plan_removals(&index, &prefix, removals, &mut left_out)?;
+            let removed = self.plan_removals(&index, (&prefix, source), removals, &mut left_out)?;
 
             let entries = plan.as_ref().map_or(0, |plan| plan.entries.len());
             if entries == 0 && left_out.is_empty() {
@@ -191,11 +191,12 @@ impl Run<'_> {
     }
 
     /// Adds to `left_out` the entries of each of `removals` (under `prefix`) that is still what the scan saw, with all below
-    /// it, and gives how many there are; the others are counted as skipped.
+    /// it, and gives how many there are; the others are counted as skipped. One whose name the folder `source` the archive
+    /// is mirrored from has by now is kept too, as a removal from a folder is (#75).
     fn plan_removals(
         &mut self,
         index: &ArchiveIndex,
-        prefix: &str,
+        (prefix, source): (&str, Option<&std::path::Path>),
         removals: &[(&str, &SyncRemove)],
         left_out: &mut Vec<u32>,
     ) -> Result<usize, Stop> {
@@ -207,6 +208,12 @@ impl Run<'_> {
 
             let seen = index.find(inner, rel).map(|child| entry_facts(&child));
             if !same_facts(seen.as_ref(), Some(&removal.seen)) {
+                self.changed()?;
+                continue;
+            }
+            if let Some(source) = source
+                && lookup_below(source, rel)?.is_some()
+            {
                 self.changed()?;
                 continue;
             }
