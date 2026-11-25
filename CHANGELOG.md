@@ -1,3 +1,10 @@
+# [0.34.0](https://github.com/MSpiechowicz/pairpane/compare/v0.33.7...v0.34.0) (2026-11-25)
+
+
+### Features
+
+* **link:** device identity, one-time code pairing and the encrypted connection (#86) ([eb06fe0](https://github.com/MSpiechowicz/pairpane/commit/eb06fe0342d5395b7dbcf91d06513913dd51feaf))
+
 ## [0.33.7](https://github.com/MSpiechowicz/pairpane/compare/v0.33.6...v0.33.7) (2026-11-25)
 
 
