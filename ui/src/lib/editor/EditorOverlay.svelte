@@ -68,7 +68,7 @@
 
     {#if session.status === 'undecodable'}
       <div class="picker">
-        <p role="alert">{displayName(session.name)} is not valid {session.unreadable} text.</p>
+        <p role="alert">{displayName(session.name)} is not valid {session.unreadable} text, or would not be saved byte for byte in it.</p>
         <label>
           Reopen as
           <select data-autofocus value={chosen} onchange={(event) => (chosen = event.currentTarget.value)}>

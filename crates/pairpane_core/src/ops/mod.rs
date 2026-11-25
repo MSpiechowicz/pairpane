@@ -232,6 +232,9 @@ mod held_tests;
 mod items_tests;
 #[cfg(test)]
 mod move_tests;
+
+#[cfg(test)]
+mod move_safety_tests;
 #[cfg(test)]
 mod origin_tests;
 #[cfg(test)]
@@ -266,6 +269,9 @@ mod sync_remove_tests;
 mod sync_tests;
 #[cfg(test)]
 mod sync_undo_tests;
+
+#[cfg(test)]
+mod sync_aside_tests;
 #[cfg(test)]
 mod testing;
 #[cfg(test)]

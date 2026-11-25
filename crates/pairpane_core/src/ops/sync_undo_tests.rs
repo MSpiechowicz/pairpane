@@ -39,7 +39,7 @@ fn sync(pair: &Pair, rels: &[&str], log: &SyncLog) -> Ended {
 }
 
 /// The undo of the synchronization `log` describes.
-fn undo_of(pair: &Pair, log: &SyncLog) -> Request {
+pub(super) fn undo_of(pair: &Pair, log: &SyncLog) -> Request {
     task(
         &pair.right(),
         &log.names().iter().map(String::as_str).collect::<Vec<_>>(),
