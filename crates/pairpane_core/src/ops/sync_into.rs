@@ -211,8 +211,9 @@ impl Run<'_> {
                 self.changed()?;
                 continue;
             }
+            // A name that cannot be looked up in the source is not known to be missing there: kept too.
             if let Some(source) = source
-                && lookup_below(source, rel)?.is_some()
+                && !matches!(lookup_below(source, rel), Ok(None))
             {
                 self.changed()?;
                 continue;

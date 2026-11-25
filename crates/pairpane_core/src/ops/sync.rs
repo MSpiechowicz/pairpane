@@ -151,6 +151,10 @@ impl Run<'_> {
             Side::Archive(archive) => Some(archive),
             Side::Disk(_) => None,
         });
+        // An archive the folder is mirrored from is not read for the removals, so it must still be the file the comparison
+        // read: a removal of a name it may have by now is not made (data loss audit, #68; #75). Looked at before the job
+        // writes to the archive itself, which checks it again right before it replaces it.
+        let archive_unchanged = archive_side.is_none_or(|archive| self.archive_unchanged(archive));
         if let Some(archive) = archive_side {
             let disk = [&left, &right].into_iter().find_map(|side| match side {
                 Side::Disk(folder) => Some(folder.as_path()),
@@ -171,9 +175,6 @@ impl Run<'_> {
             self.sync_into_archive(archive, disk, &into_archive, &removed_from_archive)?;
         }
 
-        // An archive the folder is mirrored from is not read for the removals, so it must still be the file the comparison
-        // read: a removal of a name it may have by now is not made (data loss audit, #68; #75).
-        let archive_unchanged = archive_side.is_none_or(|archive| self.archive_unchanged(archive));
         let mut kept_for_archive = 0;
         let removed: Vec<Removal<'_>> = names_of_removals
             .iter()

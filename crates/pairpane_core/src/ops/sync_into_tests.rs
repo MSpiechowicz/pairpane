@@ -395,3 +395,43 @@ fn a_mirror_from_an_archive_that_changed_since_the_comparison_removes_nothing() 
     is_done(&ended, 1);
     assert!(root.path().join("disk/only.txt").exists());
 }
+
+#[test]
+fn a_job_that_writes_into_the_archive_still_removes_from_the_folder() {
+    // One job copies `new.txt` into the archive and removes `only.txt`, which the archive did not hold, from the folder:
+    // its own rewrite of the archive is no reason to keep `only.txt` (#75).
+    let root = scene(&fixture());
+    file(&root.path().join("disk/new.txt"), b"new", 100);
+    file(&root.path().join("disk/only.txt"), b"only here", 100);
+    let (new, into) = copy(root.path(), "new.txt", None);
+    let removal = SyncRemove {
+        side: PaneId::Left,
+        seen: on_disk(&root.path().join("disk/only.txt")),
+        files: 0,
+        bytes: 0,
+        scanned: i64::MAX,
+    };
+    let request = task(
+        &root.path().join("arch"),
+        &[new.as_str(), "only.txt"],
+        &root.path().join("disk"),
+        Task::Sync {
+            left: SyncRoot::Folder,
+            right: SyncRoot::Archive {
+                name: "x.tar".to_owned(),
+                inner: String::new(),
+                source: listed(&root.path().join("arch/x.tar")),
+            },
+            plans: vec![into],
+            removals: vec![removal],
+            permanent: true,
+            log: super::SyncLog::default(),
+        },
+    );
+
+    let ended = Rig::new().run(request);
+
+    is_done(&ended, 0);
+    assert!(contents(root.path()).contains(&("new.txt".to_owned(), b"new".to_vec())));
+    assert!(!root.path().join("disk/only.txt").exists());
+}
