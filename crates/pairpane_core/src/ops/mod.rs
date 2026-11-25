@@ -117,6 +117,7 @@ mod digest;
 mod engine;
 mod extract;
 mod extract_write;
+mod extras;
 mod fast;
 mod held;
 mod held_rename;
@@ -162,6 +163,7 @@ mod verify;
 mod volume;
 #[cfg(any(windows, test))]
 mod win_attrs;
+mod win_streams;
 
 /// Checks that the folder `dir` (names joined with `/`, `""` for `base` itself) can be reached below `base` one name at a
 /// time with no link and no file on the way (the search results of a folder are read through it).
@@ -235,6 +237,9 @@ mod move_tests;
 
 #[cfg(test)]
 mod move_safety_tests;
+
+#[cfg(test)]
+mod extras_tests;
 #[cfg(test)]
 mod origin_tests;
 #[cfg(test)]

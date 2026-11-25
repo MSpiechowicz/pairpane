@@ -1,5 +1,6 @@
 //! What a copy keeps besides the bytes: modification and access time (and creation time where the system lets
-//! it be set), and permissions. Ownership, ACLs and extended attributes are not copied.
+//! it be set), and permissions. Extended attributes (with the POSIX ACLs kept in them) and alternate data streams are
+//! carried by `extras`; ownership is not copied.
 
 use std::fs::{File, FileTimes, Metadata};
 use std::io;
