@@ -314,6 +314,29 @@ mod unix {
     }
 
     #[test]
+    fn a_save_in_place_that_fails_half_way_puts_the_old_content_back_and_leaves_no_copy() {
+        // Written in place (it has another name); the write stops half way, as a full disk would stop it (#76).
+        let folder = temp();
+        put(folder.path(), "a.txt", b"the old text, all of it");
+        fs::hard_link(folder.path().join("a.txt"), folder.path().join("b.txt")).expect("link");
+        let revision = document(folder.path(), "a.txt").revision;
+
+        crate::edit::save::FAIL_IN_PLACE.with(|fail| fail.set(true));
+        let result = save(
+            folder.path(),
+            "a.txt",
+            "a new text that is longer than the old one",
+            &options(&revision),
+        );
+        crate::edit::save::FAIL_IN_PLACE.with(|fail| fail.set(false));
+
+        assert!(result.is_err());
+        assert_eq!(read(folder.path(), "a.txt"), b"the old text, all of it");
+        assert_eq!(read(folder.path(), "b.txt"), b"the old text, all of it");
+        assert_eq!(names(folder.path()), ["a.txt", "b.txt"], "no copy is left behind");
+    }
+
+    #[test]
     fn a_folder_that_takes_no_new_file_still_saves_in_place() {
         if is_root() {
             return;

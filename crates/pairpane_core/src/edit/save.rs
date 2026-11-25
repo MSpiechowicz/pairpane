@@ -96,7 +96,7 @@ fn replace(folder: &Path, target: &Path, bytes: &[u8], seen: &Metadata, checked:
                     Err(error) if disk::replace_left_original(&error) => {
                         tracing::debug!(%error, "the file was not replaced; writing into it");
 
-                        return in_place(target, bytes, seen);
+                        return in_place_kept(folder, target, bytes, (seen, checked));
                     }
                     done => return done,
                 }
@@ -111,7 +111,118 @@ fn replace(folder: &Path, target: &Path, bytes: &[u8], seen: &Metadata, checked:
         Err(error) => return Err(error),
     }
 
-    in_place(target, bytes, seen)
+    in_place_kept(folder, target, bytes, (seen, checked))
+}
+
+/// Writes `bytes` into the file itself (see [`write_into`]), with the old content kept beside the file until the new one is on the disk (#76): a copy is made first
+/// (`.pairpane-edit-…-` and the file's name, so one left by a crash or a power cut says whose it is) and flushed; a write
+/// that fails puts the old content back and removes the copy, and the copy is removed once the new content is flushed.
+/// Where no file can be made beside it (a folder the user cannot write to) the file is written without a copy, as before;
+/// a copy that cannot be made for another reason (a full disk) refuses the save before the file is touched.
+fn in_place_kept(folder: &Path, target: &Path, bytes: &[u8], (seen, checked): (&Metadata, &File)) -> io::Result<()> {
+    let old = read_whole(checked, seen)?;
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    let kept = match backup_in(folder, &name, &old) {
+        Ok(kept) => Some(kept),
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => None,
+        Err(error) => {
+            return Err(io::Error::new(
+                error.kind(),
+                format!("the old content could not be kept while saving, so nothing was written: {error}"),
+            ));
+        }
+    };
+
+    // A file that is not the one seen any more is left alone, and so is the copy of the one that was.
+    let mut file = match open_checked(target, seen) {
+        Ok(file) => file,
+        Err(error) => {
+            if let Some(kept) = kept {
+                let _ = fs::remove_file(&kept);
+            }
+            return Err(error);
+        }
+    };
+
+    match write_into(&mut file, bytes) {
+        Ok(()) => {
+            if let Some(kept) = kept {
+                let _ = fs::remove_file(&kept);
+            }
+            Ok(())
+        }
+        Err(error) => {
+            // The old content goes back into the same file, through the same handle; the copy goes only once that worked.
+            #[cfg(test)]
+            FAIL_IN_PLACE.with(|fail| fail.set(false));
+            let restored = write_into(&mut file, &old);
+            match (restored, kept) {
+                (Ok(()), Some(kept)) => {
+                    let _ = fs::remove_file(&kept);
+                    Err(error)
+                }
+                (Ok(()), None) => Err(error),
+                (Err(_), Some(kept)) => Err(io::Error::new(
+                    error.kind(),
+                    format!(
+                        "{error}; the old content is kept in {}",
+                        kept.file_name()
+                            .map_or_else(String::new, |kept| kept.to_string_lossy().into_owned())
+                    ),
+                )),
+                (Err(_), None) => Err(error),
+            }
+        }
+    }
+}
+
+/// The whole content of the file open as `file`, which is `seen`.
+fn read_whole(file: &File, seen: &Metadata) -> io::Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut reader = file;
+    reader.seek(SeekFrom::Start(0))?;
+    let mut old = Vec::with_capacity(usize::try_from(seen.len()).unwrap_or(0));
+    reader.read_to_end(&mut old)?;
+
+    Ok(old)
+}
+
+/// Writes `old` to a new copy beside the file `name` in `folder`, flushed, and gives its path.
+fn backup_in(folder: &Path, name: &str, old: &[u8]) -> io::Result<std::path::PathBuf> {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+
+    for _ in 0..MAX_TEMP_TRIES {
+        let number = NEXT.fetch_add(1, Ordering::Relaxed);
+        let prefix = format!(".pairpane-edit-{}-{number}", run_token());
+        let named = format!("{prefix}-{name}");
+        let path = folder.join(if crate::ops::name_fits(&named) {
+            named
+        } else {
+            format!("{prefix}.bak")
+        });
+
+        match create_new(&path) {
+            Ok(mut file) => {
+                let mut partial = Partial::new(path.clone());
+                file.write_all(old)?;
+                file.sync_all()?;
+                partial.committed = true;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(refusal(
+        io::ErrorKind::Other,
+        "no free name for a copy of the file was found",
+    ))
 }
 
 /// Makes the temporary file next to the target, exclusively: a name that is taken is skipped, and never opened.
@@ -167,11 +278,9 @@ fn sync_folder(folder: &Path) {
 #[cfg(not(unix))]
 fn sync_folder(_folder: &Path) {}
 
-/// Writes `bytes` into the file `target` itself, which is `seen`: opened without following a link and checked to be
-/// that very file, then written from the start and cut to length (so a failure half way leaves the old end, never an
-/// empty file) and flushed.
-fn in_place(target: &Path, bytes: &[u8], seen: &Metadata) -> io::Result<()> {
-    let mut file = disk::open_for_write(target)?;
+/// Opens the file `target` to write into it: without following a link, and checked to be `seen`, that very file.
+fn open_checked(target: &Path, seen: &Metadata) -> io::Result<File> {
+    let file = disk::open_for_write(target)?;
     let now = file.metadata()?;
 
     if !now.is_file() || !disk::is_seen(&now, seen) {
@@ -181,7 +290,30 @@ fn in_place(target: &Path, bytes: &[u8], seen: &Metadata) -> io::Result<()> {
         ));
     }
 
+    Ok(file)
+}
+
+/// Writes `bytes` into the open file from the start and cuts it to length (so a failure half way leaves the old end,
+/// never an empty file), then flushes it.
+fn write_into(file: &mut File, bytes: &[u8]) -> io::Result<()> {
+    use std::io::{Seek, SeekFrom};
+
+    file.seek(SeekFrom::Start(0))?;
+
+    #[cfg(test)]
+    if FAIL_IN_PLACE.with(std::cell::Cell::get) {
+        // Half of the new content is written, as a full disk would leave it.
+        file.write_all(&bytes[..bytes.len() / 2])?;
+        return Err(io::Error::other("the disk is full (a test asked for it)"));
+    }
+
     file.write_all(bytes)?;
     file.set_len(bytes.len() as u64)?;
     file.sync_all()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Makes the write into the file itself fail half way, on this thread.
+    pub(super) static FAIL_IN_PLACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
