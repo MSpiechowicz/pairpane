@@ -122,3 +122,23 @@ fn a_copy_to_a_disk_that_cannot_hold_them_still_copies() {
     assert!(ended.errors.is_empty(), "{:?}", ended.errors);
     assert_eq!(read(&root.path().join("dst/a.txt")), b"a");
 }
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[test]
+fn a_read_only_file_moves_across_disks_with_its_attributes() {
+    let root = temp();
+    let src = root.path().join("src");
+    write(&src.join("a.txt"), b"a");
+    attributes::mark(&src.join("a.txt"), b"tag-a");
+    let mut permissions = std::fs::metadata(src.join("a.txt")).expect("source").permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(src.join("a.txt"), permissions).expect("read-only");
+    let mut rig = Rig::hooked(|hooks| hooks.cross_device = true);
+
+    let ended = rig.run_move(root.path(), &["a.txt"]);
+
+    assert!(ended.errors.is_empty(), "{:?}", ended.errors);
+    let moved = root.path().join("dst/a.txt");
+    assert_eq!(attributes::read_mark(&moved).as_deref(), Some(&b"tag-a"[..]));
+    assert!(std::fs::metadata(&moved).expect("moved").permissions().readonly());
+}

@@ -118,11 +118,18 @@ mod imp {
                 break;
             }
         }
+        // Only "no more streams" ends the list; any other failure would leave streams out unseen.
+        // SAFETY: reads the calling thread's last error, set by the FindNextStreamW call that just ended the loop (or
+        // not looked at when the loop stopped at MOST).
+        let last = unsafe { GetLastError() };
         // SAFETY: closes the search handle opened above exactly once.
         unsafe { FindClose(find) };
 
         if listed.len() >= MOST {
             return Err(io::Error::other("too many alternate data streams"));
+        }
+        if last != ERROR_HANDLE_EOF {
+            return Err(io::Error::from_raw_os_error(last.cast_signed()));
         }
 
         Ok(listed)

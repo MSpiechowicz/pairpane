@@ -63,7 +63,8 @@ pub(super) fn carry(
 )]
 pub(super) fn is_carried(name: &[u8], linux: bool) -> bool {
     if !linux {
-        return true;
+        // Kept by the system for the file where it is (which apps may open it, the protection of system files).
+        return name != b"com.apple.macl" && name != b"com.apple.rootless";
     }
 
     name.starts_with(b"user.") || name == b"system.posix_acl_access" || name == b"system.posix_acl_default"
@@ -79,15 +80,15 @@ mod xattrs {
 
     use super::{NotKept, is_carried};
 
-    /// The most bytes of names or of one value that are read; larger is refused (a file system's own limits are far
-    /// below it: 64 KiB on Linux, about 128 KiB for a resource fork read this way is not usual either).
+    /// The most bytes of the names, or of one value, that are read. Linux allows 64 KiB per value; a larger value (a big
+    /// macOS resource fork) is not read, so a move of its file keeps the source.
     const MOST: usize = 16 * 1024 * 1024;
 
     pub(super) fn carry(source: &File, copy: &File, refuse: bool) -> Result<(), NotKept> {
         let names = match read(|buffer| flistxattr(source, buffer)) {
             Ok(names) => names,
             // A file system without extended attributes has none to carry.
-            Err(error) if error == Errno::NOTSUP || error == Errno::OPNOTSUPP => return Ok(()),
+            Err(error) if error == Errno::NOTSUP || error == Errno::OPNOTSUPP || error == Errno::NOSYS => return Ok(()),
             Err(error) => return Err(NotKept(format!("its extended attributes ({error})"))),
         };
 
@@ -113,8 +114,12 @@ mod xattrs {
             } else {
                 fsetxattr(copy, c_name.as_c_str(), &value, XattrFlags::empty())
             };
-            if written.is_err() {
-                return Err(NotKept(shown));
+            match written {
+                Ok(()) => {}
+                // On macOS the system keeps some attributes to itself (its file provenance, for one) and refuses to let a
+                // process set them: those stay behind, as the system gives the copy its own.
+                Err(Errno::PERM) if cfg!(any(target_os = "macos", target_os = "ios")) => {}
+                Err(_) => return Err(NotKept(shown)),
             }
         }
 
@@ -153,8 +158,11 @@ mod tests {
     }
 
     #[test]
-    fn macos_carries_every_attribute() {
+    fn macos_carries_every_attribute_but_those_the_system_keeps() {
         assert!(is_carried(b"com.apple.quarantine", false));
         assert!(is_carried(b"com.apple.metadata:_kMDItemUserTags", false));
+        assert!(is_carried(b"user.pairpane.test", false));
+        assert!(!is_carried(b"com.apple.macl", false));
+        assert!(!is_carried(b"com.apple.rootless", false));
     }
 }

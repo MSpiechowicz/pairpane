@@ -204,14 +204,15 @@ impl Run<'_> {
         }
         self.checkpoint()?;
 
-        self.finish_copy(source, &mut copy, meta)?;
-
         // What the file holds besides its bytes (see `extras`): a copy takes what the target can hold, a move keeps its
-        // source unless everything that should go with the file went.
+        // source unless everything that should go with the file went. Before the permissions and times are given: a
+        // read-only copy takes no attribute (nor, on Windows, a stream), and writing a stream changes the file's time.
         let carried = extras::carry(source, &copy, (source_path, &temp), self.inner.hooks.refuse_extras);
         if let (Err(extras::NotKept(what)), true) = (carried, self.moving()) {
             return Err(io::Error::other(format!("Kept the original: the target cannot hold its {what}")).into());
         }
+
+        self.finish_copy(source, &mut copy, meta)?;
 
         // A move removes the source once the copy is committed, so the copy must be on the disk first: a write that
         // only fails when it reaches the disk (a full or pulled drive, a network share that reports at the flush) then
