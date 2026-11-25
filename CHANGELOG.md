@@ -1,3 +1,11 @@
+## [0.33.4](https://github.com/MSpiechowicz/pairpane/compare/v0.33.3...v0.33.4) (2026-11-25)
+
+
+### Bug Fixes
+
+* **sync:** a mirror with an archive side looks at the source again before removing (#81) ([b7ebf8a](https://github.com/MSpiechowicz/pairpane/commit/b7ebf8af5fa607771518111e7dbd320c56465c1e)), closes [#75](https://github.com/MSpiechowicz/pairpane/issues/75)
+* **rename:** a renamed item moved aside keeps its old name in its temporary one (#82) ([57e27df](https://github.com/MSpiechowicz/pairpane/commit/57e27df6e8f2d099a28dc96da20a7aa33c44dd9d)), closes [#74](https://github.com/MSpiechowicz/pairpane/issues/74)
+
 ## [0.33.3](https://github.com/MSpiechowicz/pairpane/compare/v0.33.2...v0.33.3) (2026-11-25)
 
 
