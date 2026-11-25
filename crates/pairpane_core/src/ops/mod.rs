@@ -232,6 +232,9 @@ mod held_tests;
 mod items_tests;
 #[cfg(test)]
 mod move_tests;
+
+#[cfg(test)]
+mod move_safety_tests;
 #[cfg(test)]
 mod origin_tests;
 #[cfg(test)]

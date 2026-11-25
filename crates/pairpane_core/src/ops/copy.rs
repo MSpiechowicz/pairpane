@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use super::conflict::Place;
 use super::fast::{self, Start};
+use super::identity::FileId;
 use super::meta;
 use super::open;
 use super::partial::Partial;
@@ -158,7 +159,11 @@ impl Run<'_> {
         guard.committed = true;
 
         if self.moving() {
-            self.remove_source(node, place.path())?;
+            if let Some(hook) = &self.inner.hooks.before_removal {
+                hook(&node.path);
+            }
+            flush_folder(to_dir)?;
+            self.remove_source(node, place.path(), source.as_ref().map(|file| (file, &meta)))?;
         }
 
         Ok(Done::Copied)
@@ -194,6 +199,16 @@ impl Run<'_> {
         self.checkpoint()?;
 
         self.finish_copy(source, &mut copy, meta)?;
+
+        // A move removes the source once the copy is committed, so the copy must be on the disk first: a write that
+        // only fails when it reaches the disk (a full or pulled drive, a network share that reports at the flush) then
+        // fails the item and keeps the source.
+        if self.moving() {
+            if self.inner.hooks.fail_flush {
+                return Err(io::Error::other("the disk failed to keep the copy (a test asked for it)").into());
+            }
+            copy.sync_all()?;
+        }
 
         Ok((temp, guard))
     }
@@ -286,6 +301,41 @@ fn make_link(node: &Child, destination: &Path, temp: &Path) -> io::Result<()> {
     }
 }
 
+/// Fails when the source of a move is no longer what was copied from it: the file open as `file` grew, shrank or was
+/// written since `meta` was read, or another file now has its name at `path`. The source is then kept.
+fn unchanged_since_read(file: &File, meta: &Metadata, path: &Path) -> io::Result<()> {
+    let now = file.metadata()?;
+    let same_content = now.len() == meta.len() && now.modified().ok() == meta.modified().ok();
+    let same_name = match (FileId::of_file(file), FileId::of_path(path)) {
+        (Some(open), Some(named)) => open == named,
+        _ => false,
+    };
+
+    if same_content && same_name {
+        Ok(())
+    } else {
+        Err(refusal(
+            io::ErrorKind::Other,
+            "Kept the original: it changed while it was being moved",
+        ))
+    }
+}
+
+/// Makes the entries of `folder` (the commit of a copy into it) last on the disk before a move removes the source. Only
+/// on Unix, where a folder can be opened and flushed; on Windows the flush of the file is what the system offers.
+fn flush_folder(folder: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        File::open(folder)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = folder;
+
+        Ok(())
+    }
+}
+
 impl Run<'_> {
     /// Deletes the source of a move once its copy is committed at `target`: a file or a link, never a folder's
     /// contents.
@@ -293,7 +343,10 @@ impl Run<'_> {
     /// Only when both identities were read and differ: if `target` is the source itself, reached by another name,
     /// the commit replaced it with the copy, which is then the only one left. When that cannot be told, the source
     /// is kept and the item fails with the reason.
-    fn remove_source(&self, node: &Child, target: &Path) -> io::Result<()> {
+    ///
+    /// A file is deleted only while it is still the one that was copied (`read`: the file open as it was read, and its
+    /// metadata then), see [`unchanged_since_read`].
+    fn remove_source(&self, node: &Child, target: &Path, read: Option<(&File, &Metadata)>) -> io::Result<()> {
         let (Some(source_id), Some(target_id)) = (self.id_of_path(&node.path), self.id_of_path(target)) else {
             return Err(refusal(
                 io::ErrorKind::Other,
@@ -303,6 +356,10 @@ impl Run<'_> {
 
         if source_id == target_id {
             return Ok(());
+        }
+
+        if let Some((file, meta)) = read {
+            unchanged_since_read(file, meta, &node.path)?;
         }
 
         match fs::remove_file(&node.path) {

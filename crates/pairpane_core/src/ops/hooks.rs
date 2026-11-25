@@ -36,6 +36,11 @@ pub(super) struct Hooks {
     /// Every copy of a file fails with "already exists" once its data is written, as an error after the temporary
     /// file was made, which must not look like a taken name.
     pub(super) taken_after_data: bool,
+    /// The flush to the disk of a file a move copied fails, as a full disk or a network share reports at that point.
+    pub(super) fail_flush: bool,
+    /// Called with the path of the source of a move once its copy is committed, before the source is removed: a test
+    /// changes the source there.
+    pub(super) before_removal: Option<PathHook>,
     /// No clone and no kernel copy: the buffered loop moves every byte.
     pub(super) buffered_only: bool,
     /// Progress goes out after every chunk, not every 100 ms.

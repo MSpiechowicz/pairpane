@@ -67,6 +67,17 @@ impl FileId {
         Self::of_path(path)
     }
 
+    /// The identity of the file open as `file`.
+    #[cfg(unix)]
+    pub(super) fn of_file(file: &std::fs::File) -> Option<Self> {
+        crate::listing::platform::identity(&file.metadata().ok()?).map(Self)
+    }
+
+    #[cfg(windows)]
+    pub(super) fn of_file(file: &std::fs::File) -> Option<Self> {
+        same_file::Handle::from_file(file.try_clone().ok()?).ok().map(Self)
+    }
+
     /// The identity of what is at `path` right now, a link being its own thing. `None` when it cannot be read.
     #[cfg(unix)]
     pub(super) fn of_path(path: &Path) -> Option<Self> {
