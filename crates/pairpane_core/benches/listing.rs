@@ -1,29 +1,18 @@
 //! The listing budget: a folder with 100 000 entries must show its first screen in well under 100 ms.
-//! `cargo bench -p pairpane_core` reports the time to the first batch and to the whole listing.
+//! `cargo bench -p pairpane_core` reports the time to the first batch and to the whole listing; CI checks the budget
+//! itself in `tests/budgets.rs` (see `docs/performance-budgets.md`).
 
-use std::fs;
 use std::hint::black_box;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use pairpane_core::listing::list;
 use pairpane_core::model::ListEvent;
-use tempfile::TempDir;
 
-const ENTRIES: usize = 100_000;
+#[path = "../tests/support/huge_folder.rs"]
+mod huge_folder;
 
-fn huge_folder() -> TempDir {
-    let temp = TempDir::new().expect("temp dir");
-    for index in 0..ENTRIES {
-        let name = format!("file-{index:06}.txt");
-        if index % 10 == 0 {
-            fs::create_dir(temp.path().join(name)).expect("dir");
-        } else {
-            fs::write(temp.path().join(name), b"x").expect("file");
-        }
-    }
-    temp
-}
+use huge_folder::huge_folder;
 
 fn listing(c: &mut Criterion) {
     let folder = huge_folder();

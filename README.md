@@ -44,6 +44,7 @@ bun run build      # local installers (no signing key needed)
 ```
 
 Releases are automated: see [docs/release-and-updater-keys.md](docs/release-and-updater-keys.md).
+Performance budgets checked in CI: see [docs/performance-budgets.md](docs/performance-budgets.md).
 
 ## License
 
