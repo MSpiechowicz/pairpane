@@ -55,6 +55,12 @@ mod imp {
     /// Moves `from` to `to` unless something is at `to`: then `AlreadyExists` (`ERROR_ALREADY_EXISTS` or
     /// `ERROR_FILE_EXISTS`, which the standard library maps so), and nothing changes.
     pub(in super::super) fn move_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+        // MoveFileExW takes another name of the same file (a hard link) at `to` for no conflict and moves onto it; that
+        // is something at `to` all the same. A file that appears after this look is refused by the system itself.
+        if std::fs::symlink_metadata(to).is_ok() {
+            return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        }
+
         match call(from.as_os_str(), to.as_os_str()) {
             Err(error) if error.raw_os_error().is_some_and(|code| TOO_LONG.contains(&code)) => {
                 let (Some(from), Some(to)) = (from.to_str().and_then(verbatim), to.to_str().and_then(verbatim)) else {
