@@ -138,4 +138,13 @@ describe('set-version', () => {
     expect(members.length).toBeGreaterThan(0);
     expect([...names].sort()).toEqual([...WORKSPACE_PACKAGES].sort());
   });
+
+  test("the release workflow's check of the release commit accepts the bump of every workspace crate", () => {
+    const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'release.yml'), 'utf8');
+    const pattern = /\^name = "pairpane_\(([a-z|]+)\)"\$/.exec(workflow)?.[1];
+
+    expect(pattern).toBeDefined();
+    const allowed = (pattern ?? '').split('|').map((suffix) => `pairpane_${suffix}`);
+    expect(allowed.sort()).toEqual([...WORKSPACE_PACKAGES].sort());
+  });
 });
