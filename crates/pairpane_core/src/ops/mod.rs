@@ -165,6 +165,7 @@ mod verify;
 mod volume;
 #[cfg(any(windows, test))]
 mod win_attrs;
+mod win_rename;
 mod win_streams;
 
 /// Checks that the folder `dir` (names joined with `/`, `""` for `base` itself) can be reached below `base` one name at a

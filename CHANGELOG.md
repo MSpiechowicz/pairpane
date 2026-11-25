@@ -1,3 +1,10 @@
+## [0.33.5](https://github.com/MSpiechowicz/pairpane/compare/v0.33.4...v0.33.5) (2026-11-25)
+
+
+### Bug Fixes
+
+* **edit:** keep the old content beside a file written in place until the new one is on the disk (#83) ([da5752f](https://github.com/MSpiechowicz/pairpane/commit/da5752ffe44db497f3108c399998e5871ccca6af)), closes [#76](https://github.com/MSpiechowicz/pairpane/issues/76)
+
 ## [0.33.4](https://github.com/MSpiechowicz/pairpane/compare/v0.33.3...v0.33.4) (2026-11-25)
 
 

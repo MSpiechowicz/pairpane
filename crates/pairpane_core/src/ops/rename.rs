@@ -14,9 +14,11 @@ const WINDOWS_NOT_SAME_DEVICE: i32 = 17;
 
 /// Moves `from` to `to` unless something is at `to`: then `AlreadyExists`, and nothing changes.
 ///
-/// Linux and macOS ask the system to refuse (`renameat2` `NOREPLACE`, `renamex_np` `EXCL`), so nothing can
-/// appear at `to` between the check and the rename. Where the filesystem lacks that flag, and on Windows, it is
-/// check-then-rename: someone who can write to the folder at that very moment can still win the race.
+/// Linux and macOS ask the system to refuse (`renameat2` `NOREPLACE`, `renamex_np` `EXCL`), and Windows does in
+/// `MoveFileExW` (see `win_rename`), so nothing can appear at `to` between a check and the rename. Where the filesystem
+/// lacks that flag, a file is linked to the new name (which fails when it is taken) and its old name removed (#77); a
+/// folder, a link and a file on a filesystem without hard links are check-then-rename, where someone who can write to the
+/// folder at that very moment can still win the race.
 pub(super) fn noreplace(from: &Path, to: &Path) -> io::Result<()> {
     match system_noreplace(from, to) {
         Err(error) if refused_flag(&error) => check_then_rename(from, to),
@@ -35,6 +37,14 @@ pub(super) fn crosses_devices(error: &io::Error) -> bool {
         || (cfg!(windows) && error.raw_os_error() == Some(WINDOWS_NOT_SAME_DEVICE))
 }
 
+#[cfg(unix)]
+fn check_then_rename(from: &Path, to: &Path) -> io::Result<()> {
+    use rustix::fs::CWD;
+
+    super::held_rename::link_or_check(CWD, from, to)
+}
+
+#[cfg(not(unix))]
 fn check_then_rename(from: &Path, to: &Path) -> io::Result<()> {
     match fs::symlink_metadata(to) {
         Ok(_) => Err(io::Error::from(io::ErrorKind::AlreadyExists)),
@@ -50,7 +60,12 @@ fn system_noreplace(from: &Path, to: &Path) -> io::Result<()> {
     renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE).map_err(io::Error::from)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(windows)]
+fn system_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    super::win_rename::move_noreplace(from, to)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn system_noreplace(from: &Path, to: &Path) -> io::Result<()> {
     check_then_rename(from, to)
 }
@@ -60,7 +75,8 @@ fn system_noreplace(from: &Path, to: &Path) -> io::Result<()> {
 fn refused_flag(error: &io::Error) -> bool {
     use rustix::io::Errno;
 
-    [Errno::INVAL, Errno::NOSYS, Errno::OPNOTSUPP]
+    // macOS answers ENOTSUP for a filesystem without `EXCL` (on Linux it is the same number as EOPNOTSUPP).
+    [Errno::INVAL, Errno::NOSYS, Errno::OPNOTSUPP, Errno::NOTSUP]
         .into_iter()
         .any(|errno| error.raw_os_error() == Some(errno.raw_os_error()))
 }
