@@ -108,12 +108,12 @@ async fn connections_that_send_nothing_do_not_keep_a_real_joiner_out() {
     for _ in 0..ctx::MAX_CONNECTIONS_PER_IP - 1 {
         idle.push(silent(&joiner, &host).await);
     }
-    // They are all still waiting when the real joiner comes (they are cut only after the first message's timeout).
-    assert!(idle.iter().all(|conn| conn.close_reason().is_none()));
 
     joiner.link.join(&offer.code, &host.target()).await.unwrap();
 
     assert_eq!(host.link.devices().unwrap().len(), 1);
+    // They were all still waiting while the real joiner got through (they are cut only after the first message's timeout).
+    assert!(idle.iter().all(|conn| conn.close_reason().is_none()));
 }
 
 #[tokio::test]

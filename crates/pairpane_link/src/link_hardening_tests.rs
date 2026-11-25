@@ -375,3 +375,46 @@ async fn one_address_that_uses_up_its_share_does_not_keep_its_neighbours_out() {
     drop(guards);
     assert!(ctx.admit(busy).is_some());
 }
+
+#[tokio::test]
+async fn a_service_on_the_network_takes_no_loopback_address_from_an_announcement() {
+    // Bound to every interface (port 0, discovery off: nothing goes on the network), as the app's service is.
+    let node = Node::start_with("node", |config| config.loopback_only = false).await;
+    let someone = stranger();
+
+    announce(
+        &node,
+        someone,
+        vec![
+            "127.0.0.1:47620".parse().unwrap(),
+            "[::1]:47620".parse().unwrap(),
+            evil(),
+        ],
+    );
+
+    let found = node.link.discovered().unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].addrs, vec![evil()]);
+}
+
+#[tokio::test]
+async fn no_connection_is_taken_while_all_of_them_are_in_use() {
+    let host = Node::start("host").await;
+    let joiner = Node::start("joiner").await;
+    host.pair_with(&joiner).await;
+
+    let all = Arc::clone(&host.link.ctx.connections)
+        .acquire_many_owned(MAX_CONNECTIONS as u32)
+        .await
+        .unwrap();
+    assert!(!matches!(
+        joiner.link.status(&host.id()).await.unwrap(),
+        Status::Online { .. }
+    ));
+
+    drop(all);
+    assert!(matches!(
+        joiner.link.status(&host.id()).await.unwrap(),
+        Status::Online { .. }
+    ));
+}

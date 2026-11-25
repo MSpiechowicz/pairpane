@@ -160,8 +160,12 @@ impl Link {
     /// Cancels the active pairing code.
     pub fn cancel_pairing(&self) -> Result<()> {
         self.open()?;
+        // The timer's slot is held over both steps, as in `begin_pairing`, so a code made in between keeps its timer.
+        let mut slot = lock(&self.expiry);
         self.ctx.host.cancel();
-        self.replace_timer(None);
+        if let Some(old) = slot.take() {
+            old.abort();
+        }
 
         Ok(())
     }
@@ -310,8 +314,13 @@ impl Link {
             return;
         }
 
-        self.ctx.host.cancel();
-        self.replace_timer(None);
+        {
+            let mut slot = lock(&self.expiry);
+            self.ctx.host.cancel();
+            if let Some(old) = slot.take() {
+                old.abort();
+            }
+        }
         for task in lock(&self.tasks).drain(..) {
             task.abort();
         }

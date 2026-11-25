@@ -28,8 +28,12 @@ use crate::wire::{CLOSE_DONE, Channel};
 pub const SESSION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long a joiner has to send its first message. A connection that sends nothing in that time is closed; until then it
-/// waits without taking the attempt, so it does not keep another joiner out or count against the code.
+/// waits without taking the attempt, so it does not keep another joiner out or count against the code. The tests make it
+/// longer, so connections that say nothing are surely still waiting when they check that a real joiner gets through.
+#[cfg(not(test))]
 pub const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(3);
+#[cfg(test)]
+pub const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long the host waits for the joiner to take the last message before it closes the connection. A test makes it long
 /// to show that nothing else waits for it.
