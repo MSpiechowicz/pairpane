@@ -1,3 +1,10 @@
+## [0.33.7](https://github.com/MSpiechowicz/pairpane/compare/v0.33.6...v0.33.7) (2026-11-25)
+
+
+### Bug Fixes
+
+* **ops:** a move across disks keeps a macOS ACL (#85) ([487fdf3](https://github.com/MSpiechowicz/pairpane/commit/487fdf355dfffe69aa7c5d9594701ebd5b424436)), closes [#80](https://github.com/MSpiechowicz/pairpane/issues/80)
+
 ## [0.33.6](https://github.com/MSpiechowicz/pairpane/compare/v0.33.5...v0.33.6) (2026-11-25)
 
 
