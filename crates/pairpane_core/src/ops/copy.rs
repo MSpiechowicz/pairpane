@@ -366,6 +366,18 @@ fn in_context(what: &str, error: &io::Error) -> io::Error {
     io::Error::new(error.kind(), format!("{what}: {error}"))
 }
 
+/// Flushes the folder open as `folder` to the disk. On macOS a plain `fsync` only reaches the drive's cache, so the full
+/// flush is asked for, as `File::sync_all` does for the copy itself.
+#[cfg(unix)]
+fn flush_handle(folder: &std::os::fd::OwnedFd) -> io::Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let flushed = rustix::fs::fcntl_fullfsync(folder);
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    let flushed = rustix::fs::fsync(folder);
+
+    flushed.map_err(io::Error::from)
+}
+
 /// Makes the entries of `folder` (the commit of a copy into it) last on the disk before a move removes the source. Only
 /// on Unix, where a folder can be opened and flushed; on Windows the flush of the file is what the system offers. A
 /// folder that cannot be opened for it (no read permission, as in a drop box) or a disk that cannot flush a folder does
@@ -374,14 +386,14 @@ fn flush_folder(folder: &Path) -> io::Result<()> {
     // Opened as a folder only: anything else swapped in at its path (a pipe would block the open) is not opened.
     #[cfg(unix)]
     {
-        use rustix::fs::{Mode, OFlags, fsync, open};
+        use rustix::fs::{Mode, OFlags, open};
 
         if let Ok(opened) = open(
             folder,
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
             Mode::empty(),
         ) {
-            flush(fsync(&opened).map_err(io::Error::from)).map_err(|error| {
+            flush(flush_handle(&opened)).map_err(|error| {
                 in_context(
                     "Kept the original: the copy was made, but its folder could not be written to the disk",
                     &error,
