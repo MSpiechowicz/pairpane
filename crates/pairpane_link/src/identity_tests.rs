@@ -103,6 +103,17 @@ mod file {
     }
 
     #[test]
+    fn something_that_is_not_a_regular_file_is_refused_when_it_is_open() {
+        // What a name swapped for another kind of file after the first check would be: the open descriptor is judged.
+        let dir = TempDir::new().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+
+        let result = super::super::read_key_file(fs::File::open(dir.path()).unwrap());
+
+        assert!(matches!(result, Err(Error::InsecureKeyFile)), "{result:?}");
+    }
+
+    #[test]
     fn a_file_of_the_wrong_size_is_refused() {
         for bytes in [&[1u8; 31][..], &[1u8; 33], &[]] {
             let dir = TempDir::new().unwrap();

@@ -9,6 +9,7 @@
 //! The node ids pinned are the ones of the QUIC connections, which iroh has authenticated with each device's key. Any
 //! failure before the end leaves nothing pinned.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use iroh::EndpointId;
@@ -16,22 +17,26 @@ use iroh::endpoint::Connection;
 use tokio::time::timeout;
 
 use super::PAIR_VERSION;
-use super::host::Attempt;
+use super::host::PairingHost;
 use super::proto::{Handshake, MESSAGE_LEN, Role, TAG_LEN};
 use crate::code::PairingCode;
 use crate::devices::{Device, validate_name};
 use crate::error::{Error, Result};
-use crate::wire::Channel;
+use crate::wire::{CLOSE_DONE, Channel};
 
 /// How long a whole pairing may take on the host, from the connection on.
 pub const SESSION_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long a joiner has to send its first message. A connection that sends nothing in that time does not count as an
-/// attempt, and lets the next one in.
+/// How long a joiner has to send its first message. A connection that sends nothing in that time is closed; until then it
+/// waits without taking the attempt, so it does not keep another joiner out or count against the code.
 pub const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// How long the host waits for the joiner to take the last message before it closes the connection.
+/// How long the host waits for the joiner to take the last message before it closes the connection. A test makes it long
+/// to show that nothing else waits for it.
+#[cfg(not(test))]
 const LINGER: Duration = Duration::from_secs(3);
+#[cfg(test)]
+const LINGER: Duration = Duration::from_secs(60);
 
 /// The joining side. Returns the host's node id and name, which the caller pins.
 pub async fn join_session(
@@ -64,19 +69,25 @@ pub async fn join_session(
     Ok((host_id, host_name))
 }
 
-/// The host's side, for one attempt. `pin` stores the joiner (its node id and name) and is called only once the code is
-/// proved and used up. Returns what `pin` returned.
+/// The host's side, for one connection. `pin` stores the joiner (its node id and name) and is called only once the code
+/// is proved and used up. Returns what `pin` returned.
 ///
-/// An attempt that sends nothing within [`FIRST_FRAME_TIMEOUT`], or whose connection ends before a first message, is
-/// released and does not count against the code. Any other failure, or an attempt that is dropped, does. Once the joiner
-/// is pinned the pairing is done: the host's name is sent after that as a courtesy (the joiner pins the host when it
-/// has it), and a failure to send it is only logged, because the joiner may be gone and the device is paired.
+/// The connection waits for its first message without an attempt: a connection that sends nothing within
+/// [`FIRST_FRAME_TIMEOUT`], or that ends before a first message, is [`Error::PairingTimedOut`] and costs the code
+/// nothing, and any number of them (up to the caps of the accept loop) can wait at once. The connection whose first
+/// message arrives takes the attempt of `host`; one that finds another running, or the code gone, is
+/// [`Error::PairingRejected`] and is not counted. From the attempt on, any failure, or the attempt being dropped,
+/// counts against the code.
+///
+/// Once the joiner is pinned the pairing is done and the device is returned at once. The host's name is sent after
+/// that, by a task of its own that also closes `conn` (the joiner pins the host when it has the name, and may be gone):
+/// a failure to send is only logged, and the caller must not close `conn` after an `Ok`.
 pub async fn host_session(
     conn: &Connection,
     own_id: &EndpointId,
-    attempt: Attempt,
+    host: &Arc<PairingHost>,
     own_name: &str,
-    pin: impl FnOnce(EndpointId, &str) -> Result<Device>,
+    pin: impl AsyncFnOnce(EndpointId, String) -> Result<Device>,
 ) -> Result<Device> {
     let joiner_id = conn.remote_id();
 
@@ -91,14 +102,18 @@ pub async fn host_session(
     let (mut channel, hello) = match timeout(FIRST_FRAME_TIMEOUT, first).await {
         Ok(Ok(started)) => started,
         // The stream or the connection ended, or nothing came: the joiner has not tried the code.
-        Ok(Err(Error::PairingRejected | Error::PairingTimedOut)) | Err(_) => {
-            attempt.release();
-            return Err(Error::PairingTimedOut);
-        }
+        Ok(Err(Error::PairingRejected | Error::PairingTimedOut)) | Err(_) => return Err(Error::PairingTimedOut),
         Ok(Err(error)) => {
-            attempt.fail();
+            // Something came that is not a message: that is a try, if the code is free for one.
+            if let Some(attempt) = host.start_attempt() {
+                attempt.fail();
+            }
             return Err(error);
         }
+    };
+
+    let Some(attempt) = host.start_attempt() else {
+        return Err(Error::PairingRejected);
     };
 
     let work = async {
@@ -137,9 +152,17 @@ pub async fn host_session(
         return Err(Error::PairingRejected);
     }
 
-    let device = pin(joiner_id, &joiner_name)?;
+    let device = pin(joiner_id, joiner_name).await?;
 
-    match channel.send(own_name.as_bytes()).await {
+    tokio::spawn(send_name_and_close(conn.clone(), channel, own_name.to_owned()));
+
+    Ok(device)
+}
+
+/// The end of a pairing that is done: the host's name goes to the joiner, and the connection is closed once the joiner
+/// has taken it (or [`LINGER`] has passed).
+async fn send_name_and_close(conn: Connection, mut channel: Channel, name: String) {
+    match channel.send(name.as_bytes()).await {
         Ok(()) => {
             channel.finish();
             // Closing the connection now could drop the last message before the joiner has it.
@@ -148,7 +171,7 @@ pub async fn host_session(
         Err(error) => tracing::debug!(%error, "the pairing was saved but the joiner did not take the host's name"),
     }
 
-    Ok(device)
+    conn.close(CLOSE_DONE, b"paired");
 }
 
 /// Reads a frame that is a device name and checks it.

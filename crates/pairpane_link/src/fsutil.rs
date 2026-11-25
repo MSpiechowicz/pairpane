@@ -8,6 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::{Error, Result};
 
+/// The name of the lock file in the data folder, held by the running service and by anything else that changes the
+/// folder's files while it is not running.
+pub const LOCK_FILE_NAME: &str = "link.lock";
+
 /// Reads the whole file, or `None` when it does not exist. A file of more than `cap` bytes is refused with
 /// `InvalidData` and is never read past `cap + 1` bytes, whatever its size claims to be.
 pub fn read_capped(path: &Path, cap: u64) -> io::Result<Option<Vec<u8>>> {

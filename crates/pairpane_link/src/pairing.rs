@@ -13,9 +13,7 @@ pub use host::{CODE_TTL, Change, MAX_FAILURES, PairingEndReason, PairingHost, Pa
 pub use proto::{Handshake, Role, tags_match};
 
 #[cfg(test)]
-pub(crate) use proto::{MESSAGE_LEN, TAG_LEN};
-#[cfg(test)]
-pub(crate) use session::FIRST_FRAME_TIMEOUT;
+pub(crate) use proto::{Confirmation, MESSAGE_LEN, TAG_LEN};
 pub(crate) use session::{SESSION_TIMEOUT, host_session, join_session};
 
 /// The ALPN of the pairing protocol.

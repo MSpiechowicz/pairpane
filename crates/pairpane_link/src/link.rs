@@ -15,16 +15,17 @@ mod config;
 mod ctx;
 mod discovery;
 mod hello;
+mod local_net;
 mod target;
 
 use std::fs::File;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use iroh::endpoint::{Connection, VarInt};
+use iroh::endpoint::Connection;
 use iroh::{EndpointId, TransportAddr};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -36,7 +37,7 @@ pub use discovery::{Discovery, Found};
 pub use hello::{HELLO_VERSION, LINK_ALPN};
 pub use target::Target;
 
-use ctx::{Ctx, lock, now_ms};
+use ctx::{Ctx, lock};
 use hello::Probe;
 
 use crate::code::PairingCode;
@@ -45,6 +46,7 @@ use crate::error::{Error, Result};
 use crate::fsutil;
 use crate::identity::{KeyStores, StoreKind, open_identity};
 use crate::pairing::{Change, PAIR_ALPN, PairingHost, PairingOffer, PairingState, SESSION_TIMEOUT, join_session};
+use crate::wire::{CLOSE_DONE, CLOSE_REFUSED};
 
 /// The UDP port tried first, so a device keeps its address over a VPN.
 pub const DEFAULT_PORT: u16 = 47620;
@@ -52,26 +54,14 @@ pub const DEFAULT_PORT: u16 = 47620;
 /// The most connections that are set up or served at once; more are refused.
 pub const MAX_CONNECTIONS: usize = 32;
 
-/// The name of the lock file in the data folder.
-const LOCK_FILE_NAME: &str = "link.lock";
-
 /// How long a connection to a device to pair with may take to be set up.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// The application error code of a connection that ended well.
-const CLOSE_DONE: VarInt = VarInt::from_u32(0);
-/// The application error code of a connection that was turned down: the protocol is not allowed now, or the device is
-/// not paired.
-const CLOSE_NOT_ALLOWED: VarInt = VarInt::from_u32(1);
-/// The application error code of a pairing that failed.
-const CLOSE_REFUSED: VarInt = VarInt::from_u32(2);
 
 /// The running service. Keep it for as long as the app runs and call [`Link::shutdown`] when it ends; dropping it stops
 /// its tasks and closes the endpoint, but without waiting for the peers.
 pub struct Link {
     ctx: Arc<Ctx>,
     key_store: StoreKind,
-    closed: AtomicBool,
     /// The lock on the data folder, held until the service is shut down.
     folder_lock: Mutex<Option<File>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
@@ -86,7 +76,7 @@ impl Link {
     /// connections and finding devices.
     pub async fn start(config: LinkConfig, stores: KeyStores) -> Result<Self> {
         let name = validate_name(&config.device_name)?;
-        let folder_lock = fsutil::lock_dir(&config.data_dir, LOCK_FILE_NAME)?;
+        let folder_lock = fsutil::lock_dir(&config.data_dir, fsutil::LOCK_FILE_NAME)?;
 
         let devices = DeviceStore::open(&config.data_dir)?;
         let has_devices = !devices.list().is_empty();
@@ -112,7 +102,6 @@ impl Link {
         Ok(Self {
             ctx,
             key_store,
-            closed: AtomicBool::new(false),
             folder_lock: Mutex::new(Some(folder_lock)),
             tasks: Mutex::new(tasks),
             expiry: Mutex::new(None),
@@ -120,7 +109,7 @@ impl Link {
     }
 
     fn open(&self) -> Result<()> {
-        if self.closed.load(Ordering::Acquire) {
+        if self.ctx.closed.load(Ordering::Acquire) {
             return Err(Error::Closed);
         }
 
@@ -143,13 +132,18 @@ impl Link {
 
     /// Makes a pairing code and starts accepting pairings with it. A code that is active is replaced. While it is active
     /// the device is announced on the local network (unless discovery is off), so the other device can find it.
+    ///
+    /// The timer that ends the code is a task of the async runtime, so this must be called where one is running (on
+    /// one of its threads, or inside [`tokio::runtime::Handle::enter`]); anywhere else it is [`Error::NoRuntime`], and
+    /// no code is made. This is a plain function, not an async one, so a caller that is not async can use it.
     pub fn begin_pairing(&self) -> Result<PairingOffer> {
         self.open()?;
+        let runtime = tokio::runtime::Handle::try_current().map_err(|_| Error::NoRuntime)?;
         let offer = self.ctx.host.begin()?;
 
         let host = Arc::clone(&self.ctx.host);
         let due = offer.expires_in;
-        let timer = tokio::spawn(async move {
+        let timer = runtime.spawn(async move {
             tokio::time::sleep(due).await;
             host.check_expiry();
         });
@@ -183,8 +177,10 @@ impl Link {
     /// Pairs with the device at `target` by the code its user sees. On success both devices have pinned each other and
     /// the host's [`Device`] is returned. A wrong, used, expired or cancelled code is [`Error::PairingRejected`].
     ///
-    /// The addresses of the target are tried first, then what is kept about the device and what mDNS found. The device
-    /// is kept with the address the connection really used and the addresses that were typed.
+    /// The addresses of the target are tried first, then what is kept about the device, what was remembered in memory
+    /// and what mDNS found; this last also for a target made from a [`Found`], which carries no addresses of its own.
+    /// The device is kept with the address the connection really used, the addresses that were typed and the ones
+    /// given earlier to [`Link::remember_addresses`], but never with what mDNS said.
     pub async fn join(&self, code: &str, target: &Target) -> Result<Device> {
         let code = PairingCode::parse(code)?;
         self.open()?;
@@ -198,19 +194,16 @@ impl Link {
         };
 
         // Only addresses that are known to be the device's: the one the authenticated connection used and the ones the
-        // user typed, not what mDNS said.
+        // user typed (what was remembered about the device is added when it is pinned), not what mDNS said.
         let addrs: Vec<SocketAddr> = used_addr(&conn)
             .into_iter()
             .chain(target.addrs.iter().copied())
             .collect();
-        let device =
-            paired.and_then(|(node_id, name)| self.ctx.devices().add_with_addrs(node_id, &name, now_ms(), &addrs));
+        let device = match paired {
+            Ok((node_id, name)) => self.ctx.pin(node_id, name, addrs).await,
+            Err(error) => Err(error),
+        };
         conn.close(if device.is_ok() { CLOSE_DONE } else { CLOSE_REFUSED }, b"pairing over");
-
-        if let Ok(device) = &device {
-            // The device list has its addresses now.
-            self.ctx.forget(&device.node_id);
-        }
 
         device
     }
@@ -234,14 +227,13 @@ impl Link {
     /// Gives a paired device a new name.
     pub fn rename_device(&self, node_id: &EndpointId, name: &str) -> Result<()> {
         self.open()?;
-        self.ctx.devices().rename(node_id, name)
+        self.ctx.writer()?.rename(node_id, name)
     }
 
     /// Unpairs a device: it can no longer connect, and this device forgets it and where it was.
     pub fn unpair(&self, node_id: &EndpointId) -> Result<()> {
         self.open()?;
-        self.ctx.devices().remove(node_id)?;
-        self.ctx.forget(node_id);
+        self.ctx.unpair(node_id)?;
 
         let _ = self.ctx.events.send(LinkEvent::Unpaired(*node_id));
         Ok(())
@@ -269,7 +261,7 @@ impl Link {
 
         let status = match hello::probe(&self.ctx, self.ctx.dial(*node_id, &[])).await {
             Probe::Answered { hello, addr } => {
-                self.ctx.remember(*node_id, addr);
+                self.ctx.remember_in_background(*node_id, addr);
                 Status::Online { name: hello.name }
             }
             Probe::Refused => Status::Refused,
@@ -309,7 +301,7 @@ impl Link {
     /// Stops the service: no new connections are accepted, the open ones are closed and the lock on the data folder is
     /// let go. Every call after this returns [`Error::Closed`].
     pub async fn shutdown(&self) {
-        if self.closed.swap(true, Ordering::AcqRel) {
+        if self.ctx.closed.swap(true, Ordering::AcqRel) {
             return;
         }
 
@@ -320,6 +312,10 @@ impl Link {
         }
 
         self.ctx.endpoint.close().await;
+
+        // A change of the device list that is being written finishes first, and none starts after this (see
+        // `Ctx::writer`), so the lock on the folder is let go only when nothing of this service writes in it.
+        drop(self.ctx.devices());
         lock(&self.folder_lock).take();
     }
 }
@@ -332,7 +328,7 @@ impl Drop for Link {
         self.replace_timer(None);
 
         // Closing waits for the peers, which Drop cannot do; it is left to the runtime if there is one.
-        if !self.closed.load(Ordering::Acquire)
+        if !self.ctx.closed.load(Ordering::Acquire)
             && let Ok(runtime) = tokio::runtime::Handle::try_current()
         {
             let endpoint = self.ctx.endpoint.clone();
@@ -379,3 +375,7 @@ mod tests;
 #[cfg(test)]
 #[path = "link_hardening_tests.rs"]
 mod hardening_tests;
+
+#[cfg(test)]
+#[path = "link_pairing_tests.rs"]
+mod pairing_tests;

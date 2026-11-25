@@ -24,6 +24,9 @@ pub enum Error {
     KeyUnavailable(String),
     /// The stored device key is not the one this device was set up with.
     KeyMismatch,
+    /// The identity marker file (`link-identity.json`, which names the store of the device key) is damaged or of a
+    /// version this build does not know. Nothing secret is in it; the key itself is not affected.
+    CorruptIdentityMarker,
     /// Another link service already runs on the same data folder.
     AlreadyRunning,
     /// The device list is too large, is not valid JSON, has a field it should not have or holds a bad record.
@@ -52,6 +55,8 @@ pub enum Error {
     Random,
     /// The link service has been shut down.
     Closed,
+    /// The call needs a running async runtime on the calling thread (the pairing timer is a task of it) and there is none.
+    NoRuntime,
 }
 
 impl fmt::Display for Error {
@@ -67,6 +72,7 @@ impl fmt::Display for Error {
                 )
             }
             Self::KeyMismatch => out.write_str("the stored device key is not the key of this device"),
+            Self::CorruptIdentityMarker => out.write_str("the file that names the device key's store is damaged"),
             Self::AlreadyRunning => out.write_str("the link already runs on this folder"),
             Self::InsecureKeyFile => out.write_str("the key file can be read by other users"),
             Self::CorruptKey => out.write_str("the stored device key is damaged"),
@@ -83,6 +89,7 @@ impl fmt::Display for Error {
             Self::Protocol(what) => write!(out, "the other device broke the protocol: {what}"),
             Self::Random => out.write_str("the system's random generator failed"),
             Self::Closed => out.write_str("the link is shut down"),
+            Self::NoRuntime => out.write_str("no async runtime is running on this thread"),
         }
     }
 }

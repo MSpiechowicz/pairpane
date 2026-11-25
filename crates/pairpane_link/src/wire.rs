@@ -5,10 +5,18 @@
 use std::future::Future;
 use std::time::Duration;
 
-use iroh::endpoint::{Connection, RecvStream, SendStream};
+use iroh::endpoint::{Connection, RecvStream, SendStream, VarInt};
 use tokio::time::timeout;
 
 use crate::error::{Error, Result};
+
+/// The application error code of a connection that ended well.
+pub const CLOSE_DONE: VarInt = VarInt::from_u32(0);
+/// The application error code of a connection that was turned down: the protocol is not allowed now, or the device is
+/// not paired.
+pub const CLOSE_NOT_ALLOWED: VarInt = VarInt::from_u32(1);
+/// The application error code of a pairing that failed.
+pub const CLOSE_REFUSED: VarInt = VarInt::from_u32(2);
 
 /// The most bytes in one frame.
 pub const MAX_FRAME: usize = 4096;
@@ -81,7 +89,7 @@ impl Channel {
     /// Tells the peer to stop sending on this stream, so its next write fails. For tests of a peer that goes away.
     #[cfg(test)]
     pub fn stop_receiving(&mut self) {
-        let _ = self.recv.stop(iroh::endpoint::VarInt::from_u32(0));
+        let _ = self.recv.stop(VarInt::from_u32(0));
     }
 
     /// Ends the sending half, so the peer reads what was sent and then the end of the stream.

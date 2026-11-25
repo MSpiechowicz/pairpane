@@ -3,12 +3,13 @@
 
 use std::time::Duration;
 
-use iroh::endpoint::ConnectionError;
+use iroh::endpoint::{ConnectionError, VarInt};
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 use super::*;
 use crate::pairing::{MAX_FAILURES, PairingEndReason};
+use crate::wire::CLOSE_NOT_ALLOWED;
 
 pub(super) struct Node {
     pub(super) link: Link,
@@ -365,8 +366,9 @@ async fn the_service_binds_to_the_next_port_when_the_first_is_taken() {
 
     let second_port = second.link.this_device().unwrap().bound[0].port();
     assert!(second_port != 0);
-    // Where a second socket can share a port (Windows lets it), the first port is used and this holds nothing.
-    if cfg!(unix) {
+    // Where a second socket can share a port (Windows and macOS let it), the first port is used and this holds nothing;
+    // only Linux is sure to refuse it.
+    if cfg!(target_os = "linux") {
         assert!(second_port != taken);
     }
 }
@@ -449,13 +451,18 @@ async fn the_host_keeps_the_address_a_device_paired_and_connected_from() {
 
     assert_eq!(host.link.devices().unwrap()[0].addrs, vec![joiner_addr]);
 
-    // The address of every authenticated link connection goes to the front again: the probe moves it before :9.
+    // The address of every authenticated link connection goes to the front again: the probe moves it before :9. It is
+    // written by a thread for blocking work, so it is waited for.
     host.link
         .remember_addresses(joiner.id(), vec!["127.0.0.1:9".parse().unwrap()])
         .unwrap();
     joiner.link.status(&host.id()).await.unwrap();
-    assert_eq!(
-        host.link.devices().unwrap()[0].addrs,
-        vec![joiner_addr, "127.0.0.1:9".parse().unwrap()]
-    );
+    let expected = vec![joiner_addr, "127.0.0.1:9".parse().unwrap()];
+    timeout(Duration::from_secs(20), async {
+        while host.link.devices().unwrap()[0].addrs != expected {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the address of the connection was kept");
 }

@@ -10,17 +10,17 @@ use iroh_mdns_address_lookup::DiscoveryEvent;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
-use super::tests::{Node, closed_with, wrong_code};
+use super::tests::Node;
 use super::*;
-use crate::pairing::{Handshake, MAX_FAILURES, MESSAGE_LEN, PAIR_VERSION, PairingEndReason, Role, TAG_LEN};
 use crate::wire::Channel;
 
 fn stranger() -> EndpointId {
     SecretKey::generate().public()
 }
 
+/// An address that is on a private network, as an address that a hostile device on the local network would announce.
 fn evil() -> SocketAddr {
-    "192.0.2.66:9".parse().unwrap()
+    "192.168.250.66:9".parse().unwrap()
 }
 
 /// Tells the service that mDNS found a device at `addrs`.
@@ -31,15 +31,6 @@ fn announce(node: &Node, node_id: EndpointId, addrs: Vec<SocketAddr>) {
     };
 
     discovery::record(&node.link.ctx, event);
-}
-
-async fn next_ending(events: &mut broadcast::Receiver<LinkEvent>) -> PairingEndReason {
-    loop {
-        let event = timeout(Duration::from_secs(10), events.recv()).await.unwrap().unwrap();
-        if let LinkEvent::PairingEnded { reason } = event {
-            return reason;
-        }
-    }
 }
 
 #[tokio::test]
@@ -53,7 +44,7 @@ async fn an_mdns_announcement_is_tried_but_never_stored() {
 
     assert_eq!(joiner.link.devices().unwrap()[0].addrs, stored);
     let file = std::fs::read_to_string(joiner.dir.path().join("link-devices.json")).unwrap();
-    assert!(!file.contains("192.0.2.66"), "{file}");
+    assert!(!file.contains("192.168.250.66"), "{file}");
     // It is listed and dialled, since it may be right.
     assert_eq!(joiner.link.discovered().unwrap()[0].addrs, vec![evil()]);
     assert!(
@@ -67,17 +58,16 @@ async fn an_mdns_announcement_is_tried_but_never_stored() {
 }
 
 #[tokio::test]
-async fn a_join_by_node_id_keeps_the_address_it_used_and_not_what_mdns_said() {
+async fn a_join_by_a_found_device_keeps_the_address_it_used_and_not_what_mdns_said() {
     let host = Node::start("host").await;
     let joiner = Node::start("joiner").await;
     let real = host.target().addrs;
     announce(&joiner, host.id(), [real.clone(), vec![evil()]].concat());
     let offer = host.link.begin_pairing().unwrap();
 
-    let by_id = Target {
-        node_id: host.id(),
-        addrs: Vec::new(),
-    };
+    let found = joiner.link.discovered().unwrap().remove(0);
+    let by_id = Target::from(&found);
+    assert!(by_id.addrs.is_empty(), "the target of a found device has no addresses");
     joiner.link.join(&offer.code, &by_id).await.unwrap();
 
     assert_eq!(joiner.link.devices().unwrap()[0].addrs, real);
@@ -155,101 +145,6 @@ async fn unpairing_forgets_where_the_device_was() {
 }
 
 #[tokio::test]
-async fn the_device_is_saved_even_when_the_joiner_does_not_take_the_hosts_name() {
-    let host = Node::start("host").await;
-    let joiner = Node::start("joiner").await;
-    let mut events = host.link.subscribe().unwrap();
-    let offer = host.link.begin_pairing().unwrap();
-    let code = PairingCode::parse(&offer.code).unwrap();
-
-    // A joiner that does the whole exchange and then tells the host to stop sending to it.
-    let conn = joiner
-        .link
-        .ctx
-        .endpoint
-        .connect(host.target().into_addr(), PAIR_ALPN)
-        .await
-        .unwrap();
-    let handshake = Handshake::start(Role::Join, &code);
-    let mut channel = Channel::open(&conn).await.unwrap();
-    channel
-        .send(&[&[PAIR_VERSION], handshake.message()].concat())
-        .await
-        .unwrap();
-    let host_message = channel.recv_exact(MESSAGE_LEN).await.unwrap();
-    let confirmation = handshake.finish(&host_message, &joiner.id(), &host.id()).unwrap();
-    channel.send(&confirmation.tag(Role::Join)).await.unwrap();
-    channel.recv_exact(TAG_LEN).await.unwrap();
-    channel.stop_receiving();
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    channel.send(b"joiner").await.unwrap();
-
-    let device = timeout(Duration::from_secs(10), async {
-        loop {
-            if let LinkEvent::Paired(device) = events.recv().await.unwrap() {
-                return device;
-            }
-        }
-    })
-    .await
-    .expect("the pairing is announced");
-    assert_eq!((device.node_id, device.name.as_str()), (joiner.id(), "joiner"));
-    assert_eq!(host.link.devices().unwrap(), vec![device]);
-}
-
-#[tokio::test]
-async fn a_connection_that_sends_nothing_does_not_use_up_a_try() {
-    let host = Node::start("host").await;
-    let joiner = Node::start("joiner").await;
-    let offer = host.link.begin_pairing().unwrap();
-
-    let silent = joiner
-        .link
-        .ctx
-        .endpoint
-        .connect(host.target().into_addr(), PAIR_ALPN)
-        .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert!(
-        host.link.ctx.host.start_attempt().is_none(),
-        "the silent connection holds the attempt for now"
-    );
-
-    tokio::time::sleep(crate::pairing::FIRST_FRAME_TIMEOUT + Duration::from_millis(700)).await;
-
-    let PairingState::Waiting { attempts_left, .. } = host.link.pairing_state().unwrap() else {
-        panic!("the code is still active");
-    };
-    assert_eq!(attempts_left, MAX_FAILURES);
-    joiner.link.join(&offer.code, &host.target()).await.unwrap();
-    drop(silent);
-}
-
-#[tokio::test]
-async fn an_attempt_that_sent_the_key_exchange_message_still_counts() {
-    let host = Node::start("host").await;
-    let joiner = Node::start("joiner").await;
-    host.link.begin_pairing().unwrap();
-
-    let conn = joiner
-        .link
-        .ctx
-        .endpoint
-        .connect(host.target().into_addr(), PAIR_ALPN)
-        .await
-        .unwrap();
-    let mut channel = Channel::open(&conn).await.unwrap();
-    channel.send(&[PAIR_VERSION; 1 + MESSAGE_LEN]).await.unwrap();
-    closed_with(&conn).await;
-
-    let PairingState::Waiting { attempts_left, .. } = host.link.pairing_state().unwrap() else {
-        panic!("the code is still active");
-    };
-    assert_eq!(attempts_left, MAX_FAILURES - 1);
-}
-
-#[tokio::test]
 async fn a_hello_of_another_version_is_not_answered() {
     let host = Node::start("host").await;
     let joiner = Node::start("joiner").await;
@@ -302,36 +197,6 @@ async fn the_count_of_connections_of_an_address_goes_down_when_they_end() {
 
     drop(guards);
     assert!(node.link.ctx.admit(ip).is_some());
-}
-
-#[tokio::test]
-async fn the_end_of_a_code_is_reported_with_its_reason() {
-    let host = Node::start_with("host", |config| config.pairing_ttl = Duration::from_millis(300)).await;
-    let joiner = Node::start("joiner").await;
-    let mut events = host.link.subscribe().unwrap();
-
-    // Used up.
-    host.pair_with(&joiner).await;
-    assert_eq!(next_ending(&mut events).await, PairingEndReason::Used);
-
-    // Cancelled, and replaced.
-    host.link.begin_pairing().unwrap();
-    host.link.begin_pairing().unwrap();
-    assert_eq!(next_ending(&mut events).await, PairingEndReason::Cancelled);
-    host.link.cancel_pairing().unwrap();
-    assert_eq!(next_ending(&mut events).await, PairingEndReason::Cancelled);
-
-    // Expired, with nobody calling anything.
-    host.link.begin_pairing().unwrap();
-    assert_eq!(next_ending(&mut events).await, PairingEndReason::Expired);
-
-    // Failed too often.
-    let offer = host.link.begin_pairing().unwrap();
-    let wrong = wrong_code(&offer);
-    for _ in 0..MAX_FAILURES {
-        joiner.link.join(wrong, &host.target()).await.unwrap_err();
-    }
-    assert_eq!(next_ending(&mut events).await, PairingEndReason::TooManyAttempts);
 }
 
 #[tokio::test]
@@ -408,4 +273,109 @@ async fn the_identity_marker_names_the_device_and_holds_no_secret() {
 
     assert!(marker.contains(&node.id().to_string()));
     assert!(marker.contains("memory"));
+}
+
+#[tokio::test]
+async fn a_found_device_lists_only_addresses_of_the_users_networks_and_at_most_eight() {
+    let node = Node::start("node").await;
+    let (many, global_only, mixed) = (stranger(), stranger(), stranger());
+    let private: Vec<SocketAddr> = (1..=12u16)
+        .map(|port| SocketAddr::from(([192, 168, 1, 7], port)))
+        .collect();
+    let global: Vec<SocketAddr> = vec![
+        "203.0.113.9:47620".parse().unwrap(),
+        "[2001:db8::1]:47620".parse().unwrap(),
+    ];
+
+    announce(&node, many, private.clone());
+    announce(&node, global_only, global.clone());
+    announce(&node, mixed, [global.clone(), vec![evil()]].concat());
+
+    let list = node.link.discovered().unwrap();
+    let addrs_of = |id: EndpointId| list.iter().find(|found| found.node_id == id).unwrap().addrs.clone();
+    assert_eq!(addrs_of(many).len(), crate::devices::MAX_ADDRS);
+    assert!(addrs_of(many).iter().all(|addr| private.contains(addr)));
+    assert!(
+        addrs_of(global_only).is_empty(),
+        "the device is listed, with no address to dial"
+    );
+    assert_eq!(addrs_of(mixed), vec![evil()]);
+    assert!(
+        node.link.ctx.dial(global_only, &[]).ip_addrs().next().is_none(),
+        "an address of another network is not dialled either"
+    );
+}
+
+#[tokio::test]
+async fn addresses_given_before_pairing_are_kept_when_the_join_succeeds() {
+    let host = Node::start("host").await;
+    let joiner = Node::start("joiner").await;
+    let typed_earlier: SocketAddr = "10.9.8.7:1234".parse().unwrap();
+    joiner.link.remember_addresses(host.id(), vec![typed_earlier]).unwrap();
+    let offer = host.link.begin_pairing().unwrap();
+
+    joiner.link.join(&offer.code, &host.target()).await.unwrap();
+
+    let used = host.target().addrs;
+    assert_eq!(
+        joiner.link.devices().unwrap()[0].addrs,
+        [used, vec![typed_earlier]].concat()
+    );
+}
+
+#[tokio::test]
+async fn pairing_and_remembering_addresses_at_once_leave_no_stale_memory_behind() {
+    let node = Node::start("node").await;
+    let ctx = &node.link.ctx;
+    let remembered: SocketAddr = "10.9.8.7:1234".parse().unwrap();
+
+    for _ in 0..50 {
+        let id = stranger();
+        std::thread::scope(|scope| {
+            scope.spawn(|| ctx.remember(id, [remembered]));
+            scope.spawn(|| ctx.add_device(id, "device", &[]).map(drop).unwrap());
+        });
+
+        // Whichever came first, the address ended in the device list, and nothing is left in memory for a device that
+        // is paired (it would be dialled for ever, and unpairing would not know to forget it).
+        assert_eq!(ctx.devices().get(&id).unwrap().addrs, vec![remembered]);
+        assert!(!ctx.has_remembered(&id));
+    }
+}
+
+#[tokio::test]
+async fn nothing_is_written_to_the_device_list_after_the_shutdown() {
+    let host = Node::start("host").await;
+    let joiner = Node::start("joiner").await;
+    host.pair_with(&joiner).await;
+    let file = host.dir.path().join("link-devices.json");
+    let before = std::fs::read(&file).unwrap();
+    host.link.shutdown().await;
+
+    host.link.ctx.remember(joiner.id(), [evil()]);
+
+    assert!(matches!(host.link.ctx.writer(), Err(Error::Closed)));
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+}
+
+#[tokio::test]
+async fn the_connections_of_a_source_are_counted_for_the_64_bit_prefix_of_an_ipv6_address() {
+    let node = Node::start("node").await;
+    let ctx = &node.link.ctx;
+    let in_prefix = |last: u16| -> std::net::IpAddr { format!("fd00:1:2:3::{last:x}").parse().unwrap() };
+
+    let guards: Vec<_> = (1..=ctx::MAX_CONNECTIONS_PER_IP as u16)
+        .map(|last| ctx.admit(in_prefix(last)).unwrap())
+        .collect();
+
+    assert!(
+        ctx.admit(in_prefix(0x99)).is_none(),
+        "another address of the same /64 is the same source"
+    );
+    assert!(
+        ctx.admit("fd00:1:2:4::1".parse().unwrap()).is_some(),
+        "another /64 is another source"
+    );
+    drop(guards);
+    assert!(ctx.admit(in_prefix(0x99)).is_some());
 }

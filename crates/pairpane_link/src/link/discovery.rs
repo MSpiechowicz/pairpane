@@ -1,14 +1,16 @@
 //! Finding devices on the local network with mDNS (the `iroh-mdns-address-lookup` crate, which uses swarm-discovery).
 //!
 //! A device that announces itself puts its node id, its addresses (only those of the user's own networks, see
-//! `is_local_network`) and its name in multicast packets on the local network, and every device on that network can
-//! read them, also the ones that are not paired. By default a device announces itself only while a pairing code is active. The name is only a label: nothing
-//! in mDNS is authenticated, so a connection to a found device is still checked against its node id, and pairing
-//! against the code, and what mDNS says is never written to disk. The service name `pairpane-link` keeps these records apart from other programs that use iroh.
+//! [`is_local_network`]) and its name in multicast packets on the local network, and every device on that network can
+//! read them, also the ones that are not paired. By default a device announces itself only while a pairing code is
+//! active. The name is only a label: nothing in mDNS is authenticated, so a connection to a found device is still
+//! checked against its node id, and pairing against the code, and what mDNS says is never written to disk. Of what a
+//! device reports, only the addresses on the user's own networks are listed, and at most [`MAX_ADDRS`] of them. The
+//! service name `pairpane-link` keeps these records apart from other programs that use iroh.
 
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap};
-use std::net::{IpAddr, SocketAddr};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use iroh::address_lookup::AddrFilter;
@@ -19,7 +21,8 @@ use n0_future::StreamExt;
 use tokio::sync::watch;
 
 use super::ctx::{Ctx, MAX_REMEMBERED, lock};
-use crate::devices::validate_name;
+use super::local_net::{is_local_network, is_local_peer};
+use crate::devices::{MAX_ADDRS, validate_name};
 
 /// The mDNS service name of Pairpane devices.
 const SERVICE_NAME: &str = "pairpane-link";
@@ -44,8 +47,9 @@ pub struct Found {
     pub node_id: EndpointId,
     /// The name it announced, if any. Anyone on the network can announce any name.
     pub name: Option<String>,
-    /// The addresses it announced. They are only tried when connecting, never kept, because anyone on the network can
-    /// announce any address.
+    /// The addresses it announced that are on the user's own networks, at most eight. They are only tried when
+    /// connecting, never kept, because anyone on the network can announce any address. A join by this device (with a
+    /// [`Target`](super::Target) made from it) dials them even though the target carries none.
     pub addrs: Vec<SocketAddr>,
     /// Whether the device is paired with this one.
     pub paired: bool,
@@ -67,18 +71,6 @@ pub fn announced_name(name: &str) -> Option<UserData> {
     }
 
     name[..end].to_owned().try_into().ok()
-}
-
-/// Whether an address is on a network of the user's own: a private IPv4 range, the shared address space of Tailscale and
-/// carrier-grade NAT (100.64.0.0/10), link-local, or an IPv6 unique local (fc00::/7) or link-local (fe80::/10) address.
-/// Global addresses are not announced to the local network.
-pub fn is_local_network(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            ip.is_private() || ip.is_link_local() || (ip.octets()[0] == 100 && ip.octets()[1] & 0xC0 == 64)
-        }
-        IpAddr::V6(ip) => (ip.segments()[0] & 0xFE00) == 0xFC00 || (ip.segments()[0] & 0xFFC0) == 0xFE80,
-    }
 }
 
 /// The filter of what is announced: addresses on the user's own networks, and no relay.
@@ -154,13 +146,22 @@ pub(crate) fn record(ctx: &Ctx, event: DiscoveryEvent) {
             }
 
             if found.len() >= MAX_REMEMBERED && !found.contains_key(&node_id) {
-                evict_oldest(ctx, &mut found, ctx.is_paired(&node_id));
+                // One look at the device list for the whole event, not one per entry of the found list.
+                let paired: HashSet<EndpointId> = ctx.devices().list().iter().map(|device| device.node_id).collect();
+                if !make_room(&mut found, &paired, paired.contains(&node_id)) {
+                    return;
+                }
             }
 
             let name = endpoint_info
                 .user_data()
                 .and_then(|data| validate_name(data.as_ref()).ok());
-            let addrs = endpoint_info.ip_addrs().copied().collect();
+            let addrs = endpoint_info
+                .ip_addrs()
+                .copied()
+                .filter(|addr| is_local_peer(addr.ip()))
+                .take(MAX_ADDRS)
+                .collect();
             found.insert(
                 node_id,
                 FoundEntry {
@@ -177,21 +178,30 @@ pub(crate) fn record(ctx: &Ctx, event: DiscoveryEvent) {
     }
 }
 
-/// Makes room in the full list for a new device: the one heard longest ago goes, and a device that is paired is the last
-/// to go, so a flood of made-up devices cannot push out the real ones.
-fn evict_oldest(ctx: &Ctx, found: &mut HashMap<EndpointId, FoundEntry>, newcomer_is_paired: bool) {
-    let oldest = |paired: bool| {
+/// Makes room in the full list for a new device, and says whether it did. The device heard longest ago that is not in
+/// `paired` goes; a device that is paired goes only for a newcomer that is paired too, so a flood of made-up devices
+/// cannot push out the real ones. When nothing may go (every entry is paired and the newcomer is not) the newcomer is not
+/// to be added, or the list would grow past its limit.
+fn make_room(
+    found: &mut HashMap<EndpointId, FoundEntry>,
+    paired: &HashSet<EndpointId>,
+    newcomer_is_paired: bool,
+) -> bool {
+    let oldest = |is_paired: bool| {
         found
             .iter()
-            .filter(|(id, _)| ctx.is_paired(id) == paired)
+            .filter(|(id, _)| paired.contains(*id) == is_paired)
             .min_by_key(|(_, entry)| entry.seen)
             .map(|(id, _)| *id)
     };
 
-    // A newcomer that is not paired may not take the place of one that is.
     let victim = oldest(false).or_else(|| newcomer_is_paired.then(|| oldest(true)).flatten());
-    if let Some(victim) = victim {
-        found.remove(&victim);
+    match victim {
+        Some(victim) => {
+            found.remove(&victim);
+            true
+        }
+        None => false,
     }
 }
 

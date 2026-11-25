@@ -4,7 +4,8 @@
 //! other files: the store's kind and the node id (the public key), nothing secret. From then on the marker decides: the
 //! key is read from that store only, and if that fails (a locked keyring, a Secret Service that is slow to start) the
 //! start fails with [`Error::KeyUnavailable`] instead of making a new key. A new key would be a new node id, which every
-//! paired device would refuse. The key read must also be the one the marker names.
+//! paired device would refuse. The key read must also be the one the marker names. A marker that cannot be read is
+//! [`Error::CorruptIdentityMarker`], which is not a problem of the keyring.
 //!
 //! With no marker, a key file that is there wins, then the keychain is used (a key that is in it, or a new one). A file
 //! is made instead only when the system has no keychain at all and no device is paired yet.
@@ -133,7 +134,7 @@ fn read_marker(dir: &Path) -> Result<Option<Marker>> {
 }
 
 fn damaged() -> Error {
-    Error::KeyUnavailable("the identity marker file is damaged".to_owned())
+    Error::CorruptIdentityMarker
 }
 
 #[cfg(test)]

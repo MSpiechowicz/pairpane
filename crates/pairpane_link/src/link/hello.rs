@@ -12,7 +12,7 @@ use tokio::time::timeout;
 use super::ctx::Ctx;
 use crate::devices::validate_name;
 use crate::error::{Error, Result};
-use crate::wire::Channel;
+use crate::wire::{CLOSE_DONE, CLOSE_NOT_ALLOWED, Channel};
 
 /// The ALPN of a link between paired devices.
 pub const LINK_ALPN: &[u8] = b"pairpane/link/1";
@@ -95,7 +95,7 @@ async fn exchange(ctx: &Ctx, addr: EndpointAddr) -> Probe {
         Err(_) => refusal_or_unreachable(&conn).await,
     };
 
-    conn.close(super::CLOSE_DONE, b"bye");
+    conn.close(CLOSE_DONE, b"bye");
     probe
 }
 
@@ -109,9 +109,7 @@ async fn refusal_or_unreachable(conn: &Connection) -> Probe {
     };
 
     match reason {
-        Some(ConnectionError::ApplicationClosed(close)) if close.error_code == super::CLOSE_NOT_ALLOWED => {
-            Probe::Refused
-        }
+        Some(ConnectionError::ApplicationClosed(close)) if close.error_code == CLOSE_NOT_ALLOWED => Probe::Refused,
         _ => Probe::Unreachable,
     }
 }

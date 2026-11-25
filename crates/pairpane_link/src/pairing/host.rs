@@ -2,10 +2,10 @@
 //! attempt is using it now.
 //!
 //! A code lives for [`CODE_TTL`], is used up by the first pairing that succeeds, is cancelled when [`MAX_FAILURES`]
-//! attempts in total have failed, and only one attempt runs at a time. An attempt that gets as far as the key exchange
-//! and does not succeed counts as a failure, also one that is dropped half way, so a peer cannot get more tries. An
-//! attempt that never sent anything is [released](Attempt::release) without counting: a connection that only sits
-//! there must not use up the tries of the user who shows the code.
+//! attempts in total have failed, and only one attempt runs at a time. An attempt is started by a connection that has
+//! sent its first message (see [`PairingHost::start_attempt`]), so a connection that only sits there neither blocks the
+//! user who shows the code nor uses up their tries. An attempt that does not succeed counts as a failure, also one that
+//! is dropped half way, so a peer cannot get more tries.
 
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -97,6 +97,9 @@ struct State {
 pub struct PairingHost {
     ttl: Duration,
     state: Mutex<State>,
+    /// Held from a change of the state until the observer has been told, so the observer hears the changes in the order
+    /// they happened. The state lock is not held that long, because the observer runs while this one is.
+    order: Mutex<()>,
     observer: OnceLock<Observer>,
 }
 
@@ -106,12 +109,15 @@ impl PairingHost {
         Arc::new(Self {
             ttl,
             state: Mutex::new(State::default()),
+            order: Mutex::new(()),
             observer: OnceLock::new(),
         })
     }
 
-    /// Sets the function that is told when a code becomes active and when it ends, from whatever thread caused it and
-    /// never while the host's state is locked. It can be set once.
+    /// Sets the function that is told when a code becomes active and when it ends, from whatever thread caused it, one
+    /// change at a time and in the order the changes happened (a new code that replaces another is an end and then a
+    /// beginning). It is never called while the host's state is locked, but it must not call the host's methods that
+    /// change a code or ask its state: the host is waiting for it. It can be set once.
     pub fn observe(&self, observer: impl Fn(Change) + Send + Sync + 'static) {
         let _ = self.observer.set(Box::new(observer));
     }
@@ -120,6 +126,7 @@ impl PairingHost {
     /// a failure of the old code, which no longer exists.
     pub fn begin(&self) -> Result<PairingOffer> {
         let code = PairingCode::generate()?;
+        let _order = self.ordered();
         let mut state = self.lock();
 
         let replaced = state.active.is_some();
@@ -150,6 +157,7 @@ impl PairingHost {
 
     /// Cancels the active code, if there is one.
     pub fn cancel(&self) {
+        let _order = self.ordered();
         let ended = self.lock().active.take().is_some();
         if ended {
             self.notify(Change::Ended(PairingEndReason::Cancelled));
@@ -158,6 +166,7 @@ impl PairingHost {
 
     /// Ends the active code if its time has run out; the observer is told. A timer calls this when the code is due.
     pub fn check_expiry(&self) {
+        let _order = self.ordered();
         let mut state = self.lock();
         let expired = Self::drop_if_expired(&mut state);
         drop(state);
@@ -181,7 +190,8 @@ impl PairingHost {
     }
 
     /// Starts an attempt on the active code, or `None` when there is no code, it has expired, or another attempt is
-    /// running.
+    /// running. A connection takes the attempt only when its first message has arrived, not when it is made: one that
+    /// sits there silent must not keep the real joiner out.
     pub fn start_attempt(self: &Arc<Self>) -> Option<Attempt> {
         self.check_expiry();
 
@@ -216,6 +226,10 @@ impl PairingHost {
         }
     }
 
+    fn ordered(&self) -> MutexGuard<'_, ()> {
+        self.order.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -240,7 +254,9 @@ impl Attempt {
     pub fn succeed(mut self) -> bool {
         self.ended = true;
 
-        let mut state = self.host.lock();
+        let host = Arc::clone(&self.host);
+        let _order = host.ordered();
+        let mut state = host.lock();
         let expired = PairingHost::drop_if_expired(&mut state);
 
         let used = match &state.active {
@@ -253,9 +269,9 @@ impl Attempt {
         drop(state);
 
         if used {
-            self.host.notify(Change::Ended(PairingEndReason::Used));
+            host.notify(Change::Ended(PairingEndReason::Used));
         } else if expired {
-            self.host.notify(Change::Ended(PairingEndReason::Expired));
+            host.notify(Change::Ended(PairingEndReason::Expired));
         }
 
         used
@@ -266,23 +282,15 @@ impl Attempt {
         self.record_failure();
     }
 
-    /// Ends an attempt that never sent anything. It does not count against the code, and the next attempt can start.
-    pub fn release(mut self) {
-        self.ended = true;
-
-        let mut state = self.host.lock();
-        if let Some(active) = state.active.as_mut().filter(|active| active.id == self.id) {
-            active.busy = false;
-        }
-    }
-
     fn record_failure(&mut self) {
         if self.ended {
             return;
         }
         self.ended = true;
 
-        let mut state = self.host.lock();
+        let host = Arc::clone(&self.host);
+        let _order = host.ordered();
+        let mut state = host.lock();
         let Some(active) = state.active.as_mut().filter(|active| active.id == self.id) else {
             return;
         };
@@ -297,7 +305,7 @@ impl Attempt {
         drop(state);
 
         if cancelled {
-            self.host.notify(Change::Ended(PairingEndReason::TooManyAttempts));
+            host.notify(Change::Ended(PairingEndReason::TooManyAttempts));
         }
     }
 }

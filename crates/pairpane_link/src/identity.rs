@@ -181,8 +181,7 @@ impl KeyStore for FileStore {
     }
 
     fn load(&self) -> Result<Option<SecretKey>> {
-        use std::io::Read;
-        use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+        use std::os::unix::fs::OpenOptionsExt;
 
         match std::fs::symlink_metadata(&self.path) {
             Ok(meta) if meta.is_file() => {}
@@ -191,10 +190,12 @@ impl KeyStore for FileStore {
             Err(error) => return Err(error.into()),
         }
 
-        // A link swapped in after the check above is refused by the system, not followed.
+        // A link swapped in after the check above is refused by the system, not followed, and a pipe swapped in is
+        // opened without waiting for a writer (which would block the start for good); it is refused below.
+        let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
         let opened = std::fs::OpenOptions::new()
             .read(true)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+            .custom_flags(flags.bits() as i32)
             .open(&self.path);
         let file = match opened {
             Ok(file) => file,
@@ -204,17 +205,7 @@ impl KeyStore for FileStore {
             Err(error) => return Err(error.into()),
         };
 
-        // The mode, owner and size of the file that is open, not of a name that could point elsewhere by now.
-        let meta = file.metadata()?;
-        let owned_by_us = meta.uid() == rustix::process::geteuid().as_raw();
-        if meta.permissions().mode() & 0o077 != 0 || !owned_by_us {
-            return Err(Error::InsecureKeyFile);
-        }
-
-        let mut bytes = Zeroizing::new(Vec::new());
-        file.take(KEY_LEN as u64 + 1).read_to_end(&mut bytes)?;
-
-        key_from(&bytes).map(Some)
+        read_key_file(file).map(Some)
     }
 
     fn save(&self, key: &SecretKey) -> Result<()> {
@@ -223,6 +214,25 @@ impl KeyStore for FileStore {
         fsutil::write_atomic(dir, KEY_FILE_NAME, &*key_bytes(key))?;
         Ok(())
     }
+}
+
+/// The key in an open key file, which must be a regular file of this user that nobody else can access. All of it is
+/// checked on the open descriptor, not on a name that could point elsewhere by now.
+#[cfg(unix)]
+fn read_key_file(file: std::fs::File) -> Result<SecretKey> {
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let meta = file.metadata()?;
+    let owned_by_us = meta.uid() == rustix::process::geteuid().as_raw();
+    if !meta.is_file() || meta.permissions().mode() & 0o077 != 0 || !owned_by_us {
+        return Err(Error::InsecureKeyFile);
+    }
+
+    let mut bytes = Zeroizing::new(Vec::with_capacity(KEY_LEN + 1));
+    file.take(KEY_LEN as u64 + 1).read_to_end(&mut bytes)?;
+
+    key_from(&bytes)
 }
 
 /// A store that is shared, so the app can keep a handle to the one it gave the service.

@@ -422,3 +422,46 @@ fn a_bad_list_file_is_moved_aside_never_deleted() {
     assert!(open(&dir).list().is_empty());
     assert!(super::reset_devices(dir.path()).unwrap().is_none(), "nothing to move");
 }
+
+#[test]
+fn a_file_that_was_set_aside_is_never_overwritten_by_a_later_reset() {
+    let dir = TempDir::new().unwrap();
+    let mut asides = Vec::new();
+
+    // The same millisecond every time, as two resets that follow each other closely would have.
+    for text in ["first", "second", "third"] {
+        fs::write(file(dir.path()), text).unwrap();
+        asides.push(super::move_aside(dir.path(), 1_700_000_000_000).unwrap().unwrap());
+    }
+
+    let mut kept: Vec<String> = asides.iter().map(|path| fs::read_to_string(path).unwrap()).collect();
+    kept.sort();
+    assert_eq!(kept, ["first", "second", "third"]);
+    asides.sort();
+    asides.dedup();
+    assert_eq!(asides.len(), 3, "every reset has a name of its own");
+}
+
+#[test]
+fn a_reset_is_refused_while_a_service_runs_on_the_folder() {
+    let dir = TempDir::new().unwrap();
+    fs::write(file(dir.path()), b"not json").unwrap();
+    let running = crate::fsutil::lock_dir(dir.path(), crate::fsutil::LOCK_FILE_NAME).unwrap();
+
+    let refused = super::reset_devices(dir.path());
+
+    assert!(matches!(refused, Err(Error::AlreadyRunning)), "{refused:?}");
+    assert_eq!(fs::read(file(dir.path())).unwrap(), b"not json");
+
+    drop(running);
+    assert!(super::reset_devices(dir.path()).unwrap().is_some());
+}
+
+#[test]
+fn a_reset_of_a_folder_that_is_not_there_makes_nothing() {
+    let dir = TempDir::new().unwrap();
+    let missing = dir.path().join("missing");
+
+    assert!(super::reset_devices(&missing).unwrap().is_none());
+    assert!(!missing.exists());
+}

@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -11,13 +11,16 @@ use iroh::{Endpoint, EndpointAddr, EndpointId, TransportAddr};
 use tokio::sync::{Semaphore, broadcast, watch};
 
 use super::discovery::FoundEntry;
+use super::local_net::source_key;
 use crate::devices::{Device, DeviceStore, MAX_ADDRS, merged};
+use crate::error::{Error, Result};
 use crate::pairing::{PairingEndReason, PairingHost};
 
 /// The most devices whose addresses are remembered in memory, and the most devices mDNS finds that are listed.
 pub const MAX_REMEMBERED: usize = 256;
 
-/// The most connections one source address may have at once, of the [`super::MAX_CONNECTIONS`] in all.
+/// The most connections one source may have at once (an IPv4 address, or an IPv6 /64 prefix), of the
+/// [`super::MAX_CONNECTIONS`] in all.
 pub const MAX_CONNECTIONS_PER_IP: usize = 4;
 
 /// The most probes ([`super::Link::status`]) that run at once.
@@ -61,7 +64,12 @@ pub struct Ctx {
     pub probes: Semaphore,
     /// Whether mDNS should announce this device: a pairing code is active.
     pub announcing: watch::Sender<bool>,
+    /// Set when the service is shut down; the device list is not written after that, because the lock on the data folder
+    /// is let go (see [`Ctx::writer`]).
+    pub closed: AtomicBool,
     per_ip: Mutex<HashMap<IpAddr, usize>>,
+    /// What is remembered in memory about devices that are not paired. When this is held together with the device list,
+    /// it is taken first: a change of who is paired and of what is remembered about them is then one step.
     remembered: Mutex<Remembered>,
     pub found: Mutex<HashMap<EndpointId, FoundEntry>>,
     pub found_clock: AtomicU64,
@@ -96,6 +104,7 @@ impl Ctx {
             connections: Arc::new(Semaphore::new(super::MAX_CONNECTIONS)),
             probes: Semaphore::new(MAX_PROBES),
             announcing: watch::channel(false).0,
+            closed: AtomicBool::new(false),
             per_ip: Mutex::default(),
             remembered: Mutex::default(),
             found: Mutex::default(),
@@ -107,12 +116,25 @@ impl Ctx {
         lock(&self.devices)
     }
 
+    /// The device list for a change. The service being shut down is checked under the lock of the list, which shutdown
+    /// takes once more before it lets go of the folder, so no change is written after that.
+    pub fn writer(&self) -> Result<MutexGuard<'_, DeviceStore>> {
+        let devices = self.devices();
+        if self.closed.load(Ordering::Acquire) {
+            return Err(Error::Closed);
+        }
+
+        Ok(devices)
+    }
+
     pub fn is_paired(&self, node_id: &EndpointId) -> bool {
         self.devices().is_paired(node_id)
     }
 
-    /// Counts a connection from `ip`, or `None` when that address has [`MAX_CONNECTIONS_PER_IP`] already.
+    /// Counts a connection from `ip`, or `None` when its source already has [`MAX_CONNECTIONS_PER_IP`]. The source of an
+    /// IPv6 address is its /64 prefix (see [`source_key`]).
     pub fn admit(self: &Arc<Self>, ip: IpAddr) -> Option<IpGuard> {
+        let ip = source_key(ip);
         let mut per_ip = lock(&self.per_ip);
         let count = per_ip.entry(ip).or_insert(0);
         if *count >= MAX_CONNECTIONS_PER_IP {
@@ -126,19 +148,69 @@ impl Ctx {
         })
     }
 
+    /// Pairs a device: it goes in the device list with `addrs` (what is known to be its addresses) and then what was
+    /// remembered in memory about it (what the user gave with [`super::Link::remember_addresses`]), which is not
+    /// forgotten but now kept. The file is written first, then the memory is changed. This writes a file, so an async
+    /// task calls [`Ctx::pin`].
+    pub fn add_device(&self, node_id: EndpointId, name: &str, addrs: &[SocketAddr]) -> Result<Device> {
+        let mut table = lock(&self.remembered);
+        let remembered = table.addrs.get(&node_id).map(|(addrs, _)| addrs.clone());
+        let all: Vec<SocketAddr> = addrs.iter().copied().chain(remembered.into_iter().flatten()).collect();
+
+        let device = self.writer()?.add_with_addrs(node_id, name, now_ms(), &all)?;
+        table.addrs.remove(&node_id);
+
+        Ok(device)
+    }
+
+    /// [`Ctx::add_device`] on a thread meant for blocking work, for the tasks of the runtime.
+    pub async fn pin(self: &Arc<Self>, node_id: EndpointId, name: String, addrs: Vec<SocketAddr>) -> Result<Device> {
+        let ctx = Arc::clone(self);
+
+        tokio::task::spawn_blocking(move || ctx.add_device(node_id, &name, &addrs))
+            .await
+            .map_err(|_| Error::Closed)?
+    }
+
+    /// Unpairs a device and forgets what is remembered about it, as one step to [`Ctx::remember`].
+    pub fn unpair(&self, node_id: &EndpointId) -> Result<()> {
+        let mut table = lock(&self.remembered);
+        self.writer()?.remove(node_id)?;
+        table.addrs.remove(node_id);
+
+        Ok(())
+    }
+
     /// Remembers addresses a device was reached at, for the next time it is dialled. The caller gives only addresses it
     /// has reason to trust: the source of an authenticated connection, or what the user typed. A paired device's go in
     /// the device list, newest first, so they last across a restart; the file is written only when they are new. For a
     /// device that is not paired yet they are kept in memory: the newest [`MAX_ADDRS`] of each, and of the devices the
-    /// newest [`MAX_REMEMBERED`], the oldest one making room when the table is full.
+    /// newest [`MAX_REMEMBERED`], the oldest one making room when the table is full. A write of the file happens on the
+    /// calling thread; a task of the runtime calls [`Ctx::remember_in_background`].
     pub fn remember(&self, node_id: EndpointId, addrs: impl IntoIterator<Item = SocketAddr>) {
-        let addrs: Vec<SocketAddr> = addrs.into_iter().collect();
-        if self.is_paired(&node_id) {
+        if let Some(addrs) = self.place(node_id, addrs.into_iter().collect()) {
             self.keep(&node_id, &addrs);
-            return;
+        }
+    }
+
+    /// [`Ctx::remember`] for the tasks of the runtime: a write of the file is done on a thread meant for blocking work,
+    /// which is not waited for. It is not done at all when the service has been shut down by then.
+    pub fn remember_in_background(self: &Arc<Self>, node_id: EndpointId, addrs: impl IntoIterator<Item = SocketAddr>) {
+        if let Some(addrs) = self.place(node_id, addrs.into_iter().collect()) {
+            let ctx = Arc::clone(self);
+            drop(tokio::task::spawn_blocking(move || ctx.keep(&node_id, &addrs)));
+        }
+    }
+
+    /// Notes the addresses of a device that is not paired in the table in memory. A paired device is decided under the
+    /// same lock as the table, so an unpairing cannot come between the two; its addresses are given back to be kept in
+    /// the device list.
+    fn place(&self, node_id: EndpointId, addrs: Vec<SocketAddr>) -> Option<Vec<SocketAddr>> {
+        let mut table = lock(&self.remembered);
+        if self.is_paired(&node_id) {
+            return Some(addrs);
         }
 
-        let mut table = lock(&self.remembered);
         if !table.addrs.contains_key(&node_id) && table.addrs.len() >= MAX_REMEMBERED {
             let oldest = table
                 .addrs
@@ -158,16 +230,24 @@ impl Ctx {
         }
         entry.1 = stamp;
         debug_assert!(entry.0.len() <= MAX_ADDRS);
+
+        None
     }
 
-    /// Forgets what is remembered in memory about a device.
-    pub fn forget(&self, node_id: &EndpointId) {
-        lock(&self.remembered).addrs.remove(node_id);
+    /// Whether anything is remembered in memory about a device.
+    #[cfg(test)]
+    pub fn has_remembered(&self, node_id: &EndpointId) -> bool {
+        lock(&self.remembered).addrs.contains_key(node_id)
     }
 
     /// Keeps addresses a paired device was reached at in the device list; a device that is not paired is ignored.
-    pub fn keep(&self, node_id: &EndpointId, addrs: &[SocketAddr]) {
-        if let Err(error) = self.devices().remember_addrs(node_id, addrs) {
+    fn keep(&self, node_id: &EndpointId, addrs: &[SocketAddr]) {
+        let kept = self
+            .writer()
+            .and_then(|mut devices| devices.remember_addrs(node_id, addrs));
+        if let Err(error) = kept
+            && !matches!(error, Error::Closed)
+        {
             tracing::warn!(%error, "the addresses of a device could not be saved");
         }
     }

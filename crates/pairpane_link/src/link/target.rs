@@ -11,6 +11,7 @@ use std::str::FromStr;
 
 use iroh::EndpointId;
 
+use super::Found;
 use crate::error::Error;
 
 /// The most addresses a target holds.
@@ -23,6 +24,19 @@ pub struct Target {
     pub node_id: EndpointId,
     /// The addresses to try. Empty for a device that mDNS found.
     pub addrs: Vec<SocketAddr>,
+}
+
+/// The target of a device that was found on the local network: its node id and no addresses. The addresses mDNS
+/// reported are left out on purpose, because anyone on the network can announce any address and the addresses of a
+/// target are kept for the device when pairing works. They are still dialled: [`Link::join`](super::Link::join) tries
+/// what mDNS found for the node id, from the service's own list in memory, only never keeps it.
+impl From<&Found> for Target {
+    fn from(found: &Found) -> Self {
+        Self {
+            node_id: found.node_id,
+            addrs: Vec::new(),
+        }
+    }
 }
 
 impl Target {

@@ -178,7 +178,7 @@ fn a_damaged_or_unknown_marker_is_an_error() {
         let rig = Rig::new();
         fs::write(rig.dir.path().join(MARKER_FILE_NAME), text).unwrap();
 
-        assert!(matches!(rig.open(false), Err(Error::KeyUnavailable(_))), "{text:?}");
+        assert!(matches!(rig.open(false), Err(Error::CorruptIdentityMarker)), "{text:?}");
         assert!(rig.keychain.holds().is_none() && rig.file.holds().is_none());
     }
 }

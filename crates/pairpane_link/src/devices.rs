@@ -89,19 +89,39 @@ fn is_invisible(c: char) -> bool {
 }
 
 /// Moves a list file that cannot be read aside so the service can start with an empty list, and returns where it went:
-/// `link-devices.json.bad-<milliseconds since the Unix epoch>` in the same folder. The file is never deleted, so the
-/// records can still be recovered by hand. Call it only when the service is not running, after
-/// [`Error::CorruptDevices`]; `None` means there was no file.
+/// `link-devices.json.bad-<milliseconds since the Unix epoch>` in the same folder, with `-<n>` added when a file of that
+/// name is there already (an earlier reset in the same millisecond), so a file that was set aside is never overwritten.
+/// The file is never deleted, so the records can still be recovered by hand. Call it only after
+/// [`Error::CorruptDevices`]; `None` means there was no file. It takes the lock on the folder while it works, so a
+/// service that runs on the folder makes it fail with [`Error::AlreadyRunning`].
 pub fn reset_devices(dir: &Path) -> Result<Option<PathBuf>> {
-    let file = dir.join(DEVICES_FILE_NAME);
-    if !file.exists() {
-        return Ok(None);
-    }
-
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_millis());
-    let aside = dir.join(format!("{DEVICES_FILE_NAME}.bad-{millis}"));
+
+    move_aside(dir, millis)
+}
+
+fn move_aside(dir: &Path, millis: u128) -> Result<Option<PathBuf>> {
+    // A folder that is not there has no list; it is not made just to find that out.
+    if !dir.is_dir() {
+        return Ok(None);
+    }
+    let _lock = fsutil::lock_dir(dir, fsutil::LOCK_FILE_NAME)?;
+
+    let file = dir.join(DEVICES_FILE_NAME);
+    if std::fs::symlink_metadata(&file).is_err() {
+        return Ok(None);
+    }
+
+    // The lock keeps every other writer of the folder out, so a name that is free now stays free until the move.
+    let mut aside = dir.join(format!("{DEVICES_FILE_NAME}.bad-{millis}"));
+    for attempt in 1.. {
+        if std::fs::symlink_metadata(&aside).is_err() {
+            break;
+        }
+        aside = dir.join(format!("{DEVICES_FILE_NAME}.bad-{millis}-{attempt}"));
+    }
     std::fs::rename(&file, &aside)?;
 
     Ok(Some(aside))
