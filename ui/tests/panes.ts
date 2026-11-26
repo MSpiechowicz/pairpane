@@ -65,8 +65,10 @@ export function crumbsTo(path: string): Crumb[] {
 }
 
 function startOf(path: string, total: number, shown: Shown, place: Pick<Start, 'location' | 'capabilities'>): Start {
-  const parent = shown.parent === undefined ? path.slice(0, path.lastIndexOf('/')) || '/' : shown.parent;
-  return { kind: 'start', path, parent: path === '/' ? null : parent, crumbs: shown.crumbs ?? [], total, ...place };
+  // By default the folder above `path`, and none above the root; `shown.parent` is taken as given.
+  const above = path === '/' ? null : path.slice(0, path.lastIndexOf('/')) || '/';
+  const parent = shown.parent === undefined ? above : shown.parent;
+  return { kind: 'start', path, parent, crumbs: shown.crumbs ?? [], total, ...place };
 }
 
 /** The `start` of the real folder `path`, listing `total` entries. */

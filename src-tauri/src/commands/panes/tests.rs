@@ -47,11 +47,18 @@ fn measuring() -> (Slots, PathBuf, Arc<AtomicBool>) {
 }
 
 #[test]
-fn a_folder_and_an_archive_at_the_same_path_are_different_places_so_neither_keeps_the_others_watch() {
+fn a_folder_and_an_archive_at_the_same_path_are_different_keys() {
+    // `replace_slot` keeps the watch only for an equal key, so a folder and an archive never share one.
     let path = PathBuf::from(root());
 
     assert_eq!(SlotKey::Folder(path.clone()), SlotKey::Folder(path.clone()));
-    assert_ne!(SlotKey::Folder(path.clone()), SlotKey::Archive(path.clone()));
+    assert_ne!(SlotKey::Folder(path.clone()), SlotKey::Archive(path));
+}
+
+#[test]
+fn the_size_jobs_of_an_archive_pane_are_measured_at_the_archive() {
+    let path = PathBuf::from(root());
+
     assert_eq!(SlotKey::Archive(path.clone()).measured(), Some(path.as_path()));
 }
 
