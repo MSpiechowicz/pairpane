@@ -4,9 +4,10 @@
 //! fast as the latency allows. [`SftpReader`] asks for a window of consecutive chunks at once (at most [`WINDOW`]) and
 //! uses the replies in order, up to the first one that is short: a server may answer with less than was asked, and the
 //! chunks after it are of no use (the next window starts where the data stopped). So that a server that answers with less
-//! than it is asked for does not make most of every window useless, the next window asks for what that server sent (and
-//! the size grows back, doubled for each window that is answered in full). A reply of the end of the file ends the reader
-//! for good.
+//! than it is asked for does not make most of every window useless, the next window asks for what that server sent. The
+//! size is tried again, doubled, only after [`TRUST`] windows in a row were answered in full, and by a window of a few
+//! reads: a server with a cap of its own then costs a few reads now and then, not a window of useless ones. A reply of the
+//! end of the file ends the reader for good.
 
 use std::io;
 use std::sync::Arc;
@@ -33,6 +34,12 @@ const MIN_CHUNK: usize = 512;
 /// The most reads in flight at once.
 const WINDOW: usize = 16;
 
+/// Windows in a row answered in full, after which a larger size is tried again.
+const TRUST: u32 = 4;
+
+/// The reads of a window that tries a larger size.
+const TRY: usize = 2;
+
 /// An open file; dropping it closes the server's handle in the background.
 pub(crate) struct SftpReader {
     link: Arc<Link>,
@@ -42,6 +49,8 @@ pub(crate) struct SftpReader {
     lease: Option<OwnedLease>,
     /// What each read of the next window asks for: [`CHUNK`], or less for a server that answers with less.
     chunk: usize,
+    /// Windows in a row that were answered in full, at this size.
+    full: u32,
     /// Where in the file `ready` ends: the next window starts here.
     offset: u64,
     /// What the last window brought, of which the first `taken` bytes were given out.
@@ -58,6 +67,7 @@ impl SftpReader {
             handle,
             lease: Some(lease),
             chunk: CHUNK,
+            full: 0,
             offset: 0,
             ready: Vec::new(),
             taken: 0,
@@ -67,8 +77,14 @@ impl SftpReader {
 
     /// Fetches the next window, for a caller that wants `wanted` bytes. Leaves the reader as it was when it fails.
     fn fill(&mut self, wanted: usize, cancel: &AtomicBool) -> io::Result<()> {
-        let size = self.chunk;
-        let chunks = wanted.div_ceil(size).clamp(1, WINDOW);
+        // A server that answered with less is trusted with more only once it has kept up for a while.
+        let trying = self.chunk < CHUNK && self.full >= TRUST;
+        let size = if trying {
+            (self.chunk * 2).min(CHUNK)
+        } else {
+            self.chunk
+        };
+        let chunks = wanted.div_ceil(size).clamp(1, if trying { TRY } else { WINDOW });
         let window = fetch(
             Arc::clone(&self.link.sftp),
             self.handle.clone(),
@@ -108,11 +124,17 @@ impl SftpReader {
             }
         }
 
-        self.chunk = match short {
-            Some(kept) if kept > 0 => kept.max(MIN_CHUNK),
-            Some(_) => size,
-            None => (size * 2).min(CHUNK),
-        };
+        match short {
+            Some(kept) => {
+                self.chunk = if kept > 0 { kept.max(MIN_CHUNK) } else { size };
+                self.full = 0;
+            }
+            None if trying => {
+                self.chunk = size;
+                self.full = 0;
+            }
+            None => self.full += 1,
+        }
         self.offset += ready.len() as u64;
         self.ready = ready;
         self.taken = 0;

@@ -303,6 +303,12 @@ impl Run<'_> {
             };
 
             self.fail(rel, &in_context(what, &error));
+
+            return;
+        }
+
+        if let Err(error) = down.home.confirm_after(down.fs, &parent) {
+            self.fail(rel, &error);
         }
     }
 }

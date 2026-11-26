@@ -37,10 +37,11 @@ fn a_server_that_answers_with_little_does_not_cost_a_read_for_each_of_its_replie
     assert!(read == content);
 
     // A window asks for 16 reads, and one of them was of use before the size followed what the server sends: that would be
-    // some 1,600 reads in all, against some 110 for a reader that follows it.
+    // some 1,600 reads in all. A reader that follows it, but tries a larger size every other window, makes some 185; one
+    // that waits for a few full windows, some 120 (100 replies are needed).
     let reads = h.server.counts.reads.load(Ordering::Relaxed);
 
-    assert!(reads < 300, "{reads} reads for 100 replies");
+    assert!(reads < 140, "{reads} reads for 100 replies");
 }
 
 #[test]

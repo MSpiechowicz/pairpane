@@ -191,11 +191,13 @@ impl RemoteFs for SftpFs {
         self.run(|link| {
             let path = path.as_str().to_owned();
             let name = self.request(link, move |sftp| async move { sftp.realpath(path).await })?;
-            let unexpected = || fail(io::ErrorKind::InvalidData, "the server sent something unexpected");
+            let file = name
+                .files
+                .into_iter()
+                .next()
+                .ok_or_else(|| fail(io::ErrorKind::InvalidData, "the server sent something unexpected"))?;
 
-            let file = name.files.into_iter().next().ok_or_else(unexpected)?;
-
-            RemotePath::new(&file.filename).map_err(|_| unexpected())
+            answered_path(&file.filename)
         })
     }
 
@@ -247,6 +249,22 @@ impl RemoteFs for SftpFs {
     }
 }
 
+/// The path a server answered with as a [`RemotePath`]. A trailing slash (`/home/me/`) is only a spelling and is dropped;
+/// anything else that is not a path of ours (a relative one, a `..` in it) is not guessed at.
+fn answered_path(text: &str) -> io::Result<RemotePath> {
+    let trimmed = match text.strip_suffix('/') {
+        Some(rest) if rest.len() > 1 => rest,
+        _ => text,
+    };
+
+    RemotePath::new(trimmed).map_err(|_| {
+        fail(
+            io::ErrorKind::InvalidData,
+            "the server answered with a folder path Pairpane cannot use",
+        )
+    })
+}
+
 /// What the server's attributes say, as the listing wants it. The type is in the mode's upper bits.
 pub(crate) fn meta_of(attributes: &FileAttributes) -> RemoteMeta {
     let kind = match attributes.permissions.map(|mode| mode & TYPE_MASK) {
@@ -265,5 +283,38 @@ pub(crate) fn meta_of(attributes: &FileAttributes) -> RemoteMeta {
         },
         modified_ms: attributes.mtime.map(|seconds| i64::from(seconds) * 1000),
         mode: attributes.permissions.map(|mode| mode & PERMISSIONS),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_path_the_server_ends_with_a_slash_is_the_same_path_and_the_root_is_kept() {
+        for (said, is) in [
+            ("/home/me/", "/home/me"),
+            ("/home/me", "/home/me"),
+            ("/", "/"),
+            ("/a", "/a"),
+        ] {
+            assert_eq!(answered_path(said).expect("a path").as_str(), is, "{said}");
+        }
+    }
+
+    #[test]
+    fn a_path_that_cannot_be_used_is_refused_in_words_that_name_no_path() {
+        for said in ["", "home/me", "/home//me/", "//", "/a/../b", "/a/./b/"] {
+            let error = answered_path(said).expect_err(said);
+
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{said}");
+            assert!(
+                error
+                    .to_string()
+                    .ends_with("the server answered with a folder path Pairpane cannot use"),
+                "{said}: {error}"
+            );
+            assert!(!error.to_string().contains("home"), "{said}: {error}");
+        }
     }
 }

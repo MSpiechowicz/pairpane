@@ -6,12 +6,10 @@ use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 
-use crate::model::{OpKind, Outcome};
+use crate::model::{Answer, OpKind, Outcome};
 
 use super::super::testing::{Rig, long_ago, read, set_times, temp, tree};
-use super::testing::{Fake, download, failure, fetch, said};
-
-const CHANGED: &str = "Kept the original: the folder on the server changed while it was moved";
+use super::testing::{FOLDER_CHANGED as CHANGED, Fake, download, failure, fetch, said};
 
 /// The server swaps its folder `sub` for a link to its folder `victim` when the first file is read.
 #[cfg(unix)]
@@ -198,6 +196,7 @@ fn the_names_a_walk_holds_and_the_entries_it_lists_in_all_are_bounded_too() {
 /// download names what it writes (the server of the test is case-sensitive, so only Linux can hold both).
 #[cfg(target_os = "linux")]
 mod meeting {
+    use std::fs;
     use std::sync::Arc;
 
     use pretty_assertions::assert_eq;
@@ -220,45 +219,47 @@ mod meeting {
     }
 
     #[test]
-    fn the_second_of_two_items_with_one_name_never_replaces_the_first_and_its_original_stays() {
-        for answer in [Answer::Overwrite, Answer::OverwriteOlder] {
-            let server = two_files();
-            set_times(&server.at("A.txt"), long_ago());
-            let local = temp();
-            let mut rig = rig();
+    fn the_second_of_two_items_with_one_name_is_not_asked_about_and_never_replaces_the_first() {
+        let server = two_files();
+        set_times(&server.at("A.txt"), long_ago());
+        let local = temp();
 
-            let job = rig.start(download(OpKind::Move, &server, "/", &["A.txt", "a.txt"], local.path()));
-            rig.answer_next(job, answer, true);
-            let ended = rig.wait_ended(job);
+        let ended = fetch(&mut rig(), OpKind::Move, &server, &["A.txt", "a.txt"], local.path());
 
-            assert_eq!(ended.outcome, Outcome::Done);
-            assert_eq!(
-                said(&ended),
-                ["two items on the server have the same name on this computer"],
-                "{answer:?}"
-            );
-            assert_eq!(read(&local.path().join("a.txt")), b"first", "{answer:?}");
-            assert_eq!(
-                tree(&server.at("")),
-                ["a.txt"],
-                "the original of the second stays: {answer:?}"
-            );
-        }
+        assert_eq!(ended.outcome, Outcome::Done);
+        assert_eq!(
+            said(&ended),
+            ["two items on the server have the same name on this computer"]
+        );
+        assert_eq!(read(&local.path().join("a.txt")), b"first");
+        assert_eq!(tree(&server.at("")), ["a.txt"], "the original of the second stays");
     }
 
     #[test]
-    fn two_items_with_one_name_both_survive_when_the_second_is_renamed() {
+    fn an_answer_to_replace_all_that_was_given_before_does_not_replace_what_the_job_wrote() {
         let server = two_files();
+        server.put("x.txt", b"from the server");
         let local = temp();
+        fs::write(local.path().join("x.txt"), b"mine").expect("file");
         let mut rig = rig();
 
-        let job = rig.start(download(OpKind::Move, &server, "/", &["A.txt", "a.txt"], local.path()));
-        rig.answer_next(job, Answer::Rename, true);
+        let job = rig.start(download(
+            OpKind::Move,
+            &server,
+            "/",
+            &["x.txt", "A.txt", "a.txt"],
+            local.path(),
+        ));
+        rig.answer_next(job, Answer::Overwrite, true);
         let ended = rig.wait_ended(job);
 
-        assert_eq!(ended.errors.len(), 0, "{:?}", said(&ended));
-        assert_eq!(tree(local.path()), ["a (2).txt", "a.txt"]);
-        assert_eq!(tree(&server.at("")), Vec::<String>::new());
+        assert_eq!(
+            said(&ended),
+            ["two items on the server have the same name on this computer"]
+        );
+        assert_eq!(read(&local.path().join("x.txt")), b"from the server");
+        assert_eq!(read(&local.path().join("a.txt")), b"first");
+        assert_eq!(tree(&server.at("")), ["a.txt"]);
     }
 
     #[test]
@@ -277,6 +278,32 @@ mod meeting {
         );
         assert_eq!(tree(local.path()), ["dir/", "dir/x.txt"]);
         assert_eq!(tree(&server.at("")), ["dir/", "dir/y.txt"]);
+    }
+}
+
+#[test]
+fn a_target_whose_identity_cannot_be_read_is_not_replaced_by_a_move_but_is_by_a_copy() {
+    for (kind, replaced) in [(OpKind::Move, false), (OpKind::Copy, true)] {
+        let server = Fake::new();
+        server.put("a.txt", b"from the server");
+        let local = temp();
+        fs::write(local.path().join("a.txt"), b"mine").expect("file");
+        let mut rig = Rig::hooked(|hooks| hooks.unreadable_identity = true);
+
+        let job = rig.start(download(kind, &server, "/", &["a.txt"], local.path()));
+        rig.answer_next(job, Answer::Overwrite, false);
+        let ended = rig.wait_ended(job);
+
+        assert_eq!(ended.errors.len(), usize::from(!replaced), "{kind:?}");
+        assert_eq!(
+            read(&local.path().join("a.txt")),
+            if replaced { &b"from the server"[..] } else { b"mine" },
+            "{kind:?}"
+        );
+        assert!(
+            server.at("a.txt").exists(),
+            "{kind:?}: a move that replaced nothing removes nothing"
+        );
     }
 }
 

@@ -11,7 +11,7 @@
 //! the same size and time at the end as at the start, and the move then removes the newer original. A caller that cannot
 //! accept that copies instead of moving (see `RemoteFs`).
 
-use std::fs::File;
+use std::fs::{self, File};
 use std::io;
 use std::path::Path;
 
@@ -133,12 +133,17 @@ impl Run<'_> {
         Ok(())
     }
 
-    /// [`Run::place_entry`], except that a target this job wrote itself is never replaced: it is told that two items of
-    /// the server have one name here.
+    /// [`Run::place_entry`], except that a target this job wrote itself is never replaced, and is not asked about: it is told
+    /// that two items of the server have one name here. So is a target that cannot be told from one when a move would lose
+    /// a file by replacing it.
     fn place_own(&mut self, own: &Own, rel: &str, facts: &FileFacts, target: &Path) -> Result<Place, Stop> {
+        if fs::symlink_metadata(target).is_ok() && self.is_own(own, target) {
+            return Err(same_name().into());
+        }
+
         let place = self.place_entry(rel, facts, target)?;
 
-        if matches!(place, Place::Replace(_)) && self.is_own(own, place.path()) {
+        if matches!(place, Place::Replace(_)) && self.may_be_own(own, place.path()) {
             return Err(same_name().into());
         }
 
@@ -263,8 +268,9 @@ impl Run<'_> {
         // Not repeated by anyone: after a lost connection nobody knows whether the file is gone.
         // Where the file is, once more and as late as it can be: a folder swapped for a link would have the removal act in
         // another folder.
-        if let Some(parent) = remote.parent() {
-            down.home.confirm(down.fs, &parent)?;
+        let parent = remote.parent();
+        if let Some(parent) = &parent {
+            down.home.confirm(down.fs, parent)?;
         }
 
         down.fs.remove_file(remote).map_err(|error| {
@@ -276,6 +282,11 @@ impl Run<'_> {
 
             in_context(what, &error)
         })?;
+
+        // Where the file was removed from, once more: a folder swapped for a link meanwhile would have had it removed elsewhere.
+        if let Some(parent) = &parent {
+            down.home.confirm_after(down.fs, parent)?;
+        }
 
         Ok(())
     }

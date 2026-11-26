@@ -4,7 +4,9 @@
 //! states, and puts it in place with a rename that refuses to replace (see `down`): a target that exists is never
 //! overwritten without the answer to its question, and one that is there is whole. A move removes an item from the
 //! server only once its copy is in place and on the disk, and the item is seen unchanged (see `down`). It also checks,
-//! right before each removal, that the folder is still where the walk went and not a link put in its place (see `walk`).
+//! right before each removal and again right after it, that the folder is still where the walk went and not a link put in
+//! its place: each folder on the way is looked at by its own name, so a server that does not resolve links shows a swap too
+//! (see `walk`).
 //! Two items of the server that come to one name here are never written one over the other (see `own`).
 //!
 //! Nothing on a server is followed: a symbolic link, a device or any other item that is not a file or a folder is skipped
@@ -25,6 +27,8 @@ mod down_move_tests;
 mod down_safety_tests;
 #[cfg(test)]
 mod down_stop_tests;
+#[cfg(test)]
+mod down_swap_tests;
 #[cfg(test)]
 mod down_tests;
 

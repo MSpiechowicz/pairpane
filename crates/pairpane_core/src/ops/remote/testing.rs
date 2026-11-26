@@ -19,6 +19,13 @@ use crate::vfs::{RemoteEntry, RemoteFs, RemoteKind, RemoteMeta, RemotePath, Remo
 use super::super::Request;
 use super::super::testing::{Ended, Rig};
 
+/// What a move says of an item it kept because its folder is not where the walk went.
+pub(super) const FOLDER_CHANGED: &str = "Kept the original: the folder on the server changed while it was moved";
+
+/// What a move says of a removal whose folder turned out not to be where the removal was asked.
+pub(super) const REMOVED_ELSEWHERE: &str =
+    "the folder on the server changed during the removal; something in another folder may have been removed";
+
 /// When a file that a reader serves grows.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum Grow {
@@ -59,6 +66,10 @@ pub(super) struct Switches {
     pub(super) files_as_other: bool,
     /// Run once, by the first read of a file.
     pub(super) at_first_read: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// The server only cleans a path when asked where it is (as some do), and follows no link.
+    pub(super) lexical_realpath: bool,
+    /// Run once, right after the server said where the folder named here is.
+    pub(super) after_realpath: Option<(String, Arc<dyn Fn() + Send + Sync>)>,
 }
 
 #[derive(Default)]
@@ -262,19 +273,31 @@ impl RemoteFs for Fake {
     }
 
     fn realpath(&self, path: &RemotePath) -> io::Result<RemotePath> {
-        if self.shared.switches().no_realpath {
+        let (unsupported, lexical) = {
+            let switches = self.shared.switches();
+
+            (switches.no_realpath, switches.lexical_realpath)
+        };
+
+        if unsupported {
             return Err(io::ErrorKind::Unsupported.into());
         }
 
-        let top = fs::canonicalize(&self.root)?;
-        let found = fs::canonicalize(self.on_disk(path))?;
-        let inside = found
-            .strip_prefix(&top)
-            .map_err(|_| io::Error::other("the path leads out of the server"))?;
+        let resolved = if lexical { Ok(path.clone()) } else { self.resolved(path) };
+        let hook = {
+            let mut switches = self.shared.switches();
 
-        inside.components().try_fold(RemotePath::root(), |resolved, name| {
-            resolved.join(&name.as_os_str().to_string_lossy())
-        })
+            match &switches.after_realpath {
+                Some((folder, _)) if folder == path.as_str() => switches.after_realpath.take(),
+                _ => None,
+            }
+        };
+
+        if let Some((_, hook)) = hook {
+            hook();
+        }
+
+        resolved
     }
 
     fn open_read(&self, path: &RemotePath) -> io::Result<Box<dyn RemoteReader>> {
@@ -306,6 +329,21 @@ impl RemoteFs for Fake {
         self.refuse_removal()?;
 
         fs::remove_dir(self.on_disk(path))
+    }
+}
+
+impl Fake {
+    /// Where `path` is, with every link followed.
+    fn resolved(&self, path: &RemotePath) -> io::Result<RemotePath> {
+        let top = fs::canonicalize(&self.root)?;
+        let found = fs::canonicalize(self.on_disk(path))?;
+        let inside = found
+            .strip_prefix(&top)
+            .map_err(|_| io::Error::other("the path leads out of the server"))?;
+
+        inside.components().try_fold(RemotePath::root(), |resolved, name| {
+            resolved.join(&name.as_os_str().to_string_lossy())
+        })
     }
 }
 
