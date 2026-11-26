@@ -290,7 +290,7 @@ impl Run<'_> {
         // Where the file was removed from, once more: a folder swapped for a link meanwhile would have had it removed elsewhere.
         if let Some(parent) = &parent {
             down.home
-                .confirm_after(down.fs, parent, abort)
+                .confirm_after(down.fs, parent)
                 .map_err(|error| self.interrupted(error))?;
         }
 

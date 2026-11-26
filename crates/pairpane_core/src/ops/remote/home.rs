@@ -6,6 +6,14 @@
 //! resolve links in `realpath` shows a swap too), the kinds must be those of the start, a link must point where it
 //! pointed (a link the user chose for the job's folder is followed, but not one repointed), and the server is asked where
 //! the whole is. The names of one way are looked at together (see `RemoteFs::lstat_many`).
+//!
+//! A server that does not resolve links in `realpath` says the folder is where its name says, however many links are on
+//! the way, so a swap of a folder that a link leads through goes unseen by that call. The move therefore also looks at
+//! each name of the folder the server says (the real way), and refuses to move through a link where that is itself a link:
+//! it cannot tell where the link really leads.
+//!
+//! Known bound: the looks of one check go out up to 64 at a time, so a way of `n` names costs about `n / 64` round trips
+//! for each check, and a move of a tree `n` folders deep about `n * n / 64` looks in all.
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,6 +48,10 @@ impl Step {
 struct Start {
     /// The folder with its links resolved.
     resolved: RemotePath,
+    /// Whether `resolved` is not the folder itself (the server resolved a link in it).
+    apart: bool,
+    /// Each name from `/` down to `resolved` when it is apart (else empty): all folders.
+    real: Vec<RemotePath>,
     /// Each name from `/` down to the folder (that one last): its path and what it was.
     way: Vec<(RemotePath, Step)>,
 }
@@ -73,12 +85,46 @@ impl Home {
             Err(error) => return Err(error),
         };
 
-        let paths = prefixes(dir)?;
-        let mut way = Vec::with_capacity(paths.len());
+        let mut paths = prefixes(dir)?;
+        let ways = paths.len();
+        let apart = resolved != *dir;
 
-        for (path, answer) in paths.iter().zip(fs.lstat_many(&paths, cancel)) {
-            let meta = answer?.ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        if apart {
+            paths.extend(prefixes(&resolved)?);
+        }
 
+        let answers = looks(fs, &paths, cancel)?;
+        let mut metas = Vec::with_capacity(paths.len());
+
+        for answer in answers {
+            metas.push(answer?.ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?);
+        }
+
+        // Where the server says the folder is is a way of folders: a link there is a server that does not resolve links
+        // (when it says the folder is where it was asked, that way is the one looked at first).
+        let real = if apart { &metas[ways..] } else { &metas[..ways] };
+
+        for meta in real {
+            match meta.kind {
+                RemoteKind::Dir => {}
+                RemoteKind::Link => {
+                    return Err(refusal(
+                        io::ErrorKind::Unsupported,
+                        "this server does not say where a linked folder really is, so its items cannot be moved through a link",
+                    ));
+                }
+                _ => {
+                    return Err(refusal(
+                        io::ErrorKind::InvalidInput,
+                        "the items are not in a folder on the server",
+                    ));
+                }
+            }
+        }
+
+        let mut way = Vec::with_capacity(ways);
+
+        for (path, meta) in paths.iter().zip(&metas).take(ways) {
             if !matches!(meta.kind, RemoteKind::Dir | RemoteKind::Link) {
                 return Err(refusal(
                     io::ErrorKind::InvalidInput,
@@ -103,7 +149,12 @@ impl Home {
 
         Ok(Self {
             dir: dir.clone(),
-            start: Some(Start { resolved, way }),
+            start: Some(Start {
+                resolved,
+                apart,
+                real: paths.split_off(ways),
+                way,
+            }),
         })
     }
 
@@ -124,12 +175,13 @@ impl Home {
     }
 
     /// Fails when `folder` is not where the walk went, after something was removed from it: the removal may have been
-    /// done in another folder.
-    pub(super) fn confirm_after(&self, fs: &dyn RemoteFs, folder: &RemotePath, cancel: &AtomicBool) -> io::Result<()> {
+    /// done in another folder. A cancel does not interrupt it: a removal that went elsewhere must be reported even when the
+    /// job is cancelled right after, and the check is one bounded batch.
+    pub(super) fn confirm_after(&self, fs: &dyn RemoteFs, folder: &RemotePath) -> io::Result<()> {
         self.settle(
             fs,
             folder,
-            cancel,
+            &AtomicBool::new(false),
             (
                 "the folder on the server changed during the removal; something in another folder may have been removed",
                 "It was removed, but the folder it was in could not be checked afterwards",
@@ -166,14 +218,23 @@ impl Home {
         let mut paths: Vec<RemotePath> = start.way.iter().map(|(path, _)| path.clone()).collect();
         let mut named = self.dir.clone();
         let mut expected = start.resolved.clone();
+        let mut real = Vec::new();
 
         for name in folder.components().skip(self.dir.components().count()) {
             named = named.join(name)?;
             expected = expected.join(name)?;
             paths.push(named.clone());
+
+            if start.apart {
+                real.push(expected.clone());
+            }
         }
 
-        for (index, (path, answer)) in paths.iter().zip(fs.lstat_many(&paths, cancel)).enumerate() {
+        // Where the server says the folder is: a folder there is a link now when something was swapped under a link.
+        paths.extend(start.real.iter().cloned());
+        paths.extend(real);
+
+        for (index, (path, answer)) in paths.iter().zip(looks(fs, &paths, cancel)?).enumerate() {
             let Some(meta) = answer? else {
                 return Ok(false);
             };
@@ -189,6 +250,25 @@ impl Home {
 
         Ok(fs.realpath(folder)? == expected)
     }
+}
+
+/// [`RemoteFs::lstat_many`] of `paths`, which fails when the server answers other than once for each (the answers are
+/// paired with the paths, and a missing one would pass as a check not made).
+fn looks(
+    fs: &dyn RemoteFs,
+    paths: &[RemotePath],
+    cancel: &AtomicBool,
+) -> io::Result<Vec<io::Result<Option<RemoteMeta>>>> {
+    let answers = fs.lstat_many(paths, cancel);
+
+    if answers.len() != paths.len() {
+        return Err(refusal(
+            io::ErrorKind::InvalidData,
+            "the server answered a different number of looks than were asked",
+        ));
+    }
+
+    Ok(answers)
 }
 
 /// The paths of every name of `path`, from the first below `/` to the last: `/a`, `/a/b` for `/a/b`.

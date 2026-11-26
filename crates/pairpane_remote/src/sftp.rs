@@ -14,7 +14,7 @@ use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::protocol::{FileAttributes, OpenFlags};
 use tokio::task::JoinSet;
 
-use crate::error::{closed, fail, from_sftp, lost};
+use crate::error::{cancelled, closed, fail, from_sftp, lost};
 use crate::link::Link;
 use crate::names::{Collected, MAX_NAME_BYTES};
 use crate::runtime::{call, call_until, limited};
@@ -192,7 +192,17 @@ impl RemoteFs for SftpFs {
         let asked = self.run(|link| {
             let names = paths.iter().map(|path| path.as_str().to_owned()).collect();
             let limit = self.site.config.timeouts.request;
-            let answers = call_until(&self.site.runtime, looks(Arc::clone(&link.sftp), names, limit), cancel)?;
+            let stop = Arc::new(AtomicBool::new(false));
+            let asked = call_until(
+                &self.site.runtime,
+                looks(Arc::clone(&link.sftp), names, limit, Arc::clone(&stop)),
+                cancel,
+            );
+
+            // A call that is given up leaves its future running to the limits of its requests: no new request goes out.
+            stop.store(true, Ordering::Release);
+
+            let answers = asked?;
 
             // A connection that was lost is opened again and the batch asked once more, as for one look.
             if answers.iter().any(|answer| {
@@ -287,11 +297,13 @@ fn present(answer: io::Result<RemoteMeta>) -> io::Result<Option<RemoteMeta>> {
 }
 
 /// The `lstat` of each of `paths`, [`LOOKS_IN_FLIGHT`] of them in flight together (the next goes out as one is answered);
-/// the answers in the order of the paths. Each has the request limit.
+/// the answers in the order of the paths. Each has the request limit. No new look goes out once `stop` is set (the ones in
+/// flight finish or run out), and the looks not made are `Interrupted`.
 async fn looks(
     sftp: Arc<RawSftpSession>,
     paths: Vec<String>,
     limit: Duration,
+    stop: Arc<AtomicBool>,
 ) -> io::Result<Vec<io::Result<Option<RemoteMeta>>>> {
     let mut answers: Vec<Option<io::Result<Option<RemoteMeta>>>> = (0..paths.len()).map(|_| None).collect();
     let mut waiting = paths.into_iter().enumerate();
@@ -299,6 +311,7 @@ async fn looks(
 
     loop {
         while asked.len() < LOOKS_IN_FLIGHT
+            && !stop.load(Ordering::Acquire)
             && let Some((index, path)) = waiting.next()
         {
             let sftp = Arc::clone(&sftp);
@@ -320,7 +333,7 @@ async fn looks(
 
     Ok(answers
         .into_iter()
-        .map(|answer| answer.unwrap_or_else(|| Err(closed())))
+        .map(|answer| answer.unwrap_or_else(|| Err(cancelled())))
         .collect())
 }
 

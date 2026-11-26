@@ -316,7 +316,7 @@ impl Run<'_> {
             return Ok(());
         }
 
-        match down.home.confirm_after(down.fs, &parent, abort) {
+        match down.home.confirm_after(down.fs, &parent) {
             Ok(()) => Ok(()),
             Err(error) => self.report(rel, error),
         }

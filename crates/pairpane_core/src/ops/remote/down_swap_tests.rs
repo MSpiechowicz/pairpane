@@ -15,7 +15,7 @@ use super::super::testing::{Rig, long_ago, read, set_times, temp, tree};
 use super::testing::{FOLDER_CHANGED, Fake, NOT_LISTED, REMOVED_ELSEWHERE, download, failure, fetch, said};
 
 /// A server with the file `s.txt` in `sub`, and a file of the same name, size and time in `victim`.
-fn with_victim() -> Arc<Fake> {
+pub(super) fn with_victim() -> Arc<Fake> {
     let server = Fake::new();
 
     server.put("sub/s.txt", b"s");
@@ -28,7 +28,7 @@ fn with_victim() -> Arc<Fake> {
 }
 
 /// The folder `name` of the server is moved aside, and `name` is made a link to its folder `victim`.
-fn swap_for_victim(server: &Fake, name: &'static str) -> Arc<dyn Fn() + Send + Sync> {
+pub(super) fn swap_for_victim(server: &Fake, name: &'static str) -> Arc<dyn Fn() + Send + Sync> {
     let root = server.at("");
 
     Arc::new(move || {
@@ -78,28 +78,25 @@ fn the_folder_of_the_items_swapped_for_a_link_during_the_job_keeps_the_originals
 
 #[test]
 fn a_folder_that_is_itself_a_link_the_user_chose_can_be_moved_from() {
-    for lexical in [true, false] {
-        let server = Fake::new();
+    let server = Fake::new();
 
-        server.put("real/a.txt", b"a");
-        server.put("real/in/b.txt", b"b");
-        std::os::unix::fs::symlink(server.at("real"), server.at("chosen")).expect("link");
-        server.switch(|switches| switches.lexical_realpath = lexical);
-        let local = temp();
+    server.put("real/a.txt", b"a");
+    server.put("real/in/b.txt", b"b");
+    std::os::unix::fs::symlink(server.at("real"), server.at("chosen")).expect("link");
+    let local = temp();
 
-        let ended = Rig::new().run(download(
-            OpKind::Move,
-            &server,
-            "/chosen",
-            &["a.txt", "in"],
-            local.path(),
-        ));
+    let ended = Rig::new().run(download(
+        OpKind::Move,
+        &server,
+        "/chosen",
+        &["a.txt", "in"],
+        local.path(),
+    ));
 
-        assert_eq!(ended.outcome, Outcome::Done, "lexical: {lexical}");
-        assert_eq!(ended.errors.len(), 0, "{:?}, lexical: {lexical}", said(&ended));
-        assert_eq!(tree(local.path()), ["a.txt", "in/", "in/b.txt"], "lexical: {lexical}");
-        assert_eq!(tree(&server.at("real")), Vec::<String>::new(), "lexical: {lexical}");
-    }
+    assert_eq!(ended.outcome, Outcome::Done);
+    assert_eq!(ended.errors.len(), 0, "{:?}", said(&ended));
+    assert_eq!(tree(local.path()), ["a.txt", "in/", "in/b.txt"]);
+    assert_eq!(tree(&server.at("real")), Vec::<String>::new());
 }
 
 #[test]
@@ -117,10 +114,7 @@ fn a_folder_below_a_link_the_user_chose_is_not_moved_from_once_it_is_a_link_itse
     fs::create_dir(server.at("real")).expect("folder");
     fs::rename(server.at("sub"), server.at("real/sub")).expect("moved");
     std::os::unix::fs::symlink(server.at("real"), server.at("chosen")).expect("link");
-    server.switch(|switches| {
-        switches.lexical_realpath = true;
-        switches.at_first_read = Some(swap);
-    });
+    server.switch(|switches| switches.at_first_read = Some(swap));
     let local = temp();
 
     let ended = Rig::new().run(download(OpKind::Move, &server, "/chosen", &["sub"], local.path()));
@@ -157,26 +151,23 @@ fn with_two_roots(shape: &str) -> Arc<Fake> {
 
 #[test]
 fn a_link_the_user_chose_for_the_job_folder_that_is_repointed_during_the_job_keeps_the_originals() {
-    for lexical in [true, false] {
-        let server = with_two_roots("");
-        let root = server.at("");
+    let server = with_two_roots("");
+    let root = server.at("");
 
-        std::os::unix::fs::symlink(root.join("real"), root.join("chosen")).expect("link");
-        server.switch(|switches| {
-            switches.lexical_realpath = lexical;
-            switches.at_first_read = Some(Arc::new(move || {
-                fs::remove_file(root.join("chosen")).expect("link removed");
-                std::os::unix::fs::symlink(root.join("vroot"), root.join("chosen")).expect("repointed");
-            }));
-        });
-        let local = temp();
+    std::os::unix::fs::symlink(root.join("real"), root.join("chosen")).expect("link");
+    server.switch(|switches| {
+        switches.at_first_read = Some(Arc::new(move || {
+            fs::remove_file(root.join("chosen")).expect("link removed");
+            std::os::unix::fs::symlink(root.join("vroot"), root.join("chosen")).expect("repointed");
+        }));
+    });
+    let local = temp();
 
-        let ended = Rig::new().run(download(OpKind::Move, &server, "/chosen", &["s.txt"], local.path()));
+    let ended = Rig::new().run(download(OpKind::Move, &server, "/chosen", &["s.txt"], local.path()));
 
-        assert_eq!(said(&ended), [FOLDER_CHANGED], "lexical: {lexical}");
-        assert_eq!(read(&server.at("vroot/s.txt")), b"v", "lexical: {lexical}");
-        assert_eq!(read(&server.at("real/s.txt")), b"r", "lexical: {lexical}");
-    }
+    assert_eq!(said(&ended), [FOLDER_CHANGED]);
+    assert_eq!(read(&server.at("vroot/s.txt")), b"v");
+    assert_eq!(read(&server.at("real/s.txt")), b"r");
 }
 
 #[test]

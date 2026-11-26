@@ -181,7 +181,8 @@ pub struct RemoteEntry {
 /// `lstat`, `realpath`, `open_read`, `remove_file` and `remove_dir` have a default that fails with `Unsupported`, so a
 /// server that only browses implements the first five methods. A caller that removes things also asks `read_link` of each
 /// link on the way to its folder (a server that does not resolve links in `realpath` shows a link repointed only by
-/// where it leads), and refuses to move through a link where the server says `Unsupported`.
+/// where it leads), and refuses to move through a link where the server says `Unsupported`. A server whose `realpath`
+/// does not resolve links at all is refused a move through a link: the folders its target leads through cannot be told.
 pub trait RemoteFs: Send + Sync {
     /// The connection this answers for.
     fn site(&self) -> SiteId;
@@ -210,7 +211,10 @@ pub trait RemoteFs: Send + Sync {
 
     /// [`RemoteFs::lstat`] of each of `paths`, one answer for each and in the same order. A server that can have several
     /// requests in flight answers them in about the time of one (a caller checks a long way of folders with it); the
-    /// default asks one after the other. Once `cancel` is set, the answers not yet had are `Interrupted` errors.
+    /// default asks one after the other. Once `cancel` is set, the answers not yet had are `Interrupted` errors. There is
+    /// one answer for each path: a caller treats any other count as a server that cannot be trusted. A long way costs
+    /// round trips in proportion to its length (SFTP keeps 64 requests in flight, so about `paths / 64`); a move of a tree
+    /// `n` folders deep asks about `n * n / 64` looks in all, a bound that is accepted.
     fn lstat_many(&self, paths: &[RemotePath], cancel: &AtomicBool) -> Vec<io::Result<Option<RemoteMeta>>> {
         paths
             .iter()

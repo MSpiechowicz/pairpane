@@ -24,6 +24,8 @@ mod walk;
 
 #[cfg(test)]
 mod down_chain_tests;
+#[cfg(all(test, unix))]
+mod down_link_tests;
 #[cfg(test)]
 mod down_move_tests;
 #[cfg(test)]

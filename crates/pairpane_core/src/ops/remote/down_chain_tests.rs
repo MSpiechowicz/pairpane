@@ -47,7 +47,7 @@ fn the_looks_of_a_move_through_the_deepest_tree_a_job_accepts_do_not_grow_with_t
 }
 
 /// What a server does at a moment a test chooses: it says so on the first channel, and waits for the second.
-fn gate() -> (Arc<dyn Fn() + Send + Sync>, mpsc::Receiver<()>, mpsc::Sender<()>) {
+pub(super) fn gate() -> (Arc<dyn Fn() + Send + Sync>, mpsc::Receiver<()>, mpsc::Sender<()>) {
     let (reached, stopped) = mpsc::channel();
     let (go, go_on) = mpsc::channel::<()>();
     let go_on = Mutex::new(go_on);
@@ -63,12 +63,18 @@ fn gate() -> (Arc<dyn Fn() + Send + Sync>, mpsc::Receiver<()>, mpsc::Sender<()>)
     (hook, stopped, go)
 }
 
-/// Moves `d` from `server`, whose hook `stopped` reports (and `go` releases), and cancels the job while the server is held.
-fn cancelled_at(server: &Arc<Fake>, stopped: &mpsc::Receiver<()>, go: &mpsc::Sender<()>) -> (Ended, TempDir) {
+/// Moves `item` from the root of `server`, whose hook `stopped` reports (and `go` releases), and cancels the job while the
+/// server is held.
+pub(super) fn cancelled_at(
+    server: &Arc<Fake>,
+    item: &str,
+    stopped: &mpsc::Receiver<()>,
+    go: &mpsc::Sender<()>,
+) -> (Ended, TempDir) {
     let local = temp();
     let mut rig = Rig::new();
 
-    let job = rig.start(download(OpKind::Move, server, "/", &["d"], local.path()));
+    let job = rig.start(download(OpKind::Move, server, "/", &[item], local.path()));
     stopped
         .recv_timeout(Duration::from_secs(10))
         .expect("the server reached the moment");
@@ -86,9 +92,10 @@ fn a_cancel_during_the_removals_ends_the_job_cancelled_with_the_folders_kept() {
     server.put("d/e/a.txt", b"a");
     server.switch(|switches| switches.after_remove = Some(hook));
 
-    let (ended, local) = cancelled_at(&server, &stopped, &go);
+    let (ended, local) = cancelled_at(&server, "d", &stopped, &go);
 
     assert_eq!(ended.outcome, Outcome::Cancelled);
+    assert_eq!(said(&ended), Vec::<String>::new(), "nothing went wrong");
     assert_eq!(
         tree(&server.at("")),
         ["d/", "d/e/"],
@@ -110,7 +117,7 @@ fn a_cancel_that_comes_while_a_folder_is_looked_at_for_what_is_left_in_it_ends_t
     // The scan lists the folder, then the copy, and then the move looks at what is left of it: there it is cancelled.
     server.switch(|switches| switches.at_listing = Some((3, hook)));
 
-    let (ended, _local) = cancelled_at(&server, &stopped, &go);
+    let (ended, _local) = cancelled_at(&server, "d", &stopped, &go);
 
     assert_eq!(ended.outcome, Outcome::Cancelled);
     assert_eq!(tree(&server.at("")), ["d/"], "the file is moved, the folder is kept");
