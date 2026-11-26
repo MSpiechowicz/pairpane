@@ -10,8 +10,10 @@ use std::sync::atomic::Ordering;
 use pairpane_core::model::{ConnectOutcome, ConnectTarget};
 use pretty_assertions::assert_eq;
 
+use super::ssh_config::says;
 use super::{Harness, assert_fixed, key_only};
 use crate::AgentSource;
+use crate::resolve::find_ssh;
 use crate::test_server::{Settings, USER, generate_key, write_key};
 
 pub(super) const PASSWORD: &str = "correct horse";
@@ -91,10 +93,14 @@ pub(super) fn signs_in(h: &Harness, what: &str) -> bool {
 }
 
 pub(super) fn connected(h: &Harness) {
-    assert!(matches!(
-        h.connect_to(&files_target(), Some(PASSWORD)).expect("answered"),
-        ConnectOutcome::Connected { .. }
-    ));
+    match h.connect_to(&files_target(), Some(PASSWORD)) {
+        Ok(ConnectOutcome::Connected { .. }) => {}
+        Ok(other) => panic!("expected a connection, got {other:?}"),
+        Err(error) => panic!(
+            "not connected: {error}\n{}",
+            says(find_ssh().as_deref(), Some(&h.home.path().join("ssh_config")), "files")
+        ),
+    }
 }
 
 #[test]

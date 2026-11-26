@@ -1,7 +1,13 @@
 //! The `known_hosts` files `ssh -G` prints. A list is its entries joined with a space, and not quoted: a path with a space
 //! in it is several words, which are joined again here (a path starts at a word that is absolute, the words after it
 //! that are not absolute are the rest of it). A leading `~/` (older and Windows builds leave it) and `__PROGRAMDATA__`
-//! (Windows) are filled in.
+//! (Windows) are filled in. Paths are put together as text, with the separator of the rules (`/` for Unix ones, `\` for
+//! Windows ones), and never by the system that this runs on: the same list reads the same everywhere.
+//!
+//! The forms of Windows OpenSSH that are taken: a drive (`C:\x`, `C:/x`, `/C:/x`, short names like `RUNNER~1` included),
+//! a share (`\\host\share`, `//host/share`), `~/` and `~\`, `__PROGRAMDATA__` and `%ProgramData%` (in any case), `NUL` and
+//! `/dev/null` (no file), and a path in double quotes (one path, spaces and all). What is not: `/c/x` (MSYS and Git
+//! builds), which is a `ssh` that is not Windows OpenSSH.
 //!
 //! The joining is a guess, and a wrong one would read a file that `ssh` does not (`UserKnownHostsFile /a/kh rel_kh` names
 //! two files, `/a/kh` and `rel_kh`, and so does `/a/my home/kh` when `/a/my` is a file). So when a word that is not
@@ -44,23 +50,55 @@ impl<'a> Rules<'a> {
             .strip_prefix("~/")
             .or_else(|| self.windows.then(|| word.strip_prefix("~\\")).flatten())
         {
-            return Some(self.home.join(rest).to_string_lossy().into_owned());
+            return Some(self.under(&self.home.to_string_lossy(), rest));
         }
 
         if !self.windows {
             return word.starts_with('/').then(|| word.to_owned());
         }
 
-        if let Some(rest) = word.strip_prefix("__PROGRAMDATA__") {
-            return self.program_data.map(|data| format!("{data}{rest}"));
+        if self.start_of_program_data(word) {
+            let rest =
+                after_ignoring_case(word, "__PROGRAMDATA__").or_else(|| after_ignoring_case(word, "%ProgramData%"));
+
+            return self.program_data.zip(rest).map(|(data, rest)| format!("{data}{rest}"));
         }
 
-        let mut chars = word.chars();
-        let drive = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
-            && chars.next() == Some(':')
-            && matches!(chars.next(), Some('/' | '\\'));
+        // `/C:/x`: a drive with the slash that Windows OpenSSH puts before it in some places.
+        let word = match word.strip_prefix('/') {
+            Some(rest) if is_drive(rest) => rest,
+            _ => word,
+        };
 
-        (drive || word.starts_with("\\\\") || word.eq_ignore_ascii_case("nul")).then(|| word.to_owned())
+        (is_drive(word)
+            || word.starts_with("\\\\")
+            || word.starts_with("//")
+            || word == "/dev/null"
+            || word.eq_ignore_ascii_case("nul"))
+        .then(|| word.to_owned())
+    }
+
+    /// `rest` below `base`, as text with this system's separator.
+    fn under(&self, base: &str, rest: &str) -> String {
+        let separator = if self.windows { '\\' } else { '/' };
+        let base = base.trim_end_matches(|c| c == '/' || (self.windows && c == '\\'));
+
+        format!("{base}{separator}{rest}")
+    }
+
+    /// Whether `path` is there. A path that is not absolute on the system that this runs on (a Unix path on Windows, a
+    /// drive on Unix, `/a` on a drive) means something else there, and is not looked up.
+    fn exists(path: &str) -> bool {
+        let path = Path::new(path);
+
+        path.is_absolute() && path.symlink_metadata().is_ok()
+    }
+
+    /// Whether `word` starts with `__PROGRAMDATA__` or `%ProgramData%`.
+    fn start_of_program_data(&self, word: &str) -> bool {
+        after_ignoring_case(word, "__PROGRAMDATA__")
+            .or_else(|| after_ignoring_case(word, "%ProgramData%"))
+            .is_some()
     }
 
     /// Whether `path` is no file (`/dev/null`, and `NUL` on Windows).
@@ -105,6 +143,58 @@ pub(super) struct Listed {
     pub(super) joined: Vec<PathBuf>,
 }
 
+/// `word` without `prefix` (any case), when it starts with it.
+fn after_ignoring_case<'a>(word: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = word.get(..prefix.len())?;
+
+    head.eq_ignore_ascii_case(prefix).then(|| &word[prefix.len()..])
+}
+
+/// Whether `text` starts with a drive and a separator (`C:\`, `c:/`).
+fn is_drive(text: &str) -> bool {
+    let mut chars = text.chars();
+
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.next() == Some(':')
+        && matches!(chars.next(), Some('/' | '\\'))
+}
+
+/// The entries of a list: its words, and for Windows rules the words between double quotes made one entry (`true`: it
+/// was quoted, so it is one whole path). A quote that is not closed cannot be placed.
+fn entries(words: &[String], rules: &Rules<'_>) -> io::Result<Vec<(String, bool)>> {
+    let mut entries: Vec<(String, bool)> = Vec::new();
+    let mut open: Option<String> = None;
+
+    for word in words {
+        match open.as_mut() {
+            Some(text) => {
+                text.push(' ');
+
+                if let Some(end) = word.strip_suffix('"') {
+                    text.push_str(end);
+                    entries.push((open.take().unwrap_or_default(), true));
+                } else {
+                    text.push_str(word);
+                }
+            }
+            None if rules.windows && word.starts_with('"') => {
+                let rest = &word[1..];
+
+                match rest.strip_suffix('"') {
+                    Some(whole) => entries.push((whole.to_owned(), true)),
+                    None => open = Some(rest.to_owned()),
+                }
+            }
+            None => entries.push((word.clone(), false)),
+        }
+    }
+
+    match open {
+        Some(_) => Err(rules.refusal()),
+        None => Ok(entries),
+    }
+}
+
 /// The files of a list that `ssh -G` printed, without repeats. `none` and `/dev/null` are no file. A list that does not
 /// start with an absolute path, one that has `none` among other entries, one whose words could be the paths of other
 /// files (see the top of this file) and one of more than [`MAX_FILES`] files are refused (fixed messages): where a path
@@ -117,28 +207,41 @@ pub(super) fn files(words: &[String], rules: &Rules<'_>) -> io::Result<Listed> {
         return Ok(Listed::default());
     }
 
-    let mut paths: Vec<(String, bool)> = Vec::new();
+    // `closed`: a path that was quoted, which nothing is joined to; `joined`: one made of several words.
+    struct Entry {
+        path: String,
+        joined: bool,
+        closed: bool,
+    }
 
-    for word in words {
-        if word == "none" {
+    let mut paths: Vec<Entry> = Vec::new();
+
+    for (word, quoted) in entries(words, rules)? {
+        if word == "none" && !quoted {
             return Err(rules.refusal());
         }
 
         // A `__PROGRAMDATA__` path always starts a new file; with no `%ProgramData%` to put in, it cannot be placed.
-        if rules.windows && word.starts_with("__PROGRAMDATA__") && rules.program_data.is_none() {
+        if rules.windows && rules.program_data.is_none() && rules.start_of_program_data(&word) {
             return Err(Rules::ambiguous());
         }
 
-        if let Some(path) = rules.start_of(word) {
-            paths.push((path, false));
-        } else if let Some((last, joined)) = paths.last_mut() {
-            if rules.is_nothing(last) || Path::new(last.as_str()).symlink_metadata().is_ok() || rules.steps(word) {
+        if let Some(path) = rules.start_of(&word) {
+            paths.push(Entry {
+                path,
+                joined: false,
+                closed: quoted,
+            });
+        } else if quoted {
+            return Err(rules.refusal());
+        } else if let Some(last) = paths.last_mut() {
+            if last.closed || rules.is_nothing(&last.path) || Rules::exists(&last.path) || rules.steps(&word) {
                 return Err(Rules::ambiguous());
             }
 
-            last.push(' ');
-            last.push_str(word);
-            *joined = true;
+            last.path.push(' ');
+            last.path.push_str(&word);
+            last.joined = true;
         } else {
             return Err(rules.refusal());
         }
@@ -147,10 +250,10 @@ pub(super) fn files(words: &[String], rules: &Rules<'_>) -> io::Result<Listed> {
     let mut files: Vec<PathBuf> = Vec::new();
     let mut joined: Vec<PathBuf> = Vec::new();
 
-    for (path, was_joined) in paths.iter().filter(|(path, _)| !rules.is_nothing(path)) {
-        let path = PathBuf::from(path);
+    for entry in paths.iter().filter(|entry| !rules.is_nothing(&entry.path)) {
+        let path = PathBuf::from(&entry.path);
 
-        if *was_joined && !joined.contains(&path) {
+        if entry.joined && !joined.contains(&path) {
             joined.push(path.clone());
         }
 
@@ -197,7 +300,7 @@ mod tests {
 
     fn listed(rules: &Rules<'_>, text: &str) -> Vec<String> {
         files(&words(text), rules)
-            .expect("files")
+            .unwrap_or_else(|error| panic!("{text:?} is refused: {error}"))
             .paths
             .iter()
             .map(|path| path.to_string_lossy().into_owned())
@@ -252,6 +355,41 @@ mod tests {
     }
 
     #[test]
+    fn the_other_forms_of_windows_openssh_are_taken_and_none_of_the_msys_ones() {
+        let rules = windows();
+
+        // `/dev/null` and `NUL` are no file, `/C:/x` is a drive, `//host/share` a share, `~\` the home folder, and
+        // `%ProgramData%` and `__programdata__` are filled in in any case.
+        assert_eq!(listed(&rules, "/dev/null"), Vec::<String>::new());
+        assert_eq!(listed(&rules, "NUL /dev/null"), Vec::<String>::new());
+        assert_eq!(
+            listed(
+                &rules,
+                "/C:/Users/RUNNER~1/kh //host/share/kh ~\\.ssh\\kh %ProgramData%\\ssh\\kh __programdata__/ssh/kh"
+            ),
+            [
+                "C:/Users/RUNNER~1/kh",
+                "//host/share/kh",
+                "C:\\Users\\me\\.ssh\\kh",
+                "C:\\ProgramData\\ssh\\kh",
+                "C:\\ProgramData/ssh/kh"
+            ]
+        );
+
+        // A path in quotes is one path, spaces, runs of them and a later path included.
+        assert_eq!(
+            listed(&rules, "\"C:/my  home/kh\" \"D:/x\" C:/plain"),
+            ["C:/my  home/kh", "D:/x", "C:/plain"]
+        );
+        assert_eq!(listed(&rules, "\"/dev/null\""), Vec::<String>::new());
+
+        // But not a quote that is open, one that is not a path, or a word joined to a path that was quoted.
+        for text in ["\"C:/my home/kh", "\"relative kh\"", "\"C:/a\" b", "/c/Users/me/kh"] {
+            assert!(files(&words(text), &rules).is_err(), "{text:?}");
+        }
+    }
+
+    #[test]
     fn a_program_data_path_with_no_program_data_is_refused_rather_than_joined() {
         let rules = Rules {
             program_data: None,
@@ -272,6 +410,15 @@ mod tests {
         );
         // And a Windows path where Unix is expected is not one either.
         assert!(files(&words("C:\\kh"), &unix()).is_err());
+    }
+
+    #[test]
+    fn a_path_is_looked_up_only_where_it_is_absolute_on_this_system() {
+        // `/a` is a path on a Windows drive and nothing on Unix, and `C:\x` the other way round: neither is looked up.
+        let nowhere = if cfg!(windows) { "/" } else { "C:\\" };
+
+        assert!(!Rules::exists(&format!("{nowhere}a")));
+        assert!(Rules::exists(&std::env::temp_dir().to_string_lossy()));
     }
 
     #[test]

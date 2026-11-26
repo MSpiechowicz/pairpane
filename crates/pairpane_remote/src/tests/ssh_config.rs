@@ -13,10 +13,28 @@ use tempfile::TempDir;
 use super::ssh_program;
 use crate::auth::KeyFile;
 use crate::plan::{Plan, plan};
+use crate::resolve::raw_lines;
 use crate::verify::NewKey;
 use crate::{AgentSource, PoolConfig, Timeouts};
 
 const PROXY: &str = "ssh_config sends this host through a proxy, which Pairpane does not support; connect with ssh";
+
+/// What `ssh -G` says about `host` of the file `config` that a refusal is about (the files that are read, and the keys).
+pub(super) fn says(program: Option<&Path>, config: Option<&Path>, host: &str) -> String {
+    let (Some(program), Some(config)) = (program, config) else {
+        return "no ssh to ask".to_owned();
+    };
+
+    format!(
+        "ssh -G {host} says:\n{}",
+        raw_lines(
+            program,
+            config,
+            host,
+            &["userknownhostsfile", "globalknownhostsfile", "identityfile"]
+        )
+    )
+}
 
 /// Files in a temporary folder (the first is the configuration given to `ssh -G -F`) and a pool configuration that asks
 /// the real OpenSSH about them. `{dir}` in a file is the folder, in the slash form that `ssh_config` reads on every
@@ -59,6 +77,20 @@ impl Lab {
 
     pub(super) fn plan(&self, host: &str) -> std::io::Result<Plan> {
         plan(&self.config, &typed(host))
+    }
+
+    /// The plan for `host`, which is expected to work: where it is refused, the failure says what `ssh -G` printed.
+    pub(super) fn planned(&self, host: &str) -> Plan {
+        self.plan(host).unwrap_or_else(|error| {
+            panic!(
+                "{host} is refused: {error}\n{}",
+                says(
+                    self.config.ssh_program.as_deref(),
+                    self.config.ssh_config_file.as_deref(),
+                    host
+                )
+            )
+        })
     }
 
     /// Why `host` is refused as invalid, before OpenSSH is asked.
@@ -104,7 +136,7 @@ fn what_the_configuration_says_is_applied_and_what_is_typed_wins() {
         return;
     };
     let home = &lab.config.home;
-    let planned = lab.plan("files").expect("planned");
+    let planned = lab.planned("files");
 
     assert_eq!(planned.target.host, "files.example");
     assert_eq!(planned.target.port, 2222);
@@ -141,7 +173,7 @@ fn what_the_configuration_says_is_applied_and_what_is_typed_wins() {
     assert_eq!(overridden.target.user, "typed");
     assert_eq!(overridden.label, "typed@files:2200");
 
-    let other = lab.plan("elsewhere").expect("planned");
+    let other = lab.planned("elsewhere");
 
     assert_eq!(other.target.host, "elsewhere");
     assert_eq!(other.target.port, 22);
@@ -176,30 +208,27 @@ fn the_known_hosts_files_and_the_alias_are_the_ones_ssh_names() {
     )]) else {
         return;
     };
-    let files = lab.plan("files").expect("planned");
+    let files = lab.planned("files");
 
     assert_eq!(files.known_hosts.user, [lab.path("kh1"), lab.path("kh2")]);
     assert_eq!(files.known_hosts.global, [lab.path("global")]);
     assert_eq!(files.target.known_as.as_str(), "vault.example");
     assert_eq!(files.new_key, NewKey::Strict);
 
-    let plain = lab.plan("plain").expect("planned");
+    let plain = lab.planned("plain");
 
     assert!(plain.known_hosts.user.is_empty(), "no file to write to");
     assert_eq!(plain.target.known_as.as_str(), "[plain]:2200");
     assert_eq!(plain.new_key, NewKey::Ask);
 
     assert_eq!(
-        lab.plan("loose").expect("planned").new_key,
+        lab.planned("loose").new_key,
         NewKey::Ask,
         "ask first, as for any other value"
     );
 
     // The output does not quote a path with a space in it: its words are joined again.
-    assert_eq!(
-        lab.plan("spaced").expect("planned").known_hosts.user,
-        [lab.path("with space/kh")]
-    );
+    assert_eq!(lab.planned("spaced").known_hosts.user, [lab.path("with space/kh")]);
 }
 
 #[test]
@@ -371,7 +400,7 @@ fn an_ordinary_host_resolves_and_the_names_of_the_systemd_proxy_and_options_are_
         return;
     };
 
-    assert_eq!(lab.plan("files.example").expect("planned").target.host, "files.example");
+    assert_eq!(lab.planned("files.example").target.host, "files.example");
 
     // These go through the proxy command of the file, and are refused for it.
     for host in [".host", "unix%run", "machine%web", "vsock%3"] {

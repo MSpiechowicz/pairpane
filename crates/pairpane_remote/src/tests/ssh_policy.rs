@@ -140,7 +140,7 @@ fn the_default_known_hosts_files_are_absolute_whatever_form_ssh_prints_them_in()
     let Some(lab) = Lab::new(&[("config", "Host files\n  HostName files.example\n")]) else {
         return;
     };
-    let planned = lab.plan("files").expect("planned");
+    let planned = lab.planned("files");
 
     assert!(planned.known_hosts.user[0].is_absolute(), "{:?}", planned.known_hosts);
     assert!(planned.known_hosts.user[0].ends_with(".ssh/known_hosts"));

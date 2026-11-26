@@ -175,7 +175,9 @@ fn a_cancelled_listing_stops_between_pages() {
     assert!(h.server.counts.pages.load(Ordering::Relaxed) < 30);
 }
 
-#[cfg(unix)]
+// Only where the file system takes any bytes in a name: APFS refuses one that is not valid text (`names.rs` has the unit
+// test of the filter itself).
+#[cfg(target_os = "linux")]
 #[test]
 fn a_name_that_is_not_valid_text_is_left_out_of_the_listing() {
     use std::ffi::OsStr;

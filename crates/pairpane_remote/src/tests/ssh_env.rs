@@ -101,8 +101,5 @@ fn a_variable_of_the_environment_is_expanded_in_a_path_as_ssh_does() {
         return;
     };
 
-    assert_eq!(
-        lab.plan("files").expect("planned").known_hosts.user,
-        [folder.join("kh_probe")]
-    );
+    assert_eq!(lab.planned("files").known_hosts.user, [folder.join("kh_probe")]);
 }

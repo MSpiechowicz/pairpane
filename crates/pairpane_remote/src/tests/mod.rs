@@ -16,6 +16,8 @@ mod ssh_env;
 mod ssh_policy;
 mod ssh_session;
 mod ssh_sites;
+#[cfg(windows)]
+mod ssh_windows;
 
 use std::fs;
 use std::io;

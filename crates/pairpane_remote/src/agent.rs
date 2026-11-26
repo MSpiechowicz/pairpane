@@ -130,18 +130,20 @@ fn agent_gone() -> std::io::Error {
 #[cfg(not(unix))]
 pub(crate) async fn sign_in(
     _handle: &mut Handle<Verifier>,
-    _credentials: &Credentials<'_>,
+    credentials: &Credentials<'_>,
     _tries: &mut usize,
     _max: usize,
 ) -> bool {
+    // No agent is spoken to here, wherever it is said to be.
+    let _agent: &AgentSource = credentials.agent;
+
     false
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn identity_agent_says_where_the_agent_is() {
         let default = AgentSource::Path(PathBuf::from("/run/default"));

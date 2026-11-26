@@ -108,7 +108,11 @@ pub(crate) fn resolve(config: &PoolConfig, asked: &Asked<'_>) -> io::Result<Reso
     let Some(program) = ssh_program(config) else {
         return unconfigured(config, asked);
     };
-    let output = run::run(&program, arguments(config, asked), run::LIMIT)?;
+    let output = run::run(
+        &program,
+        arguments(config.ssh_config_file.as_deref(), asked),
+        run::LIMIT,
+    )?;
     let answer = parse::parse(&output)?;
 
     if answer.proxied {
@@ -252,10 +256,10 @@ fn unusable() -> io::Error {
 /// here (`sftp` does not do it, and fails on such a host), for `ssh` takes no command on the command line next to one in
 /// the configuration; a `Match command` block never matches the configured `RemoteCommand`, so no block is lost. The host follows
 /// `--`, and no option can be made of it.
-fn arguments(config: &PoolConfig, asked: &Asked<'_>) -> Vec<std::ffi::OsString> {
+fn arguments(config_file: Option<&Path>, asked: &Asked<'_>) -> Vec<std::ffi::OsString> {
     let mut args: Vec<std::ffi::OsString> = vec!["-G".into()];
 
-    if let Some(file) = &config.ssh_config_file {
+    if let Some(file) = config_file {
         args.extend(["-F".into(), file.into()]);
     }
 
@@ -271,6 +275,26 @@ fn arguments(config: &PoolConfig, asked: &Asked<'_>) -> Vec<std::ffi::OsString> 
     args.extend(["--".into(), asked.host.into(), "sftp".into()]);
 
     args
+}
+
+/// What the real `ssh -G` prints, as `resolve` asks it for `host` (the same arguments), for a test that wants to say what
+/// it was given: the lines of the options named in `keys` (lower case), one per line, or the error text.
+#[cfg(test)]
+pub(crate) fn raw_lines(program: &Path, config_file: &Path, host: &str, keys: &[&str]) -> String {
+    let asked = Asked {
+        host,
+        user: None,
+        port: None,
+    };
+
+    match run::run(program, arguments(Some(config_file), &asked), run::LIMIT) {
+        Ok(output) => String::from_utf8_lossy(&output)
+            .lines()
+            .filter(|line| line.split(' ').next().is_some_and(|key| keys.contains(&key)))
+            .map(|line| format!("  [{line}]\n"))
+            .collect(),
+        Err(error) => format!("  ssh -G failed: {error}\n"),
+    }
 }
 
 /// What the `%` tokens of an `IdentityFile` stand for.
