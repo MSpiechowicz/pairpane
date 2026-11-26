@@ -319,3 +319,55 @@ fn a_server_that_stalls_the_check_after_a_removal_does_not_hold_a_cancelled_job_
     assert_eq!(said(&ended), [UNCHECKED]);
     assert!(took < Duration::from_secs(2), "the cancel took {took:?}");
 }
+
+#[test]
+fn an_empty_folder_the_server_removed_is_kept_here_when_the_move_is_cancelled_during_the_check_after() {
+    use std::sync::Mutex;
+    use std::sync::mpsc;
+
+    let server = Fake::new();
+    server.put("d/a.txt", b"a");
+    fs::create_dir(server.at("d/e")).expect("an empty folder");
+
+    let (reached, at_check) = mpsc::channel::<()>();
+    let (go, go_on) = mpsc::channel::<()>();
+    let go_on = Mutex::new(go_on);
+    let fired = AtomicBool::new(false);
+    let gone = server.at("d/e");
+    let meddled = Meddled::new(&server, move |fake, paths, cancel| {
+        // The check after the removal of `d/e`: held until the job is cancelled, then answered short.
+        if !gone.exists() && !fired.swap(true, Ordering::SeqCst) {
+            reached.send(()).expect("told");
+            go_on
+                .lock()
+                .expect("lock")
+                .recv_timeout(Duration::from_secs(10))
+                .expect("let go");
+            return Vec::new();
+        }
+        fake.lstat_many(paths, cancel)
+    });
+    let local = temp();
+    let mut rig = Rig::new();
+    let request = Request::download(
+        OpKind::Move,
+        meddled,
+        RemotePath::root(),
+        vec!["d".to_owned()],
+        local.path().to_owned(),
+        false,
+    );
+    let job = rig.start(request);
+
+    at_check
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the check after the removal of d/e");
+    rig.engine.control(job, ControlAction::Cancel).expect("a known job");
+    go.send(()).expect("let go");
+    let ended = rig.wait_ended(job);
+
+    assert_eq!(ended.outcome, Outcome::Cancelled);
+    assert!(!server.at("d/e").exists(), "removed from the server");
+    assert!(local.path().join("d/e").is_dir(), "{:?}", tree(local.path()));
+    assert_eq!(said(&ended).len(), 1, "{:?}", said(&ended));
+}

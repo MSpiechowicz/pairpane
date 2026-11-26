@@ -286,12 +286,14 @@ impl Run<'_> {
             }
         }
 
-        if self.moving() {
-            self.remove_folder(down, remote, rel)?;
-        }
-
+        // Its copy is whole by now: it is kept whatever the removal of the server's folder ends with, so a cancel during
+        // that removal (once the server has removed it) does not take the only copy left of an empty folder.
         if created {
             self.created.finish(target);
+        }
+
+        if self.moving() {
+            self.remove_folder(down, remote, rel)?;
         }
 
         Ok(())
