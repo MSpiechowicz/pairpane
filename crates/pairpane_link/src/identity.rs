@@ -12,7 +12,9 @@
 mod open;
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use iroh::SecretKey;
