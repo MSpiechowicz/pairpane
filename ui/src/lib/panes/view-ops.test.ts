@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { arrive, deliver, entry, fakeBackend } from '../../../tests/panes';
+import { arrive, deliver, entry, fakeBackend, folderStart } from '../../../tests/panes';
 import { PaneView } from './view.svelte';
 
 /** A pane showing `/work` (rows: `..`, docs, a.txt, b.md, c.txt). */
@@ -90,7 +90,7 @@ describe('PaneView.pointAt', () => {
     expect(under(view)).toBe('a.txt');
 
     // The watch lists the folder again, now with the new name.
-    channel.emit({ kind: 'start', path: '/work', parent: '/', crumbs: [], total: 3 });
+    channel.emit(folderStart('/work', 3));
     channel.emit({ kind: 'batch', offset: 0, entries: [entry('docs', 'dir'), entry('b.md'), entry('z.txt')] });
     channel.emit({ kind: 'done', dirs: 1, files: 2, bytes: 0, free: null });
 
@@ -103,7 +103,7 @@ describe('PaneView.pointAt', () => {
     view.pointAt('z.txt');
 
     view.setCursor(3); // b.md
-    channel.emit({ kind: 'start', path: '/work', parent: '/', crumbs: [], total: 2 });
+    channel.emit(folderStart('/work', 2));
     channel.emit({ kind: 'batch', offset: 0, entries: [entry('b.md'), entry('z.txt')] });
     channel.emit({ kind: 'done', dirs: 0, files: 2, bytes: 0, free: null });
 

@@ -6,7 +6,7 @@ import { Hotlist } from '$lib/panes/hotlist.svelte';
 import { PaneTabs } from '$lib/panes/tabs.svelte';
 import { Volumes } from '$lib/panes/volumes.svelte';
 
-import { entry, fakeBackend } from '../../../tests/panes';
+import { crumbsTo, entry, fakeBackend, folderStart } from '../../../tests/panes';
 import type { Menu } from './menu';
 import Pane from './Pane.svelte';
 import { preferences } from './preferences.svelte';
@@ -18,16 +18,7 @@ async function huge(active = true, menu?: Menu) {
   const tabs = new PaneTabs(backend.ipc, 'left');
   const view = tabs.view;
   await view.listing.open('/big');
-  backend.last().emit({
-    kind: 'start',
-    path: '/big',
-    parent: '/',
-    crumbs: [
-      { name: '/', path: '/' },
-      { name: 'big', path: '/big' },
-    ],
-    total: TOTAL,
-  });
+  backend.last().emit(folderStart('/big', TOTAL, { crumbs: crumbsTo('/big') }));
   backend.last().emit({
     kind: 'batch',
     offset: 0,

@@ -11,6 +11,7 @@ import type { SavedState } from '$lib/ipc/bindings/SavedState';
 
 import { type Answers, appShown, key, listbox, withArchiveOnRight } from '../tests/app';
 import { done, hit } from '../tests/find';
+import { resultsStart } from '../tests/panes';
 
 /** The search the page started: its channel, for the test to send events on. */
 function searching() {
@@ -22,7 +23,7 @@ function searching() {
     },
     // The backend lists the results into the pane before it answers: the pane shows them from the `start` on.
     find_open: (args: { id: number; onEvent: (event: ListEvent) => void }) => {
-      args.onEvent({ kind: 'start', path: '/left', parent: '/', crumbs: [], total: 0, results: args.id });
+      args.onEvent(resultsStart('/left', 0, args.id));
       args.onEvent({ kind: 'done', dirs: 0, files: 0, bytes: 0, free: null });
       return null;
     },

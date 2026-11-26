@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { PaneView } from '$lib/panes/view.svelte';
 
-import { deliver, entry, fakeBackend } from '../../../tests/panes';
+import { archiveStart, deliver, entry, fakeBackend } from '../../../tests/panes';
 import {
   CANT_ADD_NOTICE,
   chosen,
@@ -223,7 +223,7 @@ async function insideZip(archive = '/work/a.zip', dir = '') {
   const spot = { archive, dir };
   await view.listing.openArchive(spot);
   const entries = [entry('docs', 'dir'), entry('readme', 'file'), entry('notes', 'file')];
-  backend.last().emit({ kind: 'start', path: '/work', parent: '/', crumbs: [], total: 3, archive: spot });
+  backend.last().emit(archiveStart('/work', 3, spot));
   backend.last().emit({ kind: 'batch', offset: 0, entries });
   backend.last().emit({ kind: 'done', dirs: 1, files: 2, bytes: 0, free: null });
   return view;

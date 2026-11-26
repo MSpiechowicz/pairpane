@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import { PaneTabs } from '$lib/panes/tabs.svelte';
 
-import { arrive, entry, fakeBackend } from '../../../tests/panes';
+import { archiveStart, arrive, entry, fakeBackend } from '../../../tests/panes';
 import type { FileAction } from './dialogs';
 import { FileActions } from './fileActions.svelte';
 import { CANT_ADD_NOTICE, EXTRACT_INTO_ARCHIVE_NOTICE, INTO_ARCHIVE_NOTICE, READ_ONLY_NOTICE } from './targets';
@@ -15,7 +15,7 @@ async function list(backend: ReturnType<typeof fakeBackend>, tabs: PaneTabs, arc
   const entries = [entry('a.zip'), entry('b.txt'), entry('1.001')];
   if (archive) {
     await tabs.view.listing.openArchive(spot);
-    backend.last().emit({ kind: 'start', path: '/work', parent: '/', crumbs: [], total: 3, archive: spot });
+    backend.last().emit(archiveStart('/work', 3, spot));
     backend.last().emit({ kind: 'batch', offset: 0, entries });
     backend.last().emit({ kind: 'done', dirs: 0, files: 3, bytes: 0, free: null });
   } else {

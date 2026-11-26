@@ -67,8 +67,8 @@ fn the_results_are_listed_under_the_folder_searched_with_relative_names_folders_
         parent,
         crumbs,
         total,
-        archive,
-        results,
+        location,
+        capabilities,
     } = &events[0]
     else {
         panic!("start comes first: {events:?}");
@@ -80,7 +80,9 @@ fn the_results_are_listed_under_the_folder_searched_with_relative_names_folders_
         "up from the results is the folder searched"
     );
     assert_eq!(crumbs.last().map(|crumb| crumb.path.as_str()), Some(root.as_str()));
-    assert_eq!((*total, archive.is_none(), *results), (4, true, Some(id)));
+    assert_eq!(*total, 4);
+    assert_eq!(*location, PaneLocation::Results { id });
+    assert_eq!(*capabilities, PaneCapabilities::WRITABLE);
 
     assert_eq!(
         names_of(&events),
@@ -147,8 +149,12 @@ fn the_results_found_so_far_of_a_search_that_still_runs_can_be_listed() {
 fn a_later_open_of_the_pane_supersedes_the_earlier_one_and_a_raised_flag_stops_the_listing() {
     let panes = Panes::default();
     let (channel, _) = collecting();
-    let earlier = panes.claim_results(PaneId::Left, FindId(1), &channel).expect("claimed");
-    let later = panes.claim_results(PaneId::Left, FindId(2), &channel).expect("claimed");
+    let earlier = panes
+        .claim(PaneId::Left, SlotKey::Results(FindId(1)), &channel)
+        .expect("claimed");
+    let later = panes
+        .claim(PaneId::Left, SlotKey::Results(FindId(2)), &channel)
+        .expect("claimed");
     assert!(earlier.cancel.load(Ordering::Relaxed), "the earlier open was cancelled");
     assert!(!later.cancel.load(Ordering::Relaxed));
     assert_eq!(later.generation, earlier.generation + 1);

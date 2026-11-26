@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Hotlist } from '$lib/panes/hotlist.svelte';
 import { PaneTabs } from '$lib/panes/tabs.svelte';
 
-import { arrive, fakeBackend } from '../../../tests/panes';
+import { archiveStart, arrive, fakeBackend, resultsStart } from '../../../tests/panes';
 import HotlistMenu from './HotlistMenu.svelte';
 
 /** A hotlist menu for a pane that is in `/home/me/Projects`. */
@@ -159,14 +159,7 @@ describe('HotlistMenu', () => {
   it('cannot add a folder inside an archive', async () => {
     const { backend, tabs } = await menu();
     await tabs.view.listing.openArchive({ archive: '/home/me/Projects/a.zip', dir: '' });
-    backend.last().emit({
-      kind: 'start',
-      path: '/home/me/Projects',
-      parent: '/home/me',
-      crumbs: [],
-      total: 0,
-      archive: { archive: '/home/me/Projects/a.zip', dir: '' },
-    });
+    backend.last().emit(archiveStart('/home/me/Projects', 0, { archive: '/home/me/Projects/a.zip', dir: '' }));
     await tick();
 
     expect(toggle()).toBeDisabled();
@@ -176,7 +169,7 @@ describe('HotlistMenu', () => {
   it('cannot add search results either, and says why', async () => {
     const { backend, tabs } = await menu();
     await tabs.view.listing.openResults(3);
-    backend.last().emit({ kind: 'start', path: '/home/me/Projects', parent: '/home/me', crumbs: [], total: 0, results: 3 });
+    backend.last().emit(resultsStart('/home/me/Projects', 0, 3));
     await tick();
 
     expect(toggle()).toBeDisabled();

@@ -6,7 +6,7 @@ import { Hotlist } from '$lib/panes/hotlist.svelte';
 import { PaneTabs } from '$lib/panes/tabs.svelte';
 import { Volumes } from '$lib/panes/volumes.svelte';
 
-import { entry, fakeBackend } from '../../../tests/panes';
+import { crumbsTo, entry, fakeBackend, folderStart } from '../../../tests/panes';
 import Pane from './Pane.svelte';
 
 const TOTAL = 100_000;
@@ -18,16 +18,7 @@ async function brief() {
   const backend = fakeBackend();
   const tabs = new PaneTabs(backend.ipc, 'left');
   await tabs.view.listing.open('/big');
-  backend.last().emit({
-    kind: 'start',
-    path: '/big',
-    parent: '/',
-    crumbs: [
-      { name: '/', path: '/' },
-      { name: 'big', path: '/big' },
-    ],
-    total: TOTAL,
-  });
+  backend.last().emit(folderStart('/big', TOTAL, { crumbs: crumbsTo('/big') }));
   backend.last().emit({
     kind: 'batch',
     offset: 0,

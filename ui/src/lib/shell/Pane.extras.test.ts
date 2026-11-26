@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PaneTabs } from '$lib/panes/tabs.svelte';
 import { preferences } from '$lib/shell/preferences.svelte';
 
-import { arrive, entry, fakeBackend } from '../../../tests/panes';
+import { archiveStart, arrive, entry, fakeBackend, resultsStart } from '../../../tests/panes';
 import { mountPane } from '../../../tests/pane';
 import { pending, refusal, settle } from '../../../tests/thumbs';
 
@@ -213,7 +213,7 @@ describe('Pane: the extra columns', () => {
     const backend = fakeBackend({ columns_dimensions: dimensions as never, columns_checksum: () => HEX });
     const tabs = new PaneTabs(backend.ipc, 'left');
     await tabs.view.listing.openArchive({ archive: '/pics/a.zip', dir: '' });
-    backend.last().emit({ kind: 'start', path: '/pics', parent: '/', crumbs: [], total: 2, archive: { archive: '/pics/a.zip', dir: '' } });
+    backend.last().emit(archiveStart('/pics', 2, { archive: '/pics/a.zip', dir: '' }));
     backend.last().emit({ kind: 'batch', offset: 0, entries: [entry('a.jpg'), entry('b.txt')] });
     await mountPane(backend, tabs);
 
@@ -229,7 +229,7 @@ describe('Pane: the extra columns', () => {
     const backend = fakeBackend({ columns_dimensions: dimensions as never });
     const tabs = new PaneTabs(backend.ipc, 'left');
     await tabs.view.listing.openResults(7);
-    backend.last().emit({ kind: 'start', path: '/home/me', parent: '/home', crumbs: [], total: 3, results: 7 });
+    backend.last().emit(resultsStart('/home/me', 3, 7));
     backend.last().emit({ kind: 'batch', offset: 0, entries: [entry('docs/a.jpg'), entry('top.png'), entry('docs/more/c.PNG')] });
     await mountPane(backend, tabs);
 

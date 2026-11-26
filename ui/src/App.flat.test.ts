@@ -11,7 +11,7 @@ import { DEFAULT_PREFERENCES, preferences } from '$lib/shell/preferences.svelte'
 
 import { appShown, key, listbox, pane, withArchiveOnRight } from '../tests/app';
 import { done } from '../tests/find';
-import { entry } from '../tests/panes';
+import { crumbsTo, entry, resultsStart } from '../tests/panes';
 
 /** The walks the page started (their channels), and a pane that lists the results of search `id` as the backend does. */
 function walking() {
@@ -22,17 +22,7 @@ function walking() {
       return started.length;
     },
     find_open: (args: { id: number; onEvent: (event: ListEvent) => void }) => {
-      args.onEvent({
-        kind: 'start',
-        path: '/left',
-        parent: '/',
-        crumbs: [
-          { name: '/', path: '/' },
-          { name: 'left', path: '/left' },
-        ],
-        total: 2,
-        results: args.id,
-      });
+      args.onEvent(resultsStart('/left', 2, args.id, { crumbs: crumbsTo('/left') }));
       args.onEvent({ kind: 'batch', offset: 0, entries: [entry('docs/a.txt'), entry('b.txt')] });
       args.onEvent({ kind: 'done', dirs: 0, files: 2, bytes: 0, free: null });
       return null;

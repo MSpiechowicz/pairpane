@@ -2,17 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import type { ListEvent } from '$lib/ipc/bindings/ListEvent';
 
-import { entry, fakeBackend } from '../../../tests/panes';
+import { entry, fakeBackend, folderStart, resultsStart } from '../../../tests/panes';
 import { Listing } from './listing.svelte';
 
-const start = (total: number, results?: number, path = '/home/me'): ListEvent => ({
-  kind: 'start',
-  path,
-  parent: '/home',
-  crumbs: [{ name: 'me', path: '/home/me' }],
-  total,
-  results,
-});
+const start = (total: number, results?: number, path = '/home/me'): ListEvent => {
+  const shown = { parent: '/home', crumbs: [{ name: 'me', path: '/home/me' }] };
+  return results === undefined ? folderStart(path, total, shown) : resultsStart(path, total, results, shown);
+};
 
 /** Delivers the results of search 7 on the latest channel: two rows, a file below a folder and a folder. */
 function deliver(backend: ReturnType<typeof fakeBackend>) {

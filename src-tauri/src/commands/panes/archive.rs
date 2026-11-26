@@ -7,21 +7,17 @@
 //! the index build or the batches stop. Its slot is keyed by the archive's path, never by the folder that holds the
 //! archive, so the watch of that folder (kept for the same folder) is dropped and the size jobs of the pane stop.
 //!
-//! The `start` event carries the folder that holds the archive as `path` (what a tab saves and `..` from the archive's
-//! root returns to), the real folders as crumbs, then the archive's own crumb and one crumb per folder inside it (each
-//! with `inside` set), and `archive` with the place shown.
+//! The folder itself is `pairpane_core::vfs::ArchiveFolder`, which makes the `start` event (see there).
 
-use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use pairpane_core::archive::{ArchiveIndex, Child, EntryType};
-use pairpane_core::listing::{BATCH, FIRST_BATCH, platform};
-use pairpane_core::model::{ArchiveSpot, Crumb, Entry, EntryKind, IpcError, IpcErrorCode, ListEvent, PaneId};
+use pairpane_core::model::{IpcError, IpcErrorCode, ListEvent, PaneId};
+use pairpane_core::vfs::{ArchiveFolder, VfsFolder};
 use tauri::State;
 use tauri::ipc::Channel;
 
-use super::{Claim, Panes, Slots, claim_sizing};
+use super::{Claim, Panes, SlotKey, Slots, claim_sizing};
 use crate::commands::archives::{Archives, Target, archive_error, check_inner};
 use crate::commands::items::blocking;
 use crate::commands::ops::failed;
@@ -78,7 +74,7 @@ async fn start(
         generation,
         cancel,
         ..
-    } = panes.claim(pane, &target.path, &on_event)?;
+    } = panes.claim(pane, SlotKey::Archive(target.path.clone()), &on_event)?;
 
     let open = Open {
         slots: Arc::clone(&panes.slots),
@@ -113,212 +109,26 @@ impl Open {
             .archives
             .index(&self.target, &opened, &self.cancel, None)
             .map_err(|error| self.archives.report(&self.target, &error))?;
+        let folder = ArchiveFolder::new(
+            index,
+            self.target.folder.clone(),
+            self.target.name.clone(),
+            self.dir.clone(),
+        );
 
-        let started = || claim_sizing(&self.slots, self.pane, self.generation, &self.target.path);
-        // A closed channel only means the page went away; the next open starts over.
-        let send = |event: ListEvent| {
+        let key = SlotKey::Archive(self.target.path.clone());
+        let mut send = |event: ListEvent| {
+            if matches!(event, ListEvent::Start { .. }) {
+                claim_sizing(&self.slots, self.pane, self.generation, &key);
+            }
+            // A closed channel only means the page went away; the next open starts over.
             self.on_event.send(event).ok();
         };
 
-        list_archive(
-            &index,
-            &self.target,
-            &self.dir,
-            self.show_hidden,
-            &self.cancel,
-            started,
-            send,
-        )
+        // The folder is not in the archive: nothing was sent, and the command rejects.
+        folder
+            .list(self.show_hidden, &self.cancel, &mut send)
+            .map(drop)
+            .map_err(|error| IpcError::new(IpcErrorCode::NotFound, error.to_string()))
     }
-}
-
-/// Sends the listing of the folder `dir` of `index` as `start`, the `batch`es and `done`, calling `on_start` just before
-/// `start`; stops quietly when `cancel` is raised. A folder that is not in the archive is a `NotFound` error.
-fn list_archive(
-    index: &ArchiveIndex,
-    target: &Target,
-    dir: &str,
-    show_hidden: bool,
-    cancel: &AtomicBool,
-    on_start: impl FnOnce(),
-    emit: impl FnMut(ListEvent),
-) -> Result<(), IpcError> {
-    let entries = describe(index, dir, show_hidden)
-        .ok_or_else(|| IpcError::new(IpcErrorCode::NotFound, "This folder is not in the archive."))?;
-
-    on_start();
-    let start = ListEvent::Start {
-        path: target.folder.to_string_lossy().into_owned(),
-        parent: target
-            .folder
-            .parent()
-            .map(|parent| parent.to_string_lossy().into_owned()),
-        crumbs: crumbs(target, dir),
-        total: count(entries.len()),
-        archive: Some(ArchiveSpot {
-            archive: target.path.to_string_lossy().into_owned(),
-            dir: dir.to_owned(),
-        }),
-        results: None,
-    };
-
-    send_listing(start, &entries, cancel, emit);
-
-    Ok(())
-}
-
-/// Sends `start` (whose `total` is `entries.len()`), `entries` in `batch`es and `done` (in the folder listing's sizes
-/// of batch); stops quietly, without `done`, when `cancel` is raised. Shared by every listing that is made from a list.
-pub(in crate::commands) fn send_listing(
-    start: ListEvent,
-    entries: &[Entry],
-    cancel: &AtomicBool,
-    mut emit: impl FnMut(ListEvent),
-) {
-    emit(start);
-
-    let mut offset = 0;
-
-    while offset < entries.len() {
-        if cancel.load(Ordering::Relaxed) {
-            return;
-        }
-
-        let size = if offset == 0 { FIRST_BATCH } else { BATCH };
-        let chunk = &entries[offset..entries.len().min(offset + size)];
-        emit(ListEvent::Batch {
-            offset: count(offset),
-            entries: chunk.to_vec(),
-        });
-        offset += chunk.len();
-    }
-
-    let dirs = entries.iter().filter(|entry| entry.kind == EntryKind::Dir).count();
-    let bytes = entries
-        .iter()
-        .filter(|entry| entry.kind != EntryKind::Dir)
-        .fold(0_u64, |sum, entry| sum.saturating_add(entry.size));
-    emit(ListEvent::Done {
-        dirs: count(dirs),
-        files: count(entries.len() - dirs),
-        bytes,
-        free: None,
-    });
-}
-
-/// The entries of the folder `dir`, folders first and then by name (the rules of a folder listing); hidden ones (a name
-/// with a leading dot) only when `show_hidden`. `None` when `dir` is not a folder of the archive.
-fn describe(index: &ArchiveIndex, dir: &str, show_hidden: bool) -> Option<Vec<Entry>> {
-    let found = index
-        .list(dir)?
-        .into_iter()
-        .filter(|child| show_hidden || !child.name.starts_with('.'))
-        .map(|child| entry_of(&child))
-        .collect();
-
-    Some(sorted(found))
-}
-
-/// `entries` in the order of a folder listing: folders first, then by name (the platform's rules).
-pub(in crate::commands) fn sorted(entries: Vec<Entry>) -> Vec<Entry> {
-    let mut keyed: Vec<(String, Entry)> = entries
-        .into_iter()
-        .map(|entry| (platform::sort_key(&entry.name), entry))
-        .collect();
-
-    keyed.sort_by(|(a_key, a), (b_key, b)| {
-        (b.kind == EntryKind::Dir)
-            .cmp(&(a.kind == EntryKind::Dir))
-            .then_with(|| platform::compare(a_key, &a.name, b_key, &b.name))
-    });
-
-    keyed.into_iter().map(|(_, entry)| entry).collect()
-}
-
-/// One entry as a pane shows it. Everything in an archive is read-only; a link or a special entry is shown as "other".
-fn entry_of(child: &Child<'_>) -> Entry {
-    let record = child.entry;
-    let kind = if child.dir {
-        EntryKind::Dir
-    } else if record.is_some_and(|entry| entry.kind == EntryType::File) {
-        EntryKind::File
-    } else {
-        EntryKind::Other
-    };
-
-    Entry {
-        name: child.name.to_owned(),
-        kind,
-        size: match kind {
-            EntryKind::File => record.map_or(0, |entry| entry.size),
-            _ => 0,
-        },
-        modified: record.and_then(|entry| entry.modified),
-        hidden: child.name.starts_with('.'),
-        readonly: true,
-        mode: record.and_then(|entry| entry.mode).map(|mode| mode & 0o7777),
-        link_target: record
-            .filter(|entry| entry.kind == EntryType::Symlink)
-            .and_then(|entry| entry.link.clone()),
-    }
-}
-
-/// The path bar: the real folders from the root down, the archive (`inside` is `""`) and each folder inside it.
-fn crumbs(target: &Target, dir: &str) -> Vec<Crumb> {
-    let archive = target.path.to_string_lossy().into_owned();
-    let mut crumbs = folder_crumbs(&target.folder);
-
-    crumbs.push(Crumb {
-        name: target.name.clone(),
-        path: archive.clone(),
-        inside: Some(String::new()),
-    });
-
-    let mut inside = String::new();
-    for name in dir.split('/').filter(|name| !name.is_empty()) {
-        if !inside.is_empty() {
-            inside.push('/');
-        }
-        inside.push_str(name);
-
-        crumbs.push(Crumb {
-            name: name.to_owned(),
-            path: archive.clone(),
-            inside: Some(inside.clone()),
-        });
-    }
-
-    crumbs
-}
-
-/// One crumb per real folder from the root down; the root is named as written (`/`, `C:\`).
-fn folder_crumbs(folder: &Path) -> Vec<Crumb> {
-    let mut path = PathBuf::new();
-    let mut crumbs = Vec::new();
-
-    for component in folder.components() {
-        path.push(component);
-        // A drive's prefix and the root after it make one crumb (`C:\`).
-        if matches!(component, Component::Prefix(_)) {
-            continue;
-        }
-
-        let shown = path.to_string_lossy().into_owned();
-        let name = match component {
-            Component::Normal(name) => name.to_string_lossy().into_owned(),
-            _ => shown.clone(),
-        };
-        crumbs.push(Crumb {
-            name,
-            path: shown,
-            inside: None,
-        });
-    }
-
-    crumbs
-}
-
-/// Entry counts are capped at `u32::MAX` on the wire.
-pub(in crate::commands) fn count(n: usize) -> u32 {
-    u32::try_from(n).unwrap_or(u32::MAX)
 }

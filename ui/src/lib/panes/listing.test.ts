@@ -4,15 +4,18 @@ import type { ListEvent } from '$lib/ipc/bindings/ListEvent';
 
 import { formatDate, formatFree, formatSelection, formatSize, formatSummary, iconClass, splitName } from './format';
 import { Listing, SPINNER_DELAY_MS } from './listing.svelte';
-import { entry, fakeBackend } from '../../../tests/panes';
+import { archiveStart, entry, fakeBackend, folderStart, resultsStart } from '../../../tests/panes';
 
-const start = (total: number, path = '/home/me'): ListEvent => ({
-  kind: 'start',
-  path,
-  parent: '/home',
-  crumbs: [{ name: '/', path: '/' }],
-  total,
-});
+const start = (total: number, path = '/home/me'): ListEvent => folderStart(path, total, { parent: '/home', crumbs: [{ name: '/', path: '/' }] });
+
+const SPOT = { archive: '/home/me/a.zip', dir: 'docs' };
+
+/** What each kind of place `start`s with, and the listing it is opened by. */
+const PLACES = {
+  folder: { start: () => folderStart('/home/me', 1), open: (listing: Listing) => listing.open('/home/me') },
+  archive: { start: () => archiveStart('/home/me', 1, SPOT), open: (listing: Listing) => listing.openArchive(SPOT) },
+  results: { start: () => resultsStart('/home/me', 1, 7), open: (listing: Listing) => listing.openResults(7) },
+};
 
 describe('Listing', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -276,5 +279,125 @@ describe('format', () => {
     expect(iconClass(entry('photo.JPG'))).toBe('img');
     expect(iconClass(entry('src', 'dir'))).toBe('dir');
     expect(iconClass(entry('LICENSE'))).toBe('f');
+  });
+});
+
+describe('Listing place', () => {
+  it('has no place before the first start', () => {
+    const listing = new Listing(fakeBackend().ipc, 'left');
+
+    expect(listing.place).toBeUndefined();
+    expect(listing.capabilities).toBeUndefined();
+    expect(listing.readonly).toBe(false);
+  });
+
+  it('shows a folder as a writable place with a path', async () => {
+    const backend = fakeBackend();
+    const listing = new Listing(backend.ipc, 'left');
+
+    await PLACES.folder.open(listing);
+    backend.last().emit(PLACES.folder.start());
+
+    expect(listing.place).toEqual({ kind: 'folder', path: '/home/me' });
+    expect(listing.capabilities).toEqual({ writable: true });
+    expect(listing.path).toBe('/home/me');
+    expect(listing.archive).toBeUndefined();
+    expect(listing.results).toBeUndefined();
+    expect(listing.readonly).toBe(false);
+  });
+
+  it('shows a folder inside an archive as a read-only place without a path', async () => {
+    const backend = fakeBackend();
+    const listing = new Listing(backend.ipc, 'left');
+
+    await PLACES.archive.open(listing);
+    backend.last().emit(PLACES.archive.start());
+
+    expect(listing.place).toEqual({ kind: 'archive', ...SPOT });
+    expect(listing.archive).toEqual(SPOT);
+    expect(listing.results).toBeUndefined();
+    expect(listing.folder).toBe('/home/me');
+    expect(listing.path).toBeUndefined();
+    expect(listing.readonly).toBe(true);
+  });
+
+  it('shows search results as a place without a path, named by the search', async () => {
+    const backend = fakeBackend();
+    const listing = new Listing(backend.ipc, 'left');
+
+    await PLACES.results.open(listing);
+    backend.last().emit(PLACES.results.start());
+
+    expect(listing.place).toEqual({ kind: 'results', id: 7 });
+    expect(listing.results).toBe(7);
+    expect(listing.archive).toBeUndefined();
+    expect(listing.folder).toBe('/home/me');
+    expect(listing.path).toBeUndefined();
+    expect(listing.readonly).toBe(false);
+  });
+
+  it('is read-only as the capabilities of the start say, whatever the place', async () => {
+    const backend = fakeBackend();
+    const listing = new Listing(backend.ipc, 'left');
+
+    await listing.open('/home/me');
+    backend.last().emit({ ...folderStart('/home/me', 0), capabilities: { writable: false } });
+    expect(listing.readonly).toBe(true);
+
+    await listing.open('/home/you');
+    backend.last().emit({ ...folderStart('/home/you', 0), capabilities: { writable: true } });
+    expect(listing.readonly).toBe(false);
+  });
+
+  it.each(Object.keys(PLACES) as (keyof typeof PLACES)[])('lists a %s again as a reload that keeps the rows', async (kind) => {
+    const backend = fakeBackend();
+    const listing = new Listing(backend.ipc, 'left');
+    const place = PLACES[kind];
+
+    await place.open(listing);
+    backend.last().emit(place.start());
+    backend.last().emit({ kind: 'batch', offset: 0, entries: [entry('a')] });
+    expect(listing.reloads).toBe(0);
+
+    await listing.reload();
+    backend.last().emit(place.start());
+
+    expect(listing.reloads).toBe(1);
+    expect(listing.entries.map((row) => row?.name)).toEqual(['a']);
+  });
+
+  it.each([
+    ['folder', 'archive'],
+    ['folder', 'results'],
+    ['archive', 'folder'],
+    ['archive', 'results'],
+    ['results', 'folder'],
+    ['results', 'archive'],
+  ] as const)('is not a reload when a %s is followed by a %s of the same folder', async (first, second) => {
+    const backend = fakeBackend();
+    const listing = new Listing(backend.ipc, 'left');
+
+    await PLACES[first].open(listing);
+    backend.last().emit(PLACES[first].start());
+    backend.last().emit({ kind: 'batch', offset: 0, entries: [entry('a')] });
+
+    await PLACES[second].open(listing);
+    backend.last().emit(PLACES[second].start());
+
+    expect(listing.reloads).toBe(0);
+    expect(listing.entries.map((row) => row?.name)).toEqual([undefined]);
+  });
+
+  it('is not a reload when another folder of the same archive is listed', async () => {
+    const backend = fakeBackend();
+    const listing = new Listing(backend.ipc, 'left');
+
+    await listing.openArchive(SPOT);
+    backend.last().emit(archiveStart('/home/me', 0, SPOT));
+    await listing.openArchive(SPOT, 'sub');
+    backend.last().emit(archiveStart('/home/me', 0, { archive: SPOT.archive, dir: 'docs/sub' }));
+
+    expect(listing.reloads).toBe(0);
+    expect(listing.archive).toEqual({ archive: SPOT.archive, dir: 'docs/sub' });
   });
 });

@@ -40,7 +40,7 @@ pub use edit::{EditDocument, EditOpened, EditSaveOptions, EditSaved, EditorSetti
 pub use find::{FindCriteria, FindEvent, FindHit, FindId, FindQuery, FindText, SavedSearch, Tri};
 pub use ipc_error::{IpcError, IpcErrorCode};
 pub use items::{LinkKind, TrashOutcome};
-pub use listing::{Crumb, Entry, EntryKind, ListEvent, PaneId, SizeEvent};
+pub use listing::{Crumb, Entry, EntryKind, ListEvent, PaneCapabilities, PaneId, PaneLocation, SizeEvent};
 pub use markdown::{MdBlock, MdDocument, MdInline, MdListItem};
 pub use ops::{
     Answer, ConflictInfo, ControlAction, FileFacts, ItemError, JobId, JobPhase, JobView, OpKind, OpsEvent, Outcome,

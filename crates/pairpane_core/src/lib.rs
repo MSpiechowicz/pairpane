@@ -7,7 +7,7 @@
 //! 2. Rules that need no Tauri, tested here: [`listing`] (folder listings and change watching), [`volumes`]
 //!    (the drive list), [`ops`] (copy and move jobs), [`state`] (what is saved between runs), [`settings`] (the file the user edits), [`update`] (in-app updater),
 //!    [`view`] (the file viewer), [`edit`] (the built-in text editor), [`archive`] (reading archives), [`find`] (searching a folder tree), [`gitstatus`] (the git status column, read in process by gitoxide),
-//!    [`compare`] (comparing two folder trees),
+//!    [`compare`] (comparing two folder trees), [`vfs`] (the folder a pane lists, whatever place it is in),
 //!    [`rename`] (the rule and the preview of a multi-rename), [`shell`] (the command line: a line run in the user's shell).
 
 pub mod archive;
@@ -24,5 +24,6 @@ pub mod settings;
 pub mod shell;
 pub mod state;
 pub mod update;
+pub mod vfs;
 pub mod view;
 pub mod volumes;

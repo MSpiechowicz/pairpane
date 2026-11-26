@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { deliver, entry, fakeBackend } from '../../../tests/panes';
+import { deliver, entry, fakeBackend, folderStart } from '../../../tests/panes';
 import { BUSY_RETRY_MS } from './sizes.svelte';
 import { PaneView } from './view.svelte';
 
@@ -87,7 +87,7 @@ describe('PaneView rows and cursor', () => {
 
     await view.goUp();
     const channel = backend.last();
-    channel.emit({ kind: 'start', path: '/home/me', parent: '/home', crumbs: [{ name: 'me', path: '/home/me' }], total: 3 });
+    channel.emit(folderStart('/home/me', 3, { crumbs: [{ name: 'me', path: '/home/me' }] }));
     expect(view.cursor).toBe(0);
 
     channel.emit({ kind: 'batch', offset: 0, entries: [entry('apps', 'dir'), entry('notes.txt'), entry('work', 'dir')] });
@@ -103,7 +103,7 @@ describe('PaneView going up and failed opens', () => {
 
     await view.goUp();
     await view.listing.open('/elsewhere'); // supersedes the going up before anything was listed
-    backend.last().emit({ kind: 'start', path: '/elsewhere', parent: '/', crumbs: [], total: 2 });
+    backend.last().emit(folderStart('/elsewhere', 2));
     backend.last().emit({ kind: 'batch', offset: 0, entries: [entry('work', 'dir'), entry('x', 'dir')] });
 
     expect(view.cursor).toBe(0);
@@ -123,7 +123,7 @@ describe('PaneView going up and failed opens', () => {
 
     // The shown folder is listed again quietly; that is a reload, not a new folder.
     expect(backend.last().args).toMatchObject({ path: '/work', child: null });
-    backend.last().emit({ kind: 'start', path: '/work', parent: '/', crumbs: [], total: 5 });
+    backend.last().emit(folderStart('/work', 5));
     backend.last().emit({ kind: 'batch', offset: 0, entries: sample() });
     backend.last().emit({ kind: 'done', dirs: 2, files: 3, bytes: 60, free: null });
 
@@ -142,7 +142,7 @@ describe('PaneView going up and failed opens', () => {
 
     await view.open(2); // src fails
     backend.last().emit({ kind: 'error', error: { code: 'io', message: 'No permission.' } });
-    backend.last().emit({ kind: 'start', path: '/work', parent: '/', crumbs: [], total: 5 });
+    backend.last().emit(folderStart('/work', 5));
 
     backend.sizes[0].emit({ kind: 'progress', bytes: 10 });
     backend.sizes[0].emit({ kind: 'done', bytes: 4096 });
@@ -197,7 +197,7 @@ describe('PaneView quick filter', () => {
     view.setFilter('txt');
 
     channel.emit({ kind: 'changed' });
-    backend.last().emit({ kind: 'start', path: '/work', parent: '/', crumbs: [], total: 5 });
+    backend.last().emit(folderStart('/work', 5));
     expect(view.filter).toBe('txt');
 
     await deliver(backend, () => view.listing.open('/other'), '/other', [entry('x')]);
@@ -259,7 +259,7 @@ describe('PaneView selection', () => {
 
     channel.emit({ kind: 'changed' });
     const reload = backend.last();
-    reload.emit({ kind: 'start', path: '/work', parent: '/', crumbs: [], total: 3 });
+    reload.emit(folderStart('/work', 3));
     reload.emit({ kind: 'batch', offset: 0, entries: [entry('a.txt', 'file', { size: 30 }), entry('c.TXT'), entry('z')] });
     expect(view.selection).toEqual({ dirs: 0, files: 1, bytes: 30 }); // b.md vanished and stops counting
 
@@ -408,7 +408,7 @@ describe('PaneView folder sizes', () => {
     view.space();
 
     channel.emit({ kind: 'changed' });
-    backend.last().emit({ kind: 'start', path: '/work', parent: '/', crumbs: [], total: 5 });
+    backend.last().emit(folderStart('/work', 5));
     backend.sizes[0].emit({ kind: 'done', bytes: 7 });
     expect(view.sizes.text(sample()[0])).toBe('7 B');
 
@@ -433,7 +433,7 @@ describe('PaneView folder sizes', () => {
 
     channel.emit({ kind: 'changed' });
     const reload = backend.last();
-    reload.emit({ kind: 'start', path: '/work', parent: '/', crumbs: [], total: 2 });
+    reload.emit(folderStart('/work', 2));
     reload.emit({ kind: 'batch', offset: 0, entries: [entry('src', 'dir'), entry('a.txt')] });
     expect(view.sizes.sizeOf('docs')).toBe(7); // not before the listing is done
 

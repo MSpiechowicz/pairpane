@@ -174,7 +174,7 @@ pub(super) fn compare(left: &Path, right: &Path, options: CompareOptions) -> Com
 }
 
 /// The index of a tar-like archive with these entries (path, kind, size, time), for the side of a comparison.
-pub(super) fn index_of(entries: &[(&str, EntryType, u64, i64)]) -> Arc<ArchiveIndex> {
+pub(crate) fn index_of(entries: &[(&str, EntryType, u64, i64)]) -> Arc<ArchiveIndex> {
     let mut builder = Builder::new(ArchiveFormat::Tar);
 
     for (name, kind, size, modified) in entries {

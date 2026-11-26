@@ -1,6 +1,6 @@
 //! Tests of the check that the folders on a pane's path do not lead to a network or device path.
 
-use super::run::resolved_path;
+use super::run::local_folder;
 use super::*;
 
 /// A folder in the system's temp folder, removed on drop (the app has no `tempfile` dependency).
@@ -30,8 +30,8 @@ fn paths_are_not_checked_beforehand_off_windows() {
     let scratch = Scratch::new("plain");
     std::fs::create_dir(scratch.0.join("sub")).expect("dir");
 
-    assert!(resolved_path(&scratch.0.join("sub")).is_ok());
-    assert!(resolved_path(&scratch.0.join("missing")).is_ok());
+    assert!(local_folder(&scratch.0.join("sub")).is_ok());
+    assert!(local_folder(&scratch.0.join("missing")).is_ok());
 }
 
 #[cfg(unix)]
@@ -44,7 +44,7 @@ fn a_path_through_a_folder_link_lists_and_a_looping_one_fails_to_list() {
     symlink(scratch.0.join("real"), scratch.0.join("alias")).expect("link");
     symlink("loop", scratch.0.join("loop")).expect("link");
 
-    assert!(resolved_path(&scratch.0.join("alias/sub")).is_ok());
+    assert!(local_folder(&scratch.0.join("alias/sub")).is_ok());
     let list = |folder: &Path| platform::local_path(folder).and_then(|path| std::fs::read_dir(path).map(drop));
     assert!(list(&scratch.0.join("alias/sub")).is_ok());
     assert!(list(&scratch.0.join("loop/sub")).is_err());
@@ -56,8 +56,8 @@ fn a_folder_on_an_ordinary_path_can_be_opened_and_a_missing_one_says_so() {
     let scratch = Scratch::new("plain");
     std::fs::create_dir(scratch.0.join("sub")).expect("dir");
 
-    assert!(resolved_path(&scratch.0.join("sub")).is_ok());
-    let missing = resolved_path(&scratch.0.join("missing")).expect_err("missing");
+    assert!(local_folder(&scratch.0.join("sub")).is_ok());
+    let missing = local_folder(&scratch.0.join("missing")).expect_err("missing");
     assert_eq!(missing.code, IpcErrorCode::NotFound);
 }
 
@@ -76,7 +76,7 @@ fn a_folder_behind_a_link_to_a_network_share_is_refused() {
         }
 
         for folder in [link.clone(), link.join("deep").join("er")] {
-            let error = resolved_path(&folder).expect_err(remote);
+            let error = local_folder(&folder).expect_err(remote);
             assert_eq!(error.code, IpcErrorCode::InvalidInput, "{remote}");
         }
     }
@@ -96,11 +96,12 @@ fn a_folder_behind_a_local_link_is_read_where_the_link_leads() {
         return;
     }
 
-    let actual = resolved_path(&link.join("sub")).expect("local link");
+    let local = local_folder(&link.join("sub")).expect("local link");
+    let actual = local.actual();
 
     assert!(!actual.starts_with(&link), "{actual:?} still goes through the link");
     assert_eq!(
-        std::fs::canonicalize(&actual).expect("actual"),
+        std::fs::canonicalize(actual).expect("actual"),
         std::fs::canonicalize(scratch.0.join("real/sub")).expect("real")
     );
 }

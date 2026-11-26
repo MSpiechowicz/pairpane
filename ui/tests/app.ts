@@ -9,7 +9,7 @@ import type { ListEvent } from '$lib/ipc/bindings/ListEvent';
 import type { OpsEvent } from '$lib/ipc/bindings/OpsEvent';
 
 import App from '../src/App.svelte';
-import { entry } from './panes';
+import { archiveStart, entry, folderStart } from './panes';
 
 export type Answers = Record<string, (args: never) => unknown>;
 
@@ -30,16 +30,15 @@ export function appWorld(invoke: Mock, answers: Answers = {}) {
   /** Lists a folder in a pane (the one whose listing was asked last). */
   const list = (side: 'left' | 'right', path: string, entries: Entry[]) => {
     const channel = opens.filter((open) => open.pane === side).at(-1)!;
-    channel.emit({
-      kind: 'start',
-      path,
-      parent: '/',
-      crumbs: [
-        { name: '/', path: '/' },
-        { name: path.slice(1), path },
-      ],
-      total: entries.length,
-    });
+    channel.emit(
+      folderStart(path, entries.length, {
+        parent: '/',
+        crumbs: [
+          { name: '/', path: '/' },
+          { name: path.slice(1), path },
+        ],
+      }),
+    );
     channel.emit({ kind: 'batch', offset: 0, entries });
     channel.emit({ kind: 'done', dirs: 0, files: entries.length, bytes: 0, free: null });
   };
@@ -47,18 +46,16 @@ export function appWorld(invoke: Mock, answers: Answers = {}) {
   /** Lists a folder of an archive in `/<side>` in a pane (the one whose listing was asked last). */
   const listIn = (side: 'left' | 'right', spot: ArchiveSpot, entries: Entry[]) => {
     const channel = opens.filter((open) => open.pane === side).at(-1)!;
-    channel.emit({
-      kind: 'start',
-      path: `/${side}`,
-      parent: '/',
-      crumbs: [
-        { name: '/', path: '/' },
-        { name: side, path: `/${side}` },
-        { name: spot.archive.split('/').pop() ?? '', path: spot.archive, inside: '' },
-      ],
-      total: entries.length,
-      archive: spot,
-    });
+    channel.emit(
+      archiveStart(`/${side}`, entries.length, spot, {
+        parent: '/',
+        crumbs: [
+          { name: '/', path: '/' },
+          { name: side, path: `/${side}` },
+          { name: spot.archive.split('/').pop() ?? '', path: spot.archive, inside: '' },
+        ],
+      }),
+    );
     channel.emit({ kind: 'batch', offset: 0, entries });
     channel.emit({ kind: 'done', dirs: 0, files: entries.length, bytes: 0, free: null });
   };
