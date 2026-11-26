@@ -5746,7 +5746,7 @@ dependencies = [
 
 [[package]]
 name = "pairpane_app"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "getrandom 0.4.3",
  "image",
@@ -5773,7 +5773,7 @@ dependencies = [
 
 [[package]]
 name = "pairpane_core"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "aes 0.9.4",
  "base64 0.23.1",
@@ -5832,7 +5832,7 @@ dependencies = [
 
 [[package]]
 name = "pairpane_link"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "blake3",
  "getrandom 0.4.3",
@@ -5854,7 +5854,7 @@ dependencies = [
 
 [[package]]
 name = "pairpane_remote"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "base64 0.23.1",
  "getrandom 0.4.3",

@@ -1,3 +1,10 @@
+# [0.36.0](https://github.com/MSpiechowicz/pairpane/compare/v0.35.0...v0.36.0) (2026-11-26)
+
+
+### Features
+
+* **remote:** connect to SFTP servers and browse them in a pane (#91) ([7183ebe](https://github.com/MSpiechowicz/pairpane/commit/7183ebeb4aa143dd927cf69060d7c247d053ab6a)), closes [#25](https://github.com/MSpiechowicz/pairpane/issues/25)
+
 # [0.35.0](https://github.com/MSpiechowicz/pairpane/compare/v0.34.2...v0.35.0) (2026-11-26)
 
 
