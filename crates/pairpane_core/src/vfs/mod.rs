@@ -15,7 +15,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use archive::ArchiveFolder;
 pub use local::LocalFolder;
-pub use remote::{MAX_REMOTE_PATH, RemoteEntry, RemoteFs, RemoteKind, RemoteMeta, RemotePath};
+pub use remote::{
+    MAX_REMOTE_PATH, RemoteEntry, RemoteFs, RemoteKind, RemoteMeta, RemotePath, RemoteReader, is_remote_name,
+};
 pub use remote_folder::{MAX_LINK_STATS, RemoteFolder};
 
 use crate::listing::{BATCH, FIRST_BATCH, FolderWatch, Outcome, count, platform};

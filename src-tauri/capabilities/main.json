@@ -33,6 +33,7 @@
     "allow-state-save",
     "allow-ops-subscribe",
     "allow-ops-start",
+    "allow-ops-remote",
     "allow-ops-extract",
     "allow-ops-pack",
     "allow-ops-add-to-archive",

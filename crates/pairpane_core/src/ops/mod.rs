@@ -88,6 +88,9 @@
 //! handle), `attrs` and `attrs_apply`, `partial` (temporary files that clean up after themselves) and `props` (the
 //! Properties of an item).
 //!
+//! Copying and moving from a server to this computer: `remote` (what it promises) and `remote::down` (the download), which
+//! write like a copy does, through `partial` and the no-replace commit.
+//!
 //! Renaming many items at once (multi-rename and its undo): `batch_rename` (the job: moves a name out of the way before another
 //! item takes it, so a swap, a cycle or a chain works and nothing is replaced), `held_rename` (a rename that refuses to replace,
 //! inside a folder held open) and `rename_log` (the pairs it renamed, which an undo reads). The rule that makes the new names
@@ -138,6 +141,7 @@ mod plan;
 mod progress;
 mod props;
 mod rate;
+mod remote;
 mod rename;
 mod rename_log;
 mod report;
@@ -222,6 +226,8 @@ mod delete_tests;
 #[cfg(test)]
 mod digest_tests;
 #[cfg(test)]
+mod download_request_tests;
+#[cfg(test)]
 mod engine_tests;
 #[cfg(test)]
 mod extract_scripted_tests;
@@ -297,7 +303,9 @@ pub(crate) use open::create_new;
 pub(crate) use partial::{Partial, run_token};
 pub(crate) use plan::{Child, Kind, is_inside, read_children, real};
 pub use rename_log::RenameLog;
-pub use request::{AnswerError, PackJob, Refused, Request, SyncPlan, SyncRemove, SyncRoot, Task, UnknownJob};
+pub use request::{
+    AnswerError, Direction, PackJob, Refused, RemoteJob, Request, SyncPlan, SyncRemove, SyncRoot, Task, UnknownJob,
+};
 pub use sync_aside::HOLDING_PREFIX;
 pub use sync_log::SyncLog;
 pub(crate) use transfer::MAX_DEPTH;

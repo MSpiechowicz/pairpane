@@ -2,6 +2,7 @@
 
 mod browse;
 mod connect;
+mod down_rig;
 mod hardening;
 mod hostkeys;
 #[cfg(unix)]
@@ -18,6 +19,10 @@ mod ssh_session;
 mod ssh_sites;
 #[cfg(windows)]
 mod ssh_windows;
+mod transfer_down;
+mod transfer_down_stop;
+mod transfer_edges;
+mod transfer_fs;
 
 use std::fs;
 use std::io;

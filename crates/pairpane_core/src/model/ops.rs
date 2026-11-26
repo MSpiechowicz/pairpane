@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::IpcError;
+use super::{IpcError, JobRemote};
 
 /// Identifies one copy or move job. Monotonic within a run and never reused; a `number` in TypeScript.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, TS)]
@@ -89,9 +89,9 @@ pub struct JobView {
     pub kind: OpKind,
     /// What the row calls the source: the item's name for a single item, otherwise `3 items`.
     pub label: String,
-    /// The folder the items come from.
+    /// The folder the items come from; for one on a server `label: dir` (see `remote`).
     pub from: String,
-    /// The folder the items go into.
+    /// The folder the items go into; for one on a server `label: dir` (see `remote`).
     pub to: String,
     /// How many top-level items the job was started with.
     pub items: u32,
@@ -114,6 +114,11 @@ pub struct JobView {
     /// Seconds left; `null` while it cannot be estimated (the first second, paused, or no total yet).
     #[ts(type = "number | null")]
     pub eta_secs: Option<u64>,
+    /// The server side of a transfer with one (`from` is then the server's folder shown as `label: dir`, or `to` is);
+    /// absent for a job between folders of this computer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub remote: Option<JobRemote>,
 }
 
 /// What a conflict dialog shows about one side: a file, or a folder.
@@ -261,6 +266,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::model::SiteId;
 
     #[test]
     fn ids_are_plain_numbers_and_answers_are_camel_case() {
@@ -268,6 +274,54 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Answer::OverwriteOlder).expect("serializable"),
             json!("overwriteOlder")
+        );
+    }
+
+    fn view(remote: Option<JobRemote>) -> JobView {
+        JobView {
+            id: JobId(5),
+            kind: OpKind::Copy,
+            label: "a.txt".to_owned(),
+            from: "me@host: /srv".to_owned(),
+            to: "/home/me".to_owned(),
+            items: 1,
+            verify: false,
+            phase: JobPhase::Queued,
+            paused: false,
+            done_bytes: 0,
+            total_bytes: 0,
+            done_files: 0,
+            total_files: 0,
+            current: None,
+            bytes_per_sec: 0,
+            eta_secs: None,
+            remote,
+        }
+    }
+
+    #[test]
+    fn a_job_view_names_its_server_only_when_it_has_one() {
+        let local = json!({
+            "id": 5, "kind": "copy", "label": "a.txt", "from": "me@host: /srv", "to": "/home/me", "items": 1,
+            "verify": false, "phase": "queued", "paused": false, "doneBytes": 0, "totalBytes": 0, "doneFiles": 0,
+            "totalFiles": 0, "current": null, "bytesPerSec": 0, "etaSecs": null
+        });
+        let mut remote = local.clone();
+        remote["remote"] = json!({ "site": 3, "dir": "/srv" });
+        let placed = view(Some(JobRemote {
+            site: SiteId(3),
+            dir: "/srv".to_owned(),
+        }));
+
+        assert_eq!(serde_json::to_value(view(None)).expect("serializable"), local);
+        assert_eq!(serde_json::to_value(&placed).expect("serializable"), remote);
+        assert_eq!(
+            serde_json::from_value::<JobView>(local).expect("deserializable"),
+            view(None)
+        );
+        assert_eq!(
+            serde_json::from_value::<JobView>(remote).expect("deserializable"),
+            placed
         );
     }
 

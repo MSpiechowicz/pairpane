@@ -32,6 +32,7 @@
   import { PaneTabs } from '$lib/panes/tabs.svelte';
   import { Volumes } from '$lib/panes/volumes.svelte';
   import { Remote } from '$lib/remote/remote.svelte';
+  import { reloadRemote } from '$lib/remote/transfer';
   import { SavedRenames } from '$lib/rename/saved.svelte';
   import { CommandLine, placeOf } from '$lib/shell/command-line.svelte';
   import Dock from '$lib/shell/Dock.svelte';
@@ -108,6 +109,7 @@
       reloadShowing([panes.left, panes.right], job.to);
     }
 
+    reloadRemote([panes.left, panes.right], job.remote);
     files.renames.ended(job, result);
     files.syncs.ended(job, result);
   });

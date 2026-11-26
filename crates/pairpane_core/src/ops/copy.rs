@@ -362,7 +362,7 @@ fn unchanged_since_read(file: &File, meta: &Metadata, path: &Path) -> io::Result
 
 /// The result of a flush, where a disk that cannot flush at all (some network shares, FAT on macOS, which refuse the full
 /// flush) is no failure: its writes reported their errors already. A flush that fails for any other reason fails.
-fn flush(result: io::Result<()>) -> io::Result<()> {
+pub(super) fn flush(result: io::Result<()>) -> io::Result<()> {
     match result {
         Err(error) if cannot_flush(&error) => Ok(()),
         other => other,
@@ -400,7 +400,7 @@ mod libc_errno {
 }
 
 /// `error` with what it meant for the item said first, kept as the same kind of error.
-fn in_context(what: &str, error: &io::Error) -> io::Error {
+pub(super) fn in_context(what: &str, error: &io::Error) -> io::Error {
     io::Error::new(error.kind(), format!("{what}: {error}"))
 }
 
@@ -420,7 +420,7 @@ fn flush_handle(folder: &std::os::fd::OwnedFd) -> io::Result<()> {
 /// on Unix, where a folder can be opened and flushed; on Windows the flush of the file is what the system offers. A
 /// folder that cannot be opened for it (no read permission, as in a drop box) or a disk that cannot flush a folder does
 /// not fail a copy that is committed and flushed itself; a flush that fails otherwise does, and keeps the source.
-fn flush_folder(folder: &Path) -> io::Result<()> {
+pub(super) fn flush_folder(folder: &Path) -> io::Result<()> {
     // Opened as a folder only: anything else swapped in at its path (a pipe would block the open) is not opened.
     #[cfg(unix)]
     {

@@ -7,7 +7,7 @@
 
 use std::fmt;
 use std::io;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::model::SiteId;
 
@@ -103,6 +103,12 @@ impl fmt::Display for RemotePath {
     }
 }
 
+/// Whether `name` is one plain name a server may hold: not empty, `.` or `..`, and holding neither `/` nor NUL. A server
+/// that is faulty or hostile can send anything else; a caller that shows or uses a name from one checks it with this.
+pub fn is_remote_name(name: &str) -> bool {
+    check_name(name).is_ok()
+}
+
 /// A fixed message without the path that failed; the error is shown to the user and logged.
 fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
@@ -152,12 +158,31 @@ pub struct RemoteEntry {
     pub meta: RemoteMeta,
 }
 
-/// A connected server, as far as browsing goes. The implementation is blocking and may be called from several threads
-/// at once; every call ends (with `TimedOut` at the latest) even when the server stops answering.
+/// A connected server, as far as browsing and downloading go. The implementation is blocking and may be called from
+/// several threads at once; every call ends (with `TimedOut` at the latest) even when the server stops answering.
 ///
 /// Errors are `io::Error`s with a fixed message and no path, host, user or secret in it, whatever the cause: the
 /// caller shows them as they are, and they are logged. The kind says what happened (`NotFound`, `PermissionDenied`,
 /// `TimedOut`, `ConnectionAborted` for a lost connection, `Unsupported`, `Other`).
+///
+/// A call that reads (`read_dir`, `stat`, `lstat`, `read_link`, `open_read`) may be repeated on a new connection when
+/// the old one was lost. A call that changes the server (`remove_file`, `remove_dir`) never is: after a lost
+/// connection the caller cannot tell whether it took effect, and says so. Only `read_dir` and [`RemoteReader::read`]
+/// react to a cancel; a remove runs to its own limit.
+///
+/// A download that moves a file tells a change of it by its size and its time (a whole second on SFTP): a file that is
+/// rewritten to the same size within the same second goes unseen, and the move then removes a newer original. SFTP has no
+/// call that closes this; a caller that cannot accept it copies instead of moving.
+///
+/// A server cannot be made to remove an item only if it is still where it was looked at: the calls that change it name
+/// a path, and a folder on that path may be swapped for a link between a check and the call. [`RemoteFs::realpath`]
+/// narrows that window (a caller checks the folder right before it removes), it does not close it.
+///
+/// `lstat`, `realpath`, `open_read`, `remove_file` and `remove_dir` have a default that fails with `Unsupported`, so a
+/// server that only browses implements the first five methods. A caller that removes things also asks `read_link` of each
+/// link on the way to its folder (a server that does not resolve links in `realpath` shows a link repointed only by
+/// where it leads), and refuses to move through a link where the server says `Unsupported`. A server whose `realpath`
+/// does not resolve links at all is refused a move through a link: the folders its target leads through cannot be told.
 pub trait RemoteFs: Send + Sync {
     /// The connection this answers for.
     fn site(&self) -> SiteId;
@@ -177,6 +202,70 @@ pub trait RemoteFs: Send + Sync {
 
     /// Where the symbolic link `path` points, as written in the link.
     fn read_link(&self, path: &RemotePath) -> io::Result<String>;
+
+    /// The attributes of `path` itself (`lstat`): a symbolic link is [`RemoteKind::Link`], not what it points to.
+    /// `None` when it does not exist.
+    fn lstat(&self, _path: &RemotePath) -> io::Result<Option<RemoteMeta>> {
+        Err(unsupported())
+    }
+
+    /// [`RemoteFs::lstat`] of each of `paths`, one answer for each and in the same order. A server that can have several
+    /// requests in flight answers them in about the time of one (a caller checks a long way of folders with it); the
+    /// default asks one after the other. Once `cancel` is set, the answers not yet had are `Interrupted` errors. There is
+    /// one answer for each path: a caller treats any other count as a server that cannot be trusted. A long way costs
+    /// round trips in proportion to its length (SFTP keeps 64 requests in flight, so about `paths / 64`); a move of a tree
+    /// `n` folders deep asks about `n * n / 64` looks in all, a bound that is accepted.
+    fn lstat_many(&self, paths: &[RemotePath], cancel: &AtomicBool) -> Vec<io::Result<Option<RemoteMeta>>> {
+        paths
+            .iter()
+            .map(|path| {
+                if cancel.load(Ordering::Relaxed) {
+                    Err(io::ErrorKind::Interrupted.into())
+                } else {
+                    self.lstat(path)
+                }
+            })
+            .collect()
+    }
+
+    /// `path` with every symbolic link in it resolved, as the server spells it: `NotFound` when it does not exist. A
+    /// caller that removes things on a server compares this with where it expects the folder to be (the path of the
+    /// folder it started in, resolved once, and the plain names below it), to see a folder swapped for a link.
+    fn realpath(&self, _path: &RemotePath) -> io::Result<RemotePath> {
+        Err(unsupported())
+    }
+
+    /// Opens the file `path` for reading. `NotFound` when it does not exist. The reader keeps the server's
+    /// resources until it is dropped.
+    fn open_read(&self, _path: &RemotePath) -> io::Result<Box<dyn RemoteReader>> {
+        Err(unsupported())
+    }
+
+    /// Removes the file `path` (never a folder). Not repeated on a new connection (see above).
+    fn remove_file(&self, _path: &RemotePath) -> io::Result<()> {
+        Err(unsupported())
+    }
+
+    /// Removes the folder `path` when it is empty. Not repeated on a new connection (see above).
+    fn remove_dir(&self, _path: &RemotePath) -> io::Result<()> {
+        Err(unsupported())
+    }
+}
+
+/// A file of a server opened for reading (see [`RemoteFs::open_read`]). Dropping it releases the server's handle.
+pub trait RemoteReader: Send {
+    /// Reads at most `buf.len()` bytes, in order, from where the last read stopped. Returns `Ok(0)` only at the end of
+    /// the file (the caller's `buf` is not empty), and fails with
+    /// `Interrupted` once `cancel` is set (the reader stays usable). Fixed messages, as for [`RemoteFs`].
+    fn read(&mut self, buf: &mut [u8], cancel: &AtomicBool) -> io::Result<usize>;
+
+    /// What the server says of the open file now (`fstat`): the size and the times it has at this moment.
+    fn meta(&mut self) -> io::Result<RemoteMeta>;
+}
+
+/// The answer of a server that does not do what was asked; a fixed message without a path.
+fn unsupported() -> io::Error {
+    io::Error::new(io::ErrorKind::Unsupported, "this server does not support this")
 }
 
 #[cfg(test)]
@@ -257,6 +346,79 @@ mod tests {
     fn components_run_from_the_root_down() {
         assert_eq!(path("/a/b c/d").components().collect::<Vec<_>>(), ["a", "b c", "d"]);
         assert_eq!(RemotePath::root().components().count(), 0);
+    }
+
+    #[test]
+    fn remote_names_are_plain_names() {
+        for name in ["a", "a b", ".hidden", "...", "ü"] {
+            assert!(is_remote_name(name), "{name:?}");
+        }
+
+        for name in ["", ".", "..", "a/b", "/", "a\0"] {
+            assert!(!is_remote_name(name), "{name:?}");
+        }
+    }
+
+    /// A server that only browses.
+    struct Browsing;
+
+    impl RemoteFs for Browsing {
+        fn site(&self) -> SiteId {
+            SiteId(1)
+        }
+
+        fn label(&self) -> &str {
+            "me@host"
+        }
+
+        fn read_dir(&self, _: &RemotePath, _: &AtomicBool) -> io::Result<Vec<RemoteEntry>> {
+            Ok(Vec::new())
+        }
+
+        fn stat(&self, _: &RemotePath) -> io::Result<Option<RemoteMeta>> {
+            Ok(None)
+        }
+
+        fn read_link(&self, _: &RemotePath) -> io::Result<String> {
+            Err(io::ErrorKind::NotFound.into())
+        }
+    }
+
+    #[test]
+    fn a_server_that_only_browses_refuses_the_rest_without_naming_a_path() {
+        let server = Browsing;
+        let secret = path("/secret/name");
+        let refused = [
+            server.lstat(&secret).map(|_| ()),
+            server
+                .lstat_many(std::slice::from_ref(&secret), &AtomicBool::new(false))
+                .remove(0)
+                .map(|_| ()),
+            server.realpath(&secret).map(|_| ()),
+            server.open_read(&secret).map(|_| ()),
+            server.remove_file(&secret),
+            server.remove_dir(&secret),
+        ];
+
+        for result in refused {
+            let error = result.expect_err("refused");
+            assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+            assert!(!error.to_string().contains("secret"), "the message names no path");
+        }
+    }
+
+    #[test]
+    fn many_looks_default_to_one_answer_for_each_path_and_stop_with_an_interrupt_once_cancelled() {
+        let paths = [path("/a"), path("/a/b"), path("/a/b/c")];
+
+        for (cancelled, kind) in [(false, io::ErrorKind::Unsupported), (true, io::ErrorKind::Interrupted)] {
+            let answers = Browsing.lstat_many(&paths, &AtomicBool::new(cancelled));
+
+            assert_eq!(answers.len(), 3, "one answer for each path");
+            for answer in answers {
+                assert_eq!(answer.expect_err("refused").kind(), kind, "cancelled: {cancelled}");
+            }
+        }
     }
 
     #[test]

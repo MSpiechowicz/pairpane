@@ -101,7 +101,7 @@ impl FileId {
 /// It is the device and inode (Unix) or the volume serial number and file index (Windows). Both can be reused when the
 /// folder is deleted and another is created, and a filesystem that does not keep them stable (some FUSE and CIFS
 /// mounts) gives another one at each open; `RenameLog` says what the undo makes of either.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct FolderId((u64, u64));
 
 impl FolderId {

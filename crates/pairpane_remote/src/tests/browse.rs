@@ -12,7 +12,7 @@ use crate::test_server::{HOME, Settings};
 
 const PASSWORD: &str = "correct horse";
 
-fn connected(settings: Settings) -> (Harness, std::sync::Arc<dyn RemoteFs>) {
+pub(super) fn connected(settings: Settings) -> (Harness, std::sync::Arc<dyn RemoteFs>) {
     let h = Harness::new(settings);
 
     h.trust();

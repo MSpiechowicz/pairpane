@@ -4,6 +4,7 @@
 //! One mutex and one condvar. Every change (pause, resume, cancel, answer) calls `notify_all`, so a worker that
 //! sleeps for a resume or an answer always wakes for a cancel, and the wait needs no timeout.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -39,6 +40,8 @@ struct State {
 pub(super) struct Control {
     state: Mutex<State>,
     changed: Condvar,
+    /// Set once the job is cancelled, for a call that waits on a server and cannot take this lock (see [`Control::abort_flag`]).
+    abort: AtomicBool,
 }
 
 /// Locks `mutex`, going on with its data if another thread panicked while holding it: every state here stays
@@ -72,9 +75,16 @@ impl Control {
     /// cancelled already.
     pub(super) fn cancel(&self) -> bool {
         let first = !std::mem::replace(&mut self.state().cancelled, true);
+        // After the cancel is recorded: whoever sees the flag finds the job cancelled at its next checkpoint.
+        self.abort.store(true, Ordering::Release);
         self.changed.notify_all();
 
         first
+    }
+
+    /// The flag [`Control::cancel`] raises, which a read from a server watches to stop between its packets.
+    pub(super) fn abort_flag(&self) -> &AtomicBool {
+        &self.abort
     }
 
     pub(super) fn is_paused(&self) -> bool {
@@ -243,6 +253,20 @@ mod tests {
         assert!(control.unpause());
         assert!(!control.unpause());
         assert!(control.checkpoint().is_ok());
+    }
+
+    #[test]
+    fn a_cancel_raises_the_flag_a_read_from_a_server_watches() {
+        let control = Control::default();
+        assert!(!control.abort_flag().load(Ordering::Acquire));
+
+        control.cancel();
+
+        assert!(control.abort_flag().load(Ordering::Acquire));
+        assert!(
+            control.is_cancelled(),
+            "a reader that sees the flag finds the job cancelled"
+        );
     }
 
     #[test]

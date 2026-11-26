@@ -182,7 +182,7 @@ export class FileActions {
       return false;
     }
 
-    return request.kind === 'add' || ('to' in request && request.to !== '');
+    return request.kind === 'add' || request.kind === 'remote' || ('to' in request && request.to !== '');
   }
 
   /** Does what the dialog would do with the target it starts with; a refusal is told in a card, as the dialog would show it. */
@@ -237,7 +237,7 @@ export class FileActions {
   #finish({ request, source, other }: OpenDialog, name: string) {
     if (request.kind === 'copy' && request.results) {
       deselectResults(source, request.names);
-    } else if (request.kind === 'copy' || request.kind === 'move' || request.kind === 'add') {
+    } else if (request.kind === 'copy' || request.kind === 'move' || request.kind === 'add' || request.kind === 'remote') {
       source.deselect(request.names);
     } else if (request.kind === 'extract') {
       source.deselect(request.names.length > 0 ? request.names : request.archives.map(({ archive }) => archiveName(archive)));

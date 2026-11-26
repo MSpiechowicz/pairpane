@@ -272,7 +272,10 @@ pub(super) fn checked_item_paths(folder: &Path, names: Vec<String>) -> CommandRe
 }
 
 /// The names of `names` that are not repeated, each passing `check` and every part of it short enough.
-fn unique_names(names: Vec<String>, check: impl Fn(&str) -> CommandResult<()>) -> CommandResult<Vec<String>> {
+pub(super) fn unique_names(
+    names: Vec<String>,
+    check: impl Fn(&str) -> CommandResult<()>,
+) -> CommandResult<Vec<String>> {
     let mut seen = HashSet::new();
     let mut unique = Vec::new();
     let mut bytes = 0_usize;
@@ -385,11 +388,14 @@ pub mod add;
 pub mod extract;
 mod extractions;
 pub mod pack;
+pub mod remote;
 mod rename_undo;
 mod sync;
 mod sync_undo;
 pub mod tasks;
 
+#[cfg(test)]
+mod remote_tests;
 #[cfg(test)]
 mod rename_tests;
 #[cfg(test)]

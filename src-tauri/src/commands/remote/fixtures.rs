@@ -10,7 +10,7 @@ use pairpane_remote::{AgentSource, HostKeyPrompt, Pool, PoolConfig, Timeouts, Un
 use tauri::async_runtime::block_on;
 use tempfile::TempDir;
 
-use super::Remotes;
+use super::{Remotes, ThreadCap};
 use crate::error::CommandResult;
 
 /// The password the server accepts by default.
@@ -113,5 +113,13 @@ impl Fixture {
             ConnectOutcome::Connected { site, .. } => site,
             other => panic!("expected a connection, got {other:?}"),
         }
+    }
+}
+
+/// The remote state of an app whose pool could not be made.
+pub(in crate::commands) fn without_pool() -> Remotes {
+    Remotes {
+        pool: None,
+        connects: ThreadCap::default(),
     }
 }

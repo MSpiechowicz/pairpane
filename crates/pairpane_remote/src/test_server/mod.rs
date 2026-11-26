@@ -3,6 +3,7 @@
 //! Its host key is made when it starts; nothing here is a real key, and nothing touches the user's files or agent.
 
 mod files;
+mod open;
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -71,8 +72,16 @@ pub struct Settings {
     pub page_size: usize,
     /// How long each READDIR answer is held back.
     pub page_delay: Duration,
-    /// Folders (`/a/b`) whose OPENDIR is never answered.
+    /// Paths (`/a/b`) whose OPENDIR, REMOVE and RMDIR are never answered.
     pub stalled: Vec<String>,
+    /// The most bytes a READ answers with (the server sends less than was asked for); `None` for no limit.
+    pub short_reads: Option<usize>,
+    /// Whether READ is never answered.
+    pub stall_reads: bool,
+    /// A READ at or after this offset fails (the server could not read the file there); `None` for no failure.
+    pub fail_reads_from: Option<u64>,
+    /// After this many READ requests on a connection, READ waits (see [`Counts::release_reads`]); `None` for no limit.
+    pub stall_reads_after: Option<usize>,
 }
 
 impl Default for Settings {
@@ -85,6 +94,10 @@ impl Default for Settings {
             page_size: 100,
             page_delay: Duration::ZERO,
             stalled: Vec::new(),
+            short_reads: None,
+            stall_reads: false,
+            fail_reads_from: None,
+            stall_reads_after: None,
         }
     }
 }
@@ -96,6 +109,14 @@ pub struct Counts {
     pub connections: AtomicUsize,
     /// READDIR answers sent.
     pub pages: AtomicUsize,
+    /// Files open for reading now, over all connections; a connection that ends lets go of its files.
+    pub open_handles: AtomicUsize,
+    /// READ requests received (before they are answered, or stalled).
+    pub reads: AtomicUsize,
+    /// Whether the READ requests that wait because of `stall_reads_after` are answered.
+    pub reads_released: AtomicBool,
+    /// REMOVE and RMDIR requests received (before they are answered, or stalled).
+    pub removes: AtomicUsize,
     /// Connections that were hung up on at once, because the server was told to stop taking them.
     pub refused: AtomicUsize,
     /// Every password the server was offered (as a password or as the answer to a prompt), in order.
@@ -105,6 +126,11 @@ pub struct Counts {
 }
 
 impl Counts {
+    /// Lets the READ requests that wait because of `stall_reads_after` (and those to come) be answered.
+    pub fn release_reads(&self) {
+        self.reads_released.store(true, Ordering::Release);
+    }
+
     /// The passwords offered so far.
     pub fn offered(&self) -> Vec<String> {
         self.passwords.lock().expect("passwords").clone()
@@ -353,6 +379,12 @@ struct Connection {
     channels: Vec<Channel<Msg>>,
     /// How many questions of a keyboard-interactive exchange were answered.
     round: usize,
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.files.end();
+    }
 }
 
 fn reject() -> Auth {

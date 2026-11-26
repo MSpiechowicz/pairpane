@@ -1,14 +1,16 @@
 import { withoutNested } from '$lib/find/results';
 import type { Entry } from '$lib/ipc/bindings/Entry';
+import type { TransferPlace } from '$lib/ipc/bindings/TransferPlace';
 import { type ArchiveSpot, archiveFile, archiveName, isWritableArchive } from '$lib/panes/archive';
 import type { PaneView } from '$lib/panes/view.svelte';
+import { remoteRequest } from '$lib/remote/transfer';
 
 import type { FileAction } from './dialogs';
 
 /**
  * What a dialog is opened for: items to copy or move into a folder, one item to rename or link to, a new item, or
- * the first part of a split file to join in a folder, archives (or items of one) to extract, or items to add to the
- * folder of an archive.
+ * the first part of a split file to join in a folder, archives (or items of one) to extract, items to add to the
+ * folder of an archive, or items to copy or move between a folder on a server and one on this computer.
  */
 export type OpRequest =
   /** `results`: the names are paths below `from` (the folder searched), as the rows of a search-results pane have them. */
@@ -25,13 +27,15 @@ export type OpRequest =
    */
   | { kind: 'extract'; archives: ArchiveSpot[]; names: string[]; to: string }
   /** The `names` in the folder `from` are added to the archive `archive`, into its folder `dir` (`''`: its root). */
-  | { kind: 'add'; archive: string; dir: string; from: string; names: string[] };
+  | { kind: 'add'; archive: string; dir: string; from: string; names: string[] }
+  /** The `names` in the folder `from` go to the folder `to`, one of the two on a server; `shown` is where they go, as the dialog says it. */
+  | { kind: 'remote'; move: boolean; from: TransferPlace; to: TransferPlace; names: string[]; shown: string };
 
 /**
- * The kinds of dialog a key asks for. Adding to an archive is not one of them: it is what copying becomes when the
- * other pane shows a writable archive.
+ * The kinds of dialog a key asks for. Adding to an archive and a transfer with a server are not: they are what
+ * copying becomes when the other pane shows a writable archive, or a pane shows a server.
  */
-export type DialogKind = Exclude<OpRequest['kind'], 'add'>;
+export type DialogKind = Exclude<OpRequest['kind'], 'add' | 'remote'>;
 
 /**
  * The names an operation acts on: the selected entries the pane shows (the quick filter hides the rest, which an
@@ -54,7 +58,7 @@ export function chosen(view: PaneView): Entry[] {
 }
 
 /** What the card says when an action is asked of a pane that shows a folder on a server, or would write into one. */
-export const REMOTE_NOTICE = 'Files on a server can only be browsed for now.';
+export const REMOTE_NOTICE = 'Files on a server can only be browsed and copied or moved to this computer for now.';
 
 /** What the card says when an action would change an archive's contents. */
 export const READ_ONLY_NOTICE = 'Archives are read-only here — extract first (F5).';
@@ -84,13 +88,18 @@ const FROM_RESULTS: ReadonlySet<FileAction> = new Set(['copy', 'trash', 'deleteP
 const WRITES_TO_OTHER: ReadonlySet<FileAction> = new Set(['copy', 'move', 'symlink', 'hardlink', 'split', 'combine', 'extract']);
 
 /**
- * Why `action` cannot run between these panes, or `undefined` when it can: nothing is done on a server (asked first:
- * a folder there is read-only, which would make copying out of it an extraction), nothing changes an archive (copying
+ * Why `action` cannot run between these panes, or `undefined` when it can: nothing is done on a server but copying or
+ * moving out of it into a folder on this computer (asked first: a folder there is read-only, which would make copying
+ * out of it an extraction), nothing changes an archive (copying
  * out of one is extracting), and only copying from a folder is written into one, when it is of a kind that can be.
  * Search results are only copied, removed and packed, and nothing is written into them.
  */
 export function refusal(action: FileAction, source: PaneView, other: PaneView): string | undefined {
-  if (source.listing.remote !== undefined || (other.listing.remote !== undefined && WRITES_TO_OTHER.has(action))) {
+  if (source.listing.remote !== undefined) {
+    return (action === 'copy' || action === 'move') && other.listing.path !== undefined ? undefined : REMOTE_NOTICE;
+  }
+
+  if (other.listing.remote !== undefined && WRITES_TO_OTHER.has(action)) {
     return REMOTE_NOTICE;
   }
 
@@ -137,6 +146,14 @@ export const isFirstPart = (name: string) => name.endsWith('.001');
  * archives that are selected in a folder). Copying into a pane that shows an archive adds the items to it.
  */
 export function requestFor(kind: DialogKind, source: PaneView, other: PaneView): OpRequest | undefined {
+  // Before the archive and results branches: a listing on a server is read-only, which is no sign of an archive.
+  const server = source.listing.remote;
+  if (server !== undefined) {
+    const names = targets(source);
+    const to = other.listing.path;
+    return (kind === 'copy' || kind === 'move') && to !== undefined && names.length > 0 ? remoteRequest(kind, server, names, to) : undefined;
+  }
+
   if (kind === 'copy' && source.listing.results !== undefined) {
     return resultsRequest(source, other.listing.path ?? '');
   }
