@@ -1,3 +1,10 @@
+# [0.37.0](https://github.com/MSpiechowicz/pairpane/compare/v0.36.0...v0.37.0) (2026-11-26)
+
+
+### Features
+
+* **remote:** copy and move files from an SFTP server to this computer (#93) ([de65a05](https://github.com/MSpiechowicz/pairpane/commit/de65a05fe5e9602b1a4d79d074f310681ecd26e9)), closes [#25](https://github.com/MSpiechowicz/pairpane/issues/25)
+
 # [0.36.0](https://github.com/MSpiechowicz/pairpane/compare/v0.35.0...v0.36.0) (2026-11-26)
 
 
