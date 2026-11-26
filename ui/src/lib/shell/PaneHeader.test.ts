@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Volume } from '$lib/ipc/bindings/Volume';
 import { PaneTabs } from '$lib/panes/tabs.svelte';
 
-import { fakeBackend } from '../../../tests/panes';
+import { crumbsTo, fakeBackend, folderStart, resultsStart } from '../../../tests/panes';
 import PaneHeader from './PaneHeader.svelte';
 
 const home: Volume = { name: 'Home', label: null, path: '/home/me', kind: 'home', free: null };
@@ -16,17 +16,7 @@ function header(path: string, volumes: Volume[] = [home], flat = false) {
   const tabs = new PaneTabs(backend.ipc, 'left');
   void tabs.view.listing.open(path);
 
-  const parts = path.split('/').filter((part) => part !== '');
-  backend.last().emit({
-    kind: 'start',
-    path,
-    parent: '/',
-    crumbs: [
-      { name: '/', path: '/' },
-      ...parts.map((name, index) => ({ name, path: `/${parts.slice(0, index + 1).join('/')}` })),
-    ],
-    total: 0,
-  });
+  backend.last().emit(folderStart(path, 0, { parent: '/', crumbs: crumbsTo(path) }));
 
   const onDriveMenu = vi.fn();
   render(PaneHeader, { tabs, volumes, driveMenuOpen: false, flat, onDriveMenu });
@@ -60,17 +50,14 @@ describe('PaneHeader', () => {
     const { backend, tabs } = header('/home/me/Projects');
 
     void tabs.view.listing.openResults(4);
-    backend.last().emit({
-      kind: 'start',
-      path: '/home/me/Projects',
-      parent: '/home/me',
-      crumbs: [
-        { name: '/', path: '/' },
-        { name: 'Projects', path: '/home/me/Projects' },
-      ],
-      total: 0,
-      results: 4,
-    });
+    backend.last().emit(
+      resultsStart('/home/me/Projects', 0, 4, {
+        crumbs: [
+          { name: '/', path: '/' },
+          { name: 'Projects', path: '/home/me/Projects' },
+        ],
+      }),
+    );
     await tick();
 
     expect(path()).toHaveTextContent('Search results');
@@ -84,17 +71,14 @@ describe('PaneHeader', () => {
     const { backend, tabs } = header('/home/me/Projects', [home], true);
 
     void tabs.view.listing.openResults(4);
-    backend.last().emit({
-      kind: 'start',
-      path: '/home/me/Projects',
-      parent: '/home/me',
-      crumbs: [
-        { name: '/', path: '/' },
-        { name: 'Projects', path: '/home/me/Projects' },
-      ],
-      total: 0,
-      results: 4,
-    });
+    backend.last().emit(
+      resultsStart('/home/me/Projects', 0, 4, {
+        crumbs: [
+          { name: '/', path: '/' },
+          { name: 'Projects', path: '/home/me/Projects' },
+        ],
+      }),
+    );
     await tick();
 
     expect(path()).toHaveTextContent('Flat view');

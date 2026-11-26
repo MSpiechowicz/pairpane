@@ -1,5 +1,6 @@
 import type { ArchiveSpot } from '$lib/ipc/bindings/ArchiveSpot';
 import type { Entry } from '$lib/ipc/bindings/Entry';
+import type { PaneLocation } from '$lib/ipc/bindings/PaneLocation';
 import { isWindowsPlatform } from './keys';
 import type { PaneTabs } from './tabs.svelte';
 
@@ -147,6 +148,11 @@ export function sameSpot(a: ArchiveSpot | undefined, b: ArchiveSpot | undefined)
   }
 
   return a.archive === b.archive && a.dir === b.dir;
+}
+
+/** The place in an archive a listing `location` is, or `undefined` when it is not inside one. */
+export function spotOf(location: PaneLocation): ArchiveSpot | undefined {
+  return location.kind === 'archive' ? { archive: location.archive, dir: location.dir } : undefined;
 }
 
 /** The key of a crumb in the path bar: real folders are told apart by their path, archive steps by their folder too. */

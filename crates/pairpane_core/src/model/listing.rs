@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::{ArchiveSpot, FindId, IpcError};
+use super::{FindId, IpcError};
 
 /// Which of the two panes a command is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -61,6 +61,36 @@ pub struct Crumb {
     pub inside: Option<String>,
 }
 
+/// Where a pane's listing comes from. Not named `Location`, which the browser has as a global.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[ts(export)]
+pub enum PaneLocation {
+    /// A folder on disk, absolute.
+    Folder { path: String },
+    /// A folder inside an archive: `dir` is `""` for the archive's root, otherwise `a/b`. `archive` is the archive's path.
+    Archive { archive: String, dir: String },
+    /// The results of a search; every entry's name is its path below the folder searched.
+    Results { id: FindId },
+}
+
+/// What a pane may do with the entries it lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PaneCapabilities {
+    /// Entries can be created, changed and removed here.
+    pub writable: bool,
+}
+
+impl PaneCapabilities {
+    /// A folder on disk, and the results of a search (which list entries of folders on disk).
+    pub const WRITABLE: Self = Self { writable: true };
+
+    /// An archive.
+    pub const READ_ONLY: Self = Self { writable: false };
+}
+
 /// What a pane's listing channel delivers, in this order: `start`, any number of `batch`es in entry order,
 /// then `done` (or `error`). After `done`, `changed` reports that the folder changed on disk.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -69,21 +99,18 @@ pub struct Crumb {
 pub enum ListEvent {
     /// The folder was opened; `total` entries follow, sorted (folders first, then by name).
     Start {
+        /// The folder the pane shows (and a tab saves). Where an archive is listed it is the folder that holds the archive;
+        /// for the results of a search it is the folder searched.
         path: String,
         /// The folder above, or `null` at a root.
         parent: Option<String>,
         /// The path bar, from the root down to this folder.
         crumbs: Vec<Crumb>,
         total: u32,
-        /// Set when the listing is a folder inside an archive: then `path` is the folder that holds the archive.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        archive: Option<ArchiveSpot>,
-        /// Set when the listing is the results of a search: then `path` is the folder searched and every entry's name is
-        /// its path below it.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        results: Option<FindId>,
+        /// Where the listing is: a folder on disk, a folder inside an archive, or the results of a search.
+        location: PaneLocation,
+        /// What the pane may do with the entries.
+        capabilities: PaneCapabilities,
     },
     /// Entries `offset..offset + entries.len()`.
     Batch { offset: u32, entries: Vec<Entry> },

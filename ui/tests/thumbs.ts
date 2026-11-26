@@ -6,7 +6,7 @@ import { vi } from 'vitest';
 
 import { PaneTabs } from '$lib/panes/tabs.svelte';
 
-import { entry, fakeBackend } from './panes';
+import { crumbsTo, entry, fakeBackend, folderStart } from './panes';
 import { mountPane } from './pane';
 
 /** A `thumb_get` answer: the width and height (u32, little-endian), then `width * height` RGBA pixels (all of `pixel`, or as given). */
@@ -64,16 +64,7 @@ export async function thumbnails(answers: Answers = {}, entries = PICTURES) {
   const backend = fakeBackend(answers);
   const tabs = new PaneTabs(backend.ipc, 'left');
   await tabs.view.listing.open('/big');
-  backend.last().emit({
-    kind: 'start',
-    path: '/big',
-    parent: '/',
-    crumbs: [
-      { name: '/', path: '/' },
-      { name: 'big', path: '/big' },
-    ],
-    total: entries === PICTURES ? TOTAL : entries.length,
-  });
+  backend.last().emit(folderStart('/big', entries === PICTURES ? TOTAL : entries.length, { crumbs: crumbsTo('/big') }));
   backend.last().emit({ kind: 'batch', offset: 0, entries });
   await mountThumbnails(backend, tabs);
 

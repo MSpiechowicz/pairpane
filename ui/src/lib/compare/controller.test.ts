@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { PaneTabs } from '$lib/panes/tabs.svelte';
 
 import { compareBackend, folder } from '../../../tests/compare';
-import { arrive, entry, fakeBackend } from '../../../tests/panes';
+import { arrive, entry, fakeBackend, resultsStart } from '../../../tests/panes';
 import { Comparison } from './controller.svelte';
 
 /** Two panes, `/left` and `/right`, listed with the entries given. */
@@ -28,7 +28,7 @@ async function panes(left = [entry('a')], right = [entry('b')]) {
 async function showResults(tabs: PaneTabs, backend: ReturnType<typeof fakeBackend>) {
   await tabs.view.listing.openResults(1);
   const channel = backend.opens.at(-1)!;
-  channel.emit({ kind: 'start', path: '/left', parent: '/', crumbs: [], total: 0, results: 1 });
+  channel.emit(resultsStart('/left', 0, 1));
   channel.emit({ kind: 'done', dirs: 0, files: 0, bytes: 0, free: null });
 }
 

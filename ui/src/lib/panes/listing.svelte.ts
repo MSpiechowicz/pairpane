@@ -4,10 +4,12 @@ import type { Crumb } from '$lib/ipc/bindings/Crumb';
 import type { Entry } from '$lib/ipc/bindings/Entry';
 import type { FindId } from '$lib/ipc/bindings/FindId';
 import type { ListEvent } from '$lib/ipc/bindings/ListEvent';
+import type { PaneCapabilities } from '$lib/ipc/bindings/PaneCapabilities';
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
+import type { PaneLocation } from '$lib/ipc/bindings/PaneLocation';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
 
-import { joinInner, sameSpot } from './archive';
+import { joinInner, sameSpot, spotOf } from './archive';
 
 /** A listing slower than this shows a spinner in its pane; a faster one never flashes it. */
 export const SPINNER_DELAY_MS = 150;
@@ -48,6 +50,10 @@ export class Listing {
   archive = $state.raw<ArchiveSpot | undefined>();
   /** Set while the pane shows the results of a search; `folder` is then the folder searched. */
   results = $state<FindId | undefined>();
+  /** Where the backend says the listing is (`undefined` before the first one); `archive` and `results` come from it. */
+  place = $state.raw<PaneLocation | undefined>();
+  /** What the backend says may be done with the entries (`undefined` before the first listing). */
+  capabilities = $state.raw<PaneCapabilities | undefined>();
   parent = $state<string | null>(null);
   crumbs = $state.raw<Crumb[]>([]);
   /**
@@ -95,9 +101,9 @@ export class Listing {
     return this.#folder;
   }
 
-  /** What is listed cannot be changed: it is inside an archive. */
+  /** What is listed cannot be changed (the backend says so: inside an archive, for one). */
   get readonly(): boolean {
-    return this.archive !== undefined;
+    return this.capabilities?.writable === false;
   }
 
   /** Tells one listed place from another: a folder, a folder inside an archive, or the results of a search. */
@@ -262,8 +268,9 @@ export class Listing {
       case 'start': {
         // A reload of the same folder keeps showing the previous rows (and summary) until the new ones replace
         // them, so a live update does not flash empty rows.
-        const reload =
-          event.path === this.#folder && sameSpot(event.archive, this.archive) && event.results === this.results && this.error === undefined;
+        const archive = spotOf(event.location);
+        const results = event.location.kind === 'results' ? event.location.id : undefined;
+        const reload = event.path === this.#folder && sameSpot(archive, this.archive) && results === this.results && this.error === undefined;
         const next = new Array<Entry | undefined>(event.total);
         if (reload) {
           this.reloads += 1;
@@ -274,8 +281,10 @@ export class Listing {
         this.#started = true;
         this.error = undefined;
         this.#folder = event.path;
-        this.archive = event.archive;
-        this.results = event.results;
+        this.place = event.location;
+        this.capabilities = event.capabilities;
+        this.archive = archive;
+        this.results = results;
         this.parent = event.parent;
         this.crumbs = event.crumbs;
         this.#setRows(next);

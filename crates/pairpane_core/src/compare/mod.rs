@@ -41,7 +41,7 @@ mod content_tests;
 #[cfg(test)]
 mod status_tests;
 #[cfg(test)]
-mod testing;
+pub(crate) mod testing;
 #[cfg(test)]
 mod walk_tests;
 

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Transport } from '$lib/ipc/transport';
 
-import { arrive, entry, fakeBackend } from '../../../tests/panes';
+import { archiveStart, arrive, entry, fakeBackend, resultsStart } from '../../../tests/panes';
 import { picture, refusal } from '../../../tests/thumbs';
 import { Listing } from './listing.svelte';
 import { THUMB_SIZE, type ThumbTarget, targetOf } from './thumbs';
@@ -306,7 +306,7 @@ describe('targetOf', () => {
     const backend = fakeBackend();
     const listing = new Listing(backend.ipc, 'left');
     await listing.openResults(7);
-    backend.last().emit({ kind: 'start', path: '/home/me', parent: '/home', crumbs: [], total: 2, results: 7 });
+    backend.last().emit(resultsStart('/home/me', 2, 7));
 
     expect(targetOf(listing, entry('docs/deep/a.png'), THUMB_SIZE)).toMatchObject({ folder: '/home/me/docs/deep', name: 'a.png' });
     expect(targetOf(listing, entry('top.png'), THUMB_SIZE)).toMatchObject({ folder: '/home/me', name: 'top.png' });
@@ -316,14 +316,7 @@ describe('targetOf', () => {
     const backend = fakeBackend();
     const listing = new Listing(backend.ipc, 'left');
     await listing.openArchive({ archive: '/pics/a.zip', dir: '' });
-    backend.last().emit({
-      kind: 'start',
-      path: '/pics',
-      parent: '/',
-      crumbs: [],
-      total: 1,
-      archive: { archive: '/pics/a.zip', dir: '' },
-    });
+    backend.last().emit(archiveStart('/pics', 1, { archive: '/pics/a.zip', dir: '' }));
 
     expect(listing.readonly).toBe(true);
     expect(targetOf(listing, entry('a.jpg'), THUMB_SIZE)).toBeUndefined();

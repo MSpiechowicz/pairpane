@@ -2,6 +2,9 @@
 import { vi } from 'vitest';
 
 import type { Entry } from '$lib/ipc/bindings/Entry';
+import type { ArchiveSpot } from '$lib/ipc/bindings/ArchiveSpot';
+import type { Crumb } from '$lib/ipc/bindings/Crumb';
+import type { FindId } from '$lib/ipc/bindings/FindId';
 import type { ListEvent } from '$lib/ipc/bindings/ListEvent';
 import type { SizeEvent } from '$lib/ipc/bindings/SizeEvent';
 import type { VolumeEvent } from '$lib/ipc/bindings/VolumeEvent';
@@ -50,6 +53,37 @@ export function fakeBackend(answers: Partial<Record<CommandName, (args: never) =
   return { ipc, invoke, opens, sizes, volumes, last: () => opens[opens.length - 1] };
 }
 
+type Start = Extract<ListEvent, { kind: 'start' }>;
+
+/** What a `start` says about the folder shown besides where it is: the `parent` (by default the folder above `path`) and the path bar. */
+type Shown = { parent?: string | null; crumbs?: Crumb[] };
+
+/** The path bar from the root down to the real folder `path`. */
+export function crumbsTo(path: string): Crumb[] {
+  const names = path.split('/').filter((name) => name !== '');
+  return [{ name: '/', path: '/' }, ...names.map((name, index) => ({ name, path: `/${names.slice(0, index + 1).join('/')}` }))];
+}
+
+function startOf(path: string, total: number, shown: Shown, place: Pick<Start, 'location' | 'capabilities'>): Start {
+  const parent = shown.parent === undefined ? path.slice(0, path.lastIndexOf('/')) || '/' : shown.parent;
+  return { kind: 'start', path, parent: path === '/' ? null : parent, crumbs: shown.crumbs ?? [], total, ...place };
+}
+
+/** The `start` of the real folder `path`, listing `total` entries. */
+export function folderStart(path: string, total: number, shown: Shown = {}): Start {
+  return startOf(path, total, shown, { location: { kind: 'folder', path }, capabilities: { writable: true } });
+}
+
+/** The `start` of the folder `spot` of an archive, which `path` holds. */
+export function archiveStart(path: string, total: number, spot: ArchiveSpot, shown: Shown = {}): Start {
+  return startOf(path, total, shown, { location: { kind: 'archive', ...spot }, capabilities: { writable: false } });
+}
+
+/** The `start` of the results of the search `id`, which looked in `path`. */
+export function resultsStart(path: string, total: number, id: FindId, shown: Shown = {}): Start {
+  return startOf(path, total, shown, { location: { kind: 'results', id }, capabilities: { writable: true } });
+}
+
 /** Delivers a whole folder on a channel: `start`, one batch with `entries`, `done`. */
 export function arrive(
   channel: ReturnType<typeof fakeBackend>['opens'][number],
@@ -57,16 +91,15 @@ export function arrive(
   entries: Entry[] = [],
   free: number | null = null,
 ) {
-  channel.emit({
-    kind: 'start',
-    path,
-    parent: path === '/' ? null : '/',
-    crumbs: [
-      { name: '/', path: '/' },
-      { name: path.split('/').pop() ?? '', path },
-    ],
-    total: entries.length,
-  });
+  channel.emit(
+    folderStart(path, entries.length, {
+      parent: '/',
+      crumbs: [
+        { name: '/', path: '/' },
+        { name: path.split('/').pop() ?? '', path },
+      ],
+    }),
+  );
   channel.emit({ kind: 'batch', offset: 0, entries });
   channel.emit({
     kind: 'done',

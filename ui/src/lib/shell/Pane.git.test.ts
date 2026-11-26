@@ -9,7 +9,7 @@ import { PaneTabs } from '$lib/panes/tabs.svelte';
 import { preferences } from '$lib/shell/preferences.svelte';
 
 import { mountPane } from '../../../tests/pane';
-import { arrive, entry, fakeBackend } from '../../../tests/panes';
+import { archiveStart, arrive, entry, fakeBackend, resultsStart } from '../../../tests/panes';
 import { refusal, settle } from '../../../tests/thumbs';
 
 afterEach(() => {
@@ -228,7 +228,7 @@ describe('Pane: the Git column', () => {
     const backend = fakeBackend({ columns_git: () => MARKED });
     const tabs = new PaneTabs(backend.ipc, 'left');
     await tabs.view.listing.openArchive({ archive: '/proj/a.zip', dir: '' });
-    backend.last().emit({ kind: 'start', path: '/proj', parent: '/', crumbs: [], total: 2, archive: { archive: '/proj/a.zip', dir: '' } });
+    backend.last().emit(archiveStart('/proj', 2, { archive: '/proj/a.zip', dir: '' }));
     backend.last().emit({ kind: 'batch', offset: 0, entries: [entry('a.txt'), entry('b.txt')] });
     await mountPane(backend, tabs);
 
@@ -250,7 +250,7 @@ describe('Pane: the Git column', () => {
     });
     const tabs = new PaneTabs(backend.ipc, 'left');
     await tabs.view.listing.openResults(7);
-    backend.last().emit({ kind: 'start', path: '/home/me', parent: '/home', crumbs: [], total: 3, results: 7 });
+    backend.last().emit(resultsStart('/home/me', 3, 7));
     backend.last().emit({ kind: 'batch', offset: 0, entries: [entry('docs/a.txt'), entry('top.txt'), entry('docs/more/c.txt')] });
     await mountPane(backend, tabs);
 

@@ -5,7 +5,7 @@ import { IpcFailure } from '$lib/ipc/transport';
 import { PaneTabs } from '$lib/panes/tabs.svelte';
 import { Viewer } from '$lib/viewer/viewer.svelte';
 
-import { arrive, entry, fakeBackend } from '../../../tests/panes';
+import { archiveStart, arrive, entry, fakeBackend, resultsStart } from '../../../tests/panes';
 import { type FileAction, perform } from './dialogs';
 import { FileActions } from './fileActions.svelte';
 import { INTO_RESULTS_NOTICE, RESULTS_NOTICE, RESULTS_TO_ARCHIVE_NOTICE } from './targets';
@@ -18,7 +18,7 @@ const NESTED = ['d', 'd/f', 'd/sub/g', 'e/h'];
 /** Lists the results of search 3 in `/work` in `tabs`: the rows are `rows`, below the folder searched. */
 async function results(backend: ReturnType<typeof fakeBackend>, tabs: PaneTabs, rows = ROWS) {
   await tabs.view.listing.openResults(3);
-  backend.last().emit({ kind: 'start', path: '/work', parent: '/', crumbs: [], total: rows.length, results: 3 });
+  backend.last().emit(resultsStart('/work', rows.length, 3));
   backend.last().emit({ kind: 'batch', offset: 0, entries: rows.map((name) => entry(name)) });
   backend.last().emit({ kind: 'done', dirs: 0, files: rows.length, bytes: 0, free: null });
 }
@@ -132,7 +132,7 @@ describe('FileActions on search results', () => {
   it('copy of results into a pane that shows an archive is refused', async () => {
     const { backend, files, panes, view } = await world('left');
     await panes.right.view.listing.openArchive({ archive: '/dest/a.zip', dir: '' });
-    backend.last().emit({ kind: 'start', path: '/dest', parent: '/', crumbs: [], total: 0, archive: { archive: '/dest/a.zip', dir: '' } });
+    backend.last().emit(archiveStart('/dest', 0, { archive: '/dest/a.zip', dir: '' }));
     view.setCursor(1);
 
     files.run('copy');

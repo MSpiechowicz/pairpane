@@ -43,14 +43,15 @@ pub(super) struct Job {
 const THREADS: usize = 1;
 
 impl Sizing {
-    /// Makes `folder` the one measured in, stopping the running job unless it already is that folder.
-    pub(super) fn move_to(&mut self, folder: &Path) {
-        if self.folder.as_deref() == Some(folder) {
+    /// Makes `folder` the one measured in, stopping the running job unless it already is that folder. `None` (the pane
+    /// shows no folder, as for the results of a search) leaves nothing to measure.
+    pub(super) fn move_to(&mut self, folder: Option<&Path>) {
+        if self.folder.as_deref() == folder {
             return;
         }
 
         self.cancel_job();
-        self.folder = Some(folder.to_owned());
+        self.folder = folder.map(Path::to_owned);
     }
 
     /// Starts a job for the folder `name` inside `path`, which must be the folder the pane shows. Cancels the pane's
@@ -156,7 +157,7 @@ mod tests {
 
     fn listed(folder: &Path) -> Sizing {
         let mut sizing = Sizing::default();
-        sizing.move_to(folder);
+        sizing.move_to(Some(folder));
 
         sizing
     }
@@ -220,11 +221,11 @@ mod tests {
         let mut sizing = listed(Path::new(root()));
         let stop = sizing.begin(root().to_owned(), "photos").expect("job").stop;
 
-        sizing.move_to(Path::new(root()));
+        sizing.move_to(Some(Path::new(root())));
         assert!(!stop.load(Ordering::Relaxed), "the same folder listing again");
 
         let photos = Path::new(root()).join("photos");
-        sizing.move_to(&photos);
+        sizing.move_to(Some(&photos));
         assert!(stop.load(Ordering::Relaxed), "another folder");
 
         let fresh = sizing
@@ -251,7 +252,7 @@ mod tests {
         );
 
         // Cancelled (the pane moved on) but stuck on a hung mount: its thread still counts.
-        sizing.move_to(&Path::new(root()).join("photos"));
+        sizing.move_to(Some(&Path::new(root()).join("photos")));
         assert!(running.stop.load(Ordering::Relaxed));
         let nested = Path::new(root()).join("photos").to_string_lossy().into_owned();
         assert!(sizing.begin(nested.clone(), "x").is_err(), "still busy");

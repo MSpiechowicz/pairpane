@@ -27,7 +27,7 @@ use rayon::prelude::*;
 
 pub use watch::{FolderWatch, reason as watch_error_reason, watch};
 
-use crate::model::{Crumb, Entry, EntryKind, ListEvent};
+use crate::model::{Crumb, Entry, EntryKind, ListEvent, PaneCapabilities, PaneLocation};
 
 /// Entries in the first batch: about one screen, so it is ready within milliseconds.
 pub const FIRST_BATCH: usize = 200;
@@ -88,8 +88,10 @@ pub fn list_at(
         parent: shown.parent().map(|parent| parent.to_string_lossy().into_owned()),
         crumbs: crumbs(shown),
         total: count(names.len()),
-        archive: None,
-        results: None,
+        location: PaneLocation::Folder {
+            path: shown.to_string_lossy().into_owned(),
+        },
+        capabilities: PaneCapabilities::WRITABLE,
     });
 
     let (mut dirs, mut files, mut bytes) = (0_u32, 0_u32, 0_u64);
@@ -357,8 +359,9 @@ pub fn crumbs(path: &Path) -> Vec<Crumb> {
     crumbs
 }
 
-/// Entry counts are capped at `u32::MAX` on the wire (no folder comes close).
-fn count(n: usize) -> u32 {
+/// Entry counts are capped at `u32::MAX` on the wire (no folder comes close). Public for the listings the app builds
+/// itself (search results).
+pub fn count(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }
 

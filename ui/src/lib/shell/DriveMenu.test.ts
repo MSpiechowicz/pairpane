@@ -6,7 +6,7 @@ import type { Volume } from '$lib/ipc/bindings/Volume';
 import { PaneTabs } from '$lib/panes/tabs.svelte';
 import { Volumes, VOLUMES_POLL_MS } from '$lib/panes/volumes.svelte';
 
-import { arrive, fakeBackend } from '../../../tests/panes';
+import { arrive, crumbsTo, fakeBackend, folderStart } from '../../../tests/panes';
 import DriveMenu from './DriveMenu.svelte';
 
 const volume = (name: string, path: string, extra: Partial<Volume> = {}): Volume => ({
@@ -31,17 +31,7 @@ async function menu(path = '/home/me/Projects', offered = places) {
   await tabs.view.listing.open('/start');
   arrive(backend.last(), '/start');
   await tabs.view.listing.open(path);
-  const parts = path.split('/').filter((part) => part !== '');
-  backend.last().emit({
-    kind: 'start',
-    path,
-    parent: '/',
-    crumbs: [
-      { name: '/', path: '/' },
-      ...parts.map((name, index) => ({ name, path: `/${parts.slice(0, index + 1).join('/')}` })),
-    ],
-    total: 0,
-  });
+  backend.last().emit(folderStart(path, 0, { parent: '/', crumbs: crumbsTo(path) }));
 
   const volumes = new Volumes(backend.ipc);
   await volumes.refresh();

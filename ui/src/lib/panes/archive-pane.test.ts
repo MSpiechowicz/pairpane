@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { Crumb } from '$lib/ipc/bindings/Crumb';
 import type { Entry } from '$lib/ipc/bindings/Entry';
 
-import { arrive, deliver, entry, fakeBackend } from '../../../tests/panes';
+import { archiveStart, arrive, deliver, entry, fakeBackend } from '../../../tests/panes';
 import { handleKey } from './keys';
 import { PaneTabs } from './tabs.svelte';
 import { type ArchiveSpot, joinInner } from './archive';
@@ -26,7 +26,7 @@ function arriveIn(backend: Backend, spot: ArchiveSpot, entries: Entry[] = []) {
   }
 
   const channel = backend.last();
-  channel.emit({ kind: 'start', path: '/work', parent: '/', crumbs, total: entries.length, archive: spot });
+  channel.emit(archiveStart('/work', entries.length, spot, { crumbs }));
   channel.emit({ kind: 'batch', offset: 0, entries });
   channel.emit({ kind: 'done', dirs: 0, files: entries.length, bytes: 0, free: null });
 }

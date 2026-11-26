@@ -7,7 +7,7 @@ import type { ListEvent } from '$lib/ipc/bindings/ListEvent';
 import { Preferences } from '$lib/shell/preferences.svelte';
 
 import { done } from '../../../tests/find';
-import { arrive, fakeBackend } from '../../../tests/panes';
+import { archiveStart, arrive, fakeBackend, resultsStart } from '../../../tests/panes';
 import { go } from '../../../tests/tabs';
 import WatchHost from '../../../tests/WatchHost.svelte';
 import { FlatView } from './flat.svelte';
@@ -34,7 +34,7 @@ async function setup(answers: Parameters<typeof fakeBackend>[0] = {}) {
     },
     // The backend lists the results into the pane before it answers.
     find_open: (args: { id: number; onEvent: (event: ListEvent) => void }) => {
-      args.onEvent({ kind: 'start', path: '/home/me', parent: '/home', crumbs: [], total: 2, results: args.id });
+      args.onEvent(resultsStart('/home/me', 2, args.id));
       args.onEvent({ kind: 'done', dirs: 0, files: 2, bytes: 0, free: null });
       return null;
     },
@@ -308,7 +308,7 @@ describe('FlatView', () => {
     const { backend, panes, listing, flat, say, searches } = await setup();
 
     await panes.left.view.listing.openArchive({ archive: '/home/me/a.zip', dir: '' });
-    backend.last().emit({ kind: 'start', path: '/home/me', parent: null, crumbs: [], total: 0, archive: { archive: '/home/me/a.zip', dir: '' } });
+    backend.last().emit(archiveStart('/home/me', 0, { archive: '/home/me/a.zip', dir: '' }, { parent: null }));
     flat.left.toggle();
     expect(say).toHaveBeenLastCalledWith('A flat view lists a folder on disk: leave the archive first.', true);
 

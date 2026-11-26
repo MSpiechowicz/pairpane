@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { PaneTabs } from '$lib/panes/tabs.svelte';
 import type { PaneView } from '$lib/panes/view.svelte';
 
-import { arrive, entry, fakeBackend } from '../../../tests/panes';
+import { archiveStart, arrive, entry, fakeBackend, resultsStart } from '../../../tests/panes';
 import {
   FOLDER_NOTICE,
   LINK_NOTICE,
@@ -133,7 +133,7 @@ describe('picking the two files of a comparison', () => {
     const { backend, left, right } = await panes();
     await left.listing.openResults(1);
     const channel = backend.opens.at(-1)!;
-    channel.emit({ kind: 'start', path: '/left', parent: '/', crumbs: [], total: 2, results: 1 });
+    channel.emit(resultsStart('/left', 2, 1));
     channel.emit({ kind: 'batch', offset: 0, entries: [entry('docs/deep/a.txt'), entry('b.txt')] });
     channel.emit({ kind: 'done', dirs: 0, files: 2, bytes: 0, free: null });
 
@@ -146,14 +146,7 @@ describe('picking the two files of a comparison', () => {
     const { backend, left, right } = await panes();
     await right.listing.openArchive({ archive: '/right/a.zip', dir: '' });
     const channel = backend.opens.at(-1)!;
-    channel.emit({
-      kind: 'start',
-      path: '/right',
-      parent: '/',
-      crumbs: [],
-      total: 1,
-      archive: { archive: '/right/a.zip', dir: '' },
-    });
+    channel.emit(archiveStart('/right', 1, { archive: '/right/a.zip', dir: '' }));
     channel.emit({ kind: 'batch', offset: 0, entries: [entry('inner.txt')] });
     channel.emit({ kind: 'done', dirs: 0, files: 1, bytes: 0, free: null });
     left.pointAt('a.txt');

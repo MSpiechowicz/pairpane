@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { GitMark } from '$lib/ipc/bindings/GitMark';
 
-import { arrive, entry, fakeBackend } from '../../../tests/panes';
+import { archiveStart, arrive, entry, fakeBackend, resultsStart } from '../../../tests/panes';
 import { extraTargetOf, gitCell, gitPlaceOf, NOTHING, severityOf, wantedExtras } from './extras';
 import { Listing } from './listing.svelte';
 import { PaneTabs } from './tabs.svelte';
@@ -58,7 +58,7 @@ describe('extraTargetOf', () => {
     const backend = fakeBackend();
     const listing = new Listing(backend.ipc, 'left');
     await listing.openResults(7);
-    backend.last().emit({ kind: 'start', path: '/home/me', parent: '/home', crumbs: [], total: 2, results: 7 });
+    backend.last().emit(resultsStart('/home/me', 2, 7));
 
     expect(extraTargetOf(listing, entry('docs/deep/a.png'))).toMatchObject({ folder: '/home/me/docs/deep', name: 'a.png' });
     expect(extraTargetOf(listing, entry('top.bin'))).toMatchObject({ folder: '/home/me', name: 'top.bin' });
@@ -68,14 +68,7 @@ describe('extraTargetOf', () => {
     const backend = fakeBackend();
     const listing = new Listing(backend.ipc, 'left');
     await listing.openArchive({ archive: '/pics/a.zip', dir: '' });
-    backend.last().emit({
-      kind: 'start',
-      path: '/pics',
-      parent: '/',
-      crumbs: [],
-      total: 1,
-      archive: { archive: '/pics/a.zip', dir: '' },
-    });
+    backend.last().emit(archiveStart('/pics', 1, { archive: '/pics/a.zip', dir: '' }));
 
     expect(listing.readonly).toBe(true);
     expect(extraTargetOf(listing, entry('a.jpg'))).toBeUndefined();

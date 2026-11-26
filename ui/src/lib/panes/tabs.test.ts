@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { arrive, fakeBackend } from '../../../tests/panes';
+import { arrive, fakeBackend, folderStart } from '../../../tests/panes';
 import { arrived, asked, go, inA, shown } from '../../../tests/tabs';
 import { MAX_HISTORY, MAX_TABS, PaneTabs } from './tabs.svelte';
 
@@ -389,7 +389,7 @@ describe('PaneTabs restore', () => {
     const tabs = new PaneTabs(backend.ipc, 'left');
 
     tabs.restore(saved, 0);
-    backend.last().emit({ kind: 'start', path: '/a', parent: '/', crumbs: [], total: 10 });
+    backend.last().emit(folderStart('/a', 10));
     backend.last().emit({ kind: 'error', error: { code: 'io', message: 'The disk went away.' } });
 
     expect(backend.opens).toHaveLength(1);

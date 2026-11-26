@@ -9,6 +9,7 @@ import type { ListEvent } from '$lib/ipc/bindings/ListEvent';
 import type { SavedState } from '$lib/ipc/bindings/SavedState';
 import type { VolumeEvent } from '$lib/ipc/bindings/VolumeEvent';
 
+import { crumbsTo, folderStart } from '../tests/panes';
 import App from './App.svelte';
 
 /** app_info answers with `info`; every other command (menu_subscribe, update_check) finds nothing. */
@@ -160,17 +161,7 @@ describe('App', () => {
         // The panes open their folders once the saved session has been looked at.
         await vi.waitFor(() => expect(opens.some((open) => open.args.pane === 'left')).toBe(true));
         const channel = opens.filter((open) => open.args.pane === 'left').at(-1)!;
-        const names = path.split('/').filter((part) => part !== '');
-        channel.emit({
-          kind: 'start',
-          path,
-          parent: path === '/' ? null : '/',
-          crumbs: [
-            { name: '/', path: '/' },
-            ...names.map((part, index) => ({ name: part, path: `/${names.slice(0, index + 1).join('/')}` })),
-          ],
-          total: 0,
-        });
+        channel.emit(folderStart(path, 0, { parent: path === '/' ? null : '/', crumbs: crumbsTo(path) }));
         channel.emit({ kind: 'done', dirs: 0, files: 0, bytes: 0, free: null });
         await tick();
       };
@@ -289,17 +280,7 @@ describe('App', () => {
       const started = () => vi.waitFor(() => expect(opens.length).toBeGreaterThanOrEqual(2));
       const list = (side: string, path: string) => {
         const channel = opens.filter((open) => open.args.pane === side).at(-1)!;
-        const names = path.split('/').filter((part) => part !== '');
-        channel.emit({
-          kind: 'start',
-          path,
-          parent: '/',
-          crumbs: [
-            { name: '/', path: '/' },
-            ...names.map((part, index) => ({ name: part, path: `/${names.slice(0, index + 1).join('/')}` })),
-          ],
-          total: 0,
-        });
+        channel.emit(folderStart(path, 0, { parent: '/', crumbs: crumbsTo(path) }));
         channel.emit({ kind: 'done', dirs: 0, files: 0, bytes: 0, free: null });
       };
       const sent = (name: string) => invoke.mock.calls.filter(([command]) => command === name);

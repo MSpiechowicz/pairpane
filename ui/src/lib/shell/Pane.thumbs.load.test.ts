@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { PaneTabs } from '$lib/panes/tabs.svelte';
 
-import { entry, fakeBackend } from '../../../tests/panes';
+import { archiveStart, entry, fakeBackend, folderStart, resultsStart } from '../../../tests/panes';
 import {
   asked,
   held,
@@ -98,7 +98,7 @@ describe('Pane thumbnails: what is asked for', () => {
     const backend = fakeBackend({ thumb_get: () => Promise.reject(refusal('unsupported')) });
     const tabs = new PaneTabs(backend.ipc, 'left');
     await tabs.view.listing.openResults(7);
-    backend.last().emit({ kind: 'start', path: '/home/me', parent: '/home', crumbs: [], total: 3, results: 7 });
+    backend.last().emit(resultsStart('/home/me', 3, 7));
     backend.last().emit({
       kind: 'batch',
       offset: 0,
@@ -120,14 +120,7 @@ describe('Pane thumbnails: what is asked for', () => {
     const backend = fakeBackend({ thumb_get: () => picture(1, 1) });
     const tabs = new PaneTabs(backend.ipc, 'left');
     await tabs.view.listing.openArchive({ archive: '/pics/a.zip', dir: '' });
-    backend.last().emit({
-      kind: 'start',
-      path: '/pics',
-      parent: '/',
-      crumbs: [],
-      total: 1,
-      archive: { archive: '/pics/a.zip', dir: '' },
-    });
+    backend.last().emit(archiveStart('/pics', 1, { archive: '/pics/a.zip', dir: '' }));
     backend.last().emit({ kind: 'batch', offset: 0, entries: [entry('inside.jpg')] });
     await mountThumbnails(backend, tabs);
     await settle();
@@ -209,20 +202,14 @@ describe('Pane thumbnails: what a tile shows', () => {
 
     // The folder is listed again with the same file: nothing is asked.
     await tabs.view.listing.reload();
-    backend.last().emit({
-      kind: 'start',
-      path: '/big',
-      parent: '/',
-      crumbs: [],
-      total: 1,
-    });
+    backend.last().emit(folderStart('/big', 1));
     backend.last().emit({ kind: 'batch', offset: 0, entries: [entry('a.jpg', 'file', { size: 1, modified: 5 })] });
     await settle();
     expect(asked(backend)).toEqual(['a.jpg']);
 
     // The file was written meanwhile.
     await tabs.view.listing.reload();
-    backend.last().emit({ kind: 'start', path: '/big', parent: '/', crumbs: [], total: 1 });
+    backend.last().emit(folderStart('/big', 1));
     backend.last().emit({ kind: 'batch', offset: 0, entries: [entry('a.jpg', 'file', { size: 2, modified: 9 })] });
     await settle();
     expect(asked(backend)).toEqual(['a.jpg', 'a.jpg']);
