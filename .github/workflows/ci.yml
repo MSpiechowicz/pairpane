@@ -45,6 +45,8 @@ jobs:
       - run: cargo clippy -p pairpane_core --all-targets -- -D warnings
       # The device link (pairing, the encrypted connection), its own crate so its network stack stays out of the core.
       - run: cargo clippy -p pairpane_link --all-targets -- -D warnings
+      # Remote sites (SSH and SFTP browsing), its own crate so the SSH stack stays out of the core.
+      - run: cargo clippy -p pairpane_remote --all-targets -- -D warnings
 
   rust-test:
     name: Rust tests (${{ matrix.os }})
@@ -78,6 +80,12 @@ jobs:
       - run: cargo test -p pairpane_core
       # Pairs two endpoints on localhost; never the OS keychain, never the internet.
       - run: cargo test -p pairpane_link
+      # An SSH server in this process on localhost, with a temporary home; never the real ~/.ssh, ssh-agent or network.
+      # Host settings come from the runner's OpenSSH client (`ssh -G`, which connects nowhere); a runner without one
+      # fails instead of skipping those tests.
+      - run: cargo test -p pairpane_remote
+        env:
+          PAIRPANE_REQUIRE_SSH: "1"
       # The tests regenerate the TypeScript bindings; stale or untracked output means the commit is missing them.
       - name: Generated TypeScript bindings are committed
         if: runner.os == 'Linux'

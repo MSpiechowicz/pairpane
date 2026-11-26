@@ -7,12 +7,16 @@
 
 mod archive;
 mod local;
+mod remote;
+mod remote_folder;
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use archive::ArchiveFolder;
 pub use local::LocalFolder;
+pub use remote::{MAX_REMOTE_PATH, RemoteEntry, RemoteFs, RemoteKind, RemoteMeta, RemotePath};
+pub use remote_folder::{MAX_LINK_STATS, RemoteFolder};
 
 use crate::listing::{BATCH, FIRST_BATCH, FolderWatch, Outcome, count, platform};
 use crate::model::{Entry, EntryKind, ListEvent, PaneCapabilities, PaneLocation};

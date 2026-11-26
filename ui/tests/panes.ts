@@ -28,7 +28,7 @@ export function entry(name: string, kind: Entry['kind'] = 'file', extra: Partial
 type Call = { args: Record<string, unknown>; emit: (event: never) => void };
 
 /**
- * A transport that records every `pane_open`, `archive_open` and `find_open` (`opens`), `pane_folder_size` (`sizes`) and `volumes_list`
+ * A transport that records every `pane_open`, `archive_open`, `remote_open` and `find_open` (`opens`), `pane_folder_size` (`sizes`) and `volumes_list`
  * (`volumes`) and lets the test send events on their channels. A command is answered with `null`, or as `answers`
  * says (a function of the arguments; it may return a promise, also a rejected or a never settled one);
  * `invoke` has the calls of all of them.
@@ -41,6 +41,7 @@ export function fakeBackend(answers: Partial<Record<CommandName, (args: never) =
     pane_open: opens as Call[],
     archive_open: opens as Call[],
     find_open: opens as Call[],
+    remote_open: opens as Call[],
     pane_folder_size: sizes as Call[],
     volumes_list: volumes as Call[],
   };
@@ -81,9 +82,32 @@ export function archiveStart(path: string, total: number, spot: ArchiveSpot, sho
   return startOf(path, total, shown, { location: { kind: 'archive', ...spot }, capabilities: { writable: false } });
 }
 
+/** The path bar of a server's folder `dir`: the server's label at the root, then a step for each folder, each with its full path. */
+export function remoteCrumbs(label: string, dir: string): Crumb[] {
+  const names = dir.split('/').filter((name) => name !== '');
+  return [{ name: label, path: '/' }, ...names.map((name, index) => ({ name, path: `/${names.slice(0, index + 1).join('/')}` }))];
+}
+
+/** The `start` of the folder `dir` on the server `site` (called `label`), listing `total` entries; it is read-only. */
+export function remoteStart(site: number, label: string, dir: string, total: number, shown: Shown = {}): Start {
+  const crumbs = remoteCrumbs(label, dir);
+  return startOf(dir, total, { crumbs, ...shown }, { location: { kind: 'remote', site, label, dir }, capabilities: { writable: false } });
+}
+
 /** The `start` of the results of the search `id`, which looked in `path`. */
 export function resultsStart(path: string, total: number, id: FindId, shown: Shown = {}): Start {
   return startOf(path, total, shown, { location: { kind: 'results', id }, capabilities: { writable: true } });
+}
+
+/** The `done` of a listing of `entries`. */
+function doneOf(entries: Entry[], free: number | null = null): ListEvent {
+  return {
+    kind: 'done',
+    dirs: entries.filter((e) => e.kind === 'dir').length,
+    files: entries.filter((e) => e.kind !== 'dir').length,
+    bytes: entries.reduce((sum, e) => sum + e.size, 0),
+    free,
+  };
 }
 
 /** Delivers a whole folder on a channel: `start`, one batch with `entries`, `done`. */
@@ -103,13 +127,7 @@ export function arrive(
     }),
   );
   channel.emit({ kind: 'batch', offset: 0, entries });
-  channel.emit({
-    kind: 'done',
-    dirs: entries.filter((e) => e.kind === 'dir').length,
-    files: entries.filter((e) => e.kind !== 'dir').length,
-    bytes: entries.reduce((sum, e) => sum + e.size, 0),
-    free,
-  });
+  channel.emit(doneOf(entries, free));
 }
 
 /** Calls `open`, then delivers the folder on the channel it opened. */
@@ -123,5 +141,22 @@ export async function deliver(
   await open();
   const channel = backend.last();
   arrive(channel, path, entries, free);
+  return channel;
+}
+
+/** Opens the folder `dir` of the server `site` in `listing` and delivers it whole, as `deliver` does for a folder on disk. */
+export async function deliverRemote(
+  backend: ReturnType<typeof fakeBackend>,
+  listing: { openRemote: (place: { kind: 'remote'; site: number; label: string; dir: string }) => Promise<void> },
+  dir: string,
+  entries: Entry[] = [],
+  site = 1,
+  label = 'me@host',
+) {
+  await listing.openRemote({ kind: 'remote', site, label, dir });
+  const channel = backend.last();
+  channel.emit(remoteStart(site, label, dir, entries.length));
+  channel.emit({ kind: 'batch', offset: 0, entries });
+  channel.emit(doneOf(entries));
   return channel;
 }

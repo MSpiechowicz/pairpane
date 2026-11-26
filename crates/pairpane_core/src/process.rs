@@ -101,6 +101,8 @@ pub fn spawn(command: &mut Command) -> io::Result<Child> {
     command.spawn()
 }
 
+pub use group::Group;
+
 /// A process this module can wait for and stop: the standard library's [`Child`], and on Windows the helper that is started
 /// in an AppContainer with `CreateProcessW` (`view::thumb::windows`), which `Command` cannot do on stable Rust.
 pub trait Started {
@@ -290,6 +292,7 @@ pub fn join_within<T>(thread: JoinHandle<T>, bound: Duration) -> Option<T> {
     thread.join().ok()
 }
 
+mod group;
 #[cfg(windows)]
 pub(crate) mod job;
 #[cfg(test)]

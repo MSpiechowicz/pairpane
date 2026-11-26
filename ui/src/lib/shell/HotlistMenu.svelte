@@ -20,6 +20,10 @@
 
   /** Why the current folder cannot be added, when it cannot. */
   const unaddable = $derived.by(() => {
+    if (listing.remote !== undefined) {
+      return 'A folder on a server can’t be a favourite.';
+    }
+
     if (listing.readonly) {
       return 'A folder inside an archive can’t be a favourite.';
     }
@@ -90,7 +94,7 @@
 
   {#snippet footer()}
     <button
-      class="here"
+      class="action"
       type="button"
       disabled={here === undefined}
       title={unaddable}
@@ -116,25 +120,5 @@
 
   input:focus {
     border-color: var(--accent);
-  }
-
-  .here {
-    width: 100%;
-    height: 28px;
-    margin-top: 4px;
-    padding: 0 8px;
-    border: 0;
-    border-radius: 6px;
-    background: none;
-    color: var(--dim);
-    text-align: left;
-    transition:
-      color 0.12s,
-      background-color 0.12s;
-  }
-
-  .here:hover:not(:disabled) {
-    background: var(--panel-2);
-    color: var(--text);
   }
 </style>

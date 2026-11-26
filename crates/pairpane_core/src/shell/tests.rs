@@ -76,6 +76,20 @@ fn an_appimage_leaves_no_variable_naming_its_mount_and_nothing_changes_outside_o
         ]
     );
     assert!(appimage_env(vars(&[("PATH", "/usr/bin")]).into_iter()).is_empty());
+
+    // The environment a child sees from one: the same, with the changes made and every other variable as it was.
+    assert_eq!(
+        cleaned_env(
+            vars(&[
+                ("APPDIR", "/tmp/.mount_Pair1"),
+                ("PATH", "/tmp/.mount_Pair1/usr/bin:/usr/bin"),
+                ("SHELL", "/bin/fish"),
+                ("LANG", "pl_PL.UTF-8"),
+            ])
+            .into_iter()
+        ),
+        vars(&[("PATH", "/usr/bin"), ("SHELL", "/bin/fish"), ("LANG", "pl_PL.UTF-8")])
+    );
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]

@@ -1,11 +1,13 @@
 import type { PaneId } from '$lib/ipc/bindings/PaneId';
 import type { SavedTab } from '$lib/ipc/bindings/SavedTab';
+import type { SiteId } from '$lib/ipc/bindings/SiteId';
 import type { Transport } from '$lib/ipc/transport';
 
 import { extraTargetOf, gitPlaceOf } from './extras';
 import { Extras } from './extras.svelte';
 import type { Layout } from './layout';
 import type { SortColumn } from './order';
+import type { RemotePlace } from './remote';
 import { Thumbs } from './thumbs.svelte';
 import { PaneView } from './view.svelte';
 import type { ViewHooks } from './viewHooks';
@@ -22,8 +24,13 @@ export interface TabSort {
 
 export interface Tab {
   readonly id: number;
-  /** Where the tab was last left; `null`: the home folder. For the active tab the live folder is `view.listing.folder`. */
+  /**
+   * Where the tab was last left; `null`: the home folder. For the active tab the live folder is `view.listing.folder`.
+   * While the tab is on a server it is the last folder on disk it was in: that is what is saved.
+   */
   path: string | null;
+  /** The folder on a server the tab is at, if it is. Only kept in memory: a connection does not outlive the app. */
+  remote?: RemotePlace;
   sort: TabSort;
   layout: Layout;
   back: string[];
@@ -97,8 +104,8 @@ export class PaneTabs {
     this.#tabs = [this.#create(null, { column: 'name', desc: false }, 'detailed')];
   }
 
-  #create(path: string | null, sort: TabSort, layout: Layout): Tab {
-    return { id: this.#nextId++, path, sort, layout, back: [], forward: [] };
+  #create(path: string | null, sort: TabSort, layout: Layout, remote?: RemotePlace): Tab {
+    return { id: this.#nextId++, path, remote, sort, layout, back: [], forward: [] };
   }
 
   get tabs(): readonly Tab[] {
@@ -135,6 +142,15 @@ export class PaneTabs {
     );
   }
 
+  /** The folder on a server the active tab is at, as shown now (none while a move to a folder on disk is on its way). */
+  #liveRemote(tab: Tab): RemotePlace | undefined {
+    if (this.#entering) {
+      return tab.remote;
+    }
+
+    return this.#route === undefined ? this.view.listing.remote : undefined;
+  }
+
   /** The active tab as shown now. Its folder counts once it is listed: until then the tab's own path is the truth. */
   #live(tab: Tab): TabState {
     return {
@@ -169,7 +185,10 @@ export class PaneTabs {
     this.#enter(tabs.length > 0);
   }
 
-  /** The pane was refused the folder it was opening. If it was a tab's, the tab shows the home folder instead (once). */
+  /**
+   * The pane was refused the folder it was opening. If it was a tab's, the tab shows the home folder instead (once);
+   * a place on a server that is gone is replaced by the last folder on disk the tab was in.
+   */
   #refused() {
     this.#pending = undefined;
     this.#route = undefined;
@@ -178,9 +197,34 @@ export class PaneTabs {
       return;
     }
 
+    const tab = this.#current;
+    if (tab.remote !== undefined) {
+      tab.remote = undefined;
+      this.#go(tab.path, 'switch');
+      return; // still homing: that folder may be refused too
+    }
+
     this.#homing = false; // once: a home folder that is refused too is left as it is
-    this.#current.path = null;
+    tab.path = null;
     this.#go(null, 'switch');
+  }
+
+  /**
+   * A connection is over: the tabs that were on it are on their last folder on disk, the active one at once (its pane
+   * shows that folder, which is no step of the history).
+   */
+  dropSite(site: SiteId) {
+    for (const tab of this.#tabs) {
+      if (tab.remote?.site === site) {
+        tab.remote = undefined;
+      }
+    }
+
+    if (this.view.listing.remote?.site === site) {
+      this.#go(this.#current.path, 'switch');
+      this.#entering = true;
+      this.#homing = true;
+    }
   }
 
   /** Adds a tab showing the current folder, after the active one, and makes it the active one. It copies the sort and layout. */
@@ -190,8 +234,8 @@ export class PaneTabs {
     }
 
     this.#leave();
-    const { path, sort, layout } = this.#tabs[this.#active];
-    this.#tabs.splice(this.#active + 1, 0, this.#create(path, { ...sort }, layout));
+    const { path, sort, layout, remote } = this.#tabs[this.#active];
+    this.#tabs.splice(this.#active + 1, 0, this.#create(path, { ...sort }, layout, remote));
     this.#active += 1;
     this.#touch();
     // A move of the tab it copies that has not listed yet is that tab's: the new one opens its folder itself, so
@@ -254,6 +298,7 @@ export class PaneTabs {
     const tab = this.#current;
     const { path, sort, layout } = this.#live(tab);
     tab.path = this.#route ?? path;
+    tab.remote = this.#liveRemote(tab);
     tab.sort = sort;
     tab.layout = layout;
   }
@@ -266,14 +311,17 @@ export class PaneTabs {
     const tab = this.#current;
     this.view.restoreSort(tab.sort.column, tab.sort.desc);
     this.view.layout = tab.layout;
-    this.#go(tab.path, 'switch');
+    this.#go(tab.path, 'switch', undefined, tab.remote);
     this.#entering = true;
     this.#homing = home;
   }
 
-  /** Opens `path` as a move that is not a navigation: the folder it lists is not a new step of the history. */
-  #go(path: string | null, move: Move, route?: string) {
-    void this.view.listing.open(path);
+  /**
+   * Opens `path` (or the folder `remote` on a server) as a move that is not a navigation: the folder it lists is not
+   * a new step of the history.
+   */
+  #go(path: string | null, move: Move, route?: string, remote?: RemotePlace) {
+    void (remote === undefined ? this.view.listing.open(path) : this.view.listing.openRemote(remote));
     // The open made the pane forget what it was doing; this is what it does now.
     this.#pending = { path, move };
     this.#route = route;
@@ -332,16 +380,25 @@ export class PaneTabs {
     this.#pending = { path: pending.path, move: 'switch' }; // its step is taken
   }
 
-  /** The pane listed another folder: a step of the history, unless a history move or a tab switch brought it. */
-  #listed(path: string) {
+  /**
+   * The pane listed another folder: a step of the history, unless a history move or a tab switch brought it. A folder
+   * on a server (`path` is `undefined`) is none: the history is of folders on disk, and the pane leaves from the last.
+   */
+  #listed(path: string | undefined) {
     const previous = this.#route ?? this.#shown;
     const move = this.#pending?.move;
     this.#homing = false;
     this.#entering = false;
     const tab = this.#current;
-    this.#shown = path;
     this.#pending = undefined;
     this.#route = undefined;
+
+    if (path === undefined) {
+      return;
+    }
+
+    this.#shown = path;
+    tab.path = path; // the folder on disk the tab was last in, whatever it shows next
 
     if (previous === undefined || previous === path) {
       return;

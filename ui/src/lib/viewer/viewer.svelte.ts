@@ -26,7 +26,7 @@ export type Under = Target | 'folder' | undefined;
 /** What the quick view shows: a session, the placeholder for a folder, or nothing. */
 export type QuickShown = ViewSession | 'folder' | undefined;
 
-/** The file `entry` of `view` as a target: a search result in the folder that holds it, an entry of an archive inside it. */
+/** The file `entry` of `view` as a target: a search result in the folder that holds it, an entry of an archive inside it. Never for a pane on a server (it has no path on disk): callers refuse first. */
 export function fileTarget(view: PaneView, entry: Entry): Target {
   const { archive, path, folder, results } = view.listing;
   if (archive !== undefined) {
@@ -88,8 +88,9 @@ export class Viewer {
    */
   #look(): Under {
     const view = this.#panes[this.#active()].view;
-    const { archive, path, results } = view.listing;
-    if (path === undefined && archive === undefined && results === undefined) {
+    const { archive, path, results, remote } = view.listing;
+    // A file on a server has no path on disk: the quick view has nothing to show (F3 says so in a card, see `view` in App.svelte).
+    if (remote !== undefined || (path === undefined && archive === undefined && results === undefined)) {
       return undefined;
     }
 
@@ -101,7 +102,7 @@ export class Viewer {
     return entry.kind === 'dir' ? 'folder' : fileTarget(view, entry);
   }
 
-  /** F3: the overlay for the file (or archive entry) under the cursor. A folder, `..` and an empty pane have nothing to view. */
+  /** F3: the overlay for the file (or archive entry) under the cursor. A folder, `..`, an empty pane and a pane on a server have nothing to view. */
   open() {
     const target = this.#look();
     if (typeof target === 'object') {

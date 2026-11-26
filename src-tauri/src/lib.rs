@@ -92,6 +92,8 @@ pub fn run() -> ExitCode {
             app.manage(commands::thumbs::Thumbs::default());
             app.manage(commands::columns::Columns::default());
             app.manage(commands::archives::Archives::default());
+            // Starts the runtime of the SFTP sites; without one the app runs and the remote commands refuse.
+            app.manage(commands::remote::Remotes::start());
             app.manage(commands::find::Finder::default());
             app.manage(commands::compare::Comparer::default());
             app.manage(commands::shell::Shells::default());
@@ -138,6 +140,10 @@ pub fn run() -> ExitCode {
             commands::panes::pane_open,
             commands::panes::archive::archive_open,
             commands::archives::archive_password,
+            commands::remote::remote_hosts,
+            commands::remote::remote_connect,
+            commands::panes::remote::remote_open,
+            commands::remote::remote_disconnect,
             commands::sizes::pane_folder_size,
             commands::shell::shell_run,
             commands::shell::shell_stop,
@@ -234,6 +240,10 @@ pub fn run() -> ExitCode {
                     }
                     if let Some(ops) = app.try_state::<commands::ops::Ops>() {
                         ops.shutdown();
+                    }
+                    // The connections to servers say goodbye together and the runtime that serves them stops, in about a second at the most.
+                    if let Some(remotes) = app.try_state::<commands::remote::Remotes>() {
+                        remotes.shut_down();
                     }
                     // A thumbnail that is being made stops its helper process, and none starts after this.
                     if let Some(thumbs) = app.try_state::<commands::thumbs::Thumbs>() {

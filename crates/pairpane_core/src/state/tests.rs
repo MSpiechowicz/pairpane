@@ -90,6 +90,39 @@ fn paths_that_fail_the_folder_check_are_dropped() {
     assert_eq!(cleaned.hotlist, vec![folder("fav"), folder("other")]);
 }
 
+/// Remote tabs are never saved (the page saves their last local folder), so a path that names a server is no folder
+/// to open: it is dropped like any other path that is not a local absolute one.
+#[test]
+fn a_path_that_names_a_server_is_dropped_on_clean_and_on_load() {
+    let remote = [
+        "sftp://host/home/me",
+        "ssh://me@host:22/srv",
+        "me@host:/srv",
+        "host:/srv",
+    ];
+    let mut saved = state();
+    for text in remote {
+        saved.left.tabs.push(SavedTab {
+            path: text.to_owned(),
+            ..tab("x")
+        });
+        saved.hotlist.push(text.to_owned());
+    }
+    saved.left.active = 1;
+
+    let cleaned = clean(saved.clone());
+
+    assert_eq!(cleaned, state());
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let file = dir.path().join("state.json");
+    let mut value = serde_json::to_value(&saved).expect("json");
+    value["version"] = json!(VERSION);
+    written(&file, &serde_json::to_vec(&value).expect("json"));
+
+    assert_eq!(load(&file), Some(state()));
+}
+
 #[cfg(windows)]
 #[test]
 fn a_network_path_is_dropped_on_windows() {

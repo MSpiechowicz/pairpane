@@ -6,8 +6,8 @@ import type { ExtraColumn } from './order';
 export interface ViewHooks {
   /** An open begins (any open, a silent one included), before any of its events. */
   onOpen?: () => void;
-  /** A folder started listing, the shown one again included: where the pane is now. */
-  onListed?: (path: string) => void;
+  /** A folder started listing, the shown one again included: where the pane is now (`undefined`: on a server). */
+  onListed?: (path: string | undefined) => void;
   /** An open failed and the pane has nothing to show. */
   onFail?: () => void;
   /** An open of another folder failed and the pane stays in the folder it had. */

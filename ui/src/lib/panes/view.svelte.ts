@@ -88,10 +88,8 @@ export class PaneView {
           this.#reset();
         }
         // A reload too: an open of the folder already shown (a tab on the same folder) lists as one. Inside an
-        // archive the pane is where its folder is.
-        if (this.listing.folder !== undefined) {
-          hooks.onListed?.(this.listing.folder);
-        }
+        // archive the pane is where its folder is; on a server it has none.
+        hooks.onListed?.(this.listing.folder);
       },
       onDone: () => {
         this.#prune();
@@ -299,7 +297,11 @@ export class PaneView {
    * is the folder above in it; from its root, the folder that holds it, with the cursor on the archive.
    */
   goUp(): Promise<void> {
-    const { archive, folder, parent, crumbs } = this.listing;
+    const { archive, folder, parent, crumbs, remote } = this.listing;
+    if (remote !== undefined) {
+      return this.#leaving(crumbs.at(-1)?.name, this.listing.openParent());
+    }
+
     if (archive !== undefined && folder !== undefined) {
       const to = above(archive, folder);
       const opened = 'spot' in to ? this.listing.openArchive(to.spot) : this.listing.open(to.folder);

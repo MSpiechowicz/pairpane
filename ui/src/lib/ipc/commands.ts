@@ -6,6 +6,8 @@ import type { CompareEvent } from './bindings/CompareEvent';
 import type { CompareId } from './bindings/CompareId';
 import type { CompareOptions } from './bindings/CompareOptions';
 import type { CompareRoot } from './bindings/CompareRoot';
+import type { ConnectOutcome } from './bindings/ConnectOutcome';
+import type { ConnectTarget } from './bindings/ConnectTarget';
 import type { ControlAction } from './bindings/ControlAction';
 import type { DeviceStatus } from './bindings/DeviceStatus';
 import type { DevicesEvent } from './bindings/DevicesEvent';
@@ -42,7 +44,10 @@ import type { SearchHit } from './bindings/SearchHit';
 import type { ShellEvent } from './bindings/ShellEvent';
 import type { ShellId } from './bindings/ShellId';
 import type { SearchQuery } from './bindings/SearchQuery';
+import type { SecretKind } from './bindings/SecretKind';
+import type { SiteId } from './bindings/SiteId';
 import type { SizeEvent } from './bindings/SizeEvent';
+import type { SshHost } from './bindings/SshHost';
 import type { SyncItem } from './bindings/SyncItem';
 import type { SyncRemoval } from './bindings/SyncRemoval';
 import type { TextQuery } from './bindings/TextQuery';
@@ -82,6 +87,13 @@ export const commands = {
     { pane: PaneId; archive: string; dir: string; showHidden: boolean; onEvent: EventSink<ListEvent> },
     null
   >(),
+  remote_hosts: cmd<undefined, SshHost[]>(),
+  remote_connect: cmd<{ target: ConnectTarget; secret: string | null; kind: SecretKind | null }, ConnectOutcome>(),
+  remote_open: cmd<
+    { pane: PaneId; site: SiteId; dir: string; child: string | null; showHidden: boolean; onEvent: EventSink<ListEvent> },
+    null
+  >(),
+  remote_disconnect: cmd<{ site: SiteId }, null>(),
   archive_password: cmd<{ archive: string; password: string }, boolean>(),
   pane_folder_size: cmd<{ pane: PaneId; path: string; name: string; onEvent: EventSink<SizeEvent> }, null>(),
   shell_run: cmd<{ path: string; command: string; onEvent: EventSink<ShellEvent> }, ShellId>(),

@@ -1,5 +1,6 @@
 import type { Entry } from '$lib/ipc/bindings/Entry';
 import type { PaneView } from '$lib/panes/view.svelte';
+import { REMOTE_NOTICE } from '$lib/ops/targets';
 import { fileTarget, type Target } from '$lib/viewer/viewer.svelte';
 
 export const NEED_TWO_NOTICE = 'Select two files, or put the cursor on a file in each pane.';
@@ -84,7 +85,11 @@ function cursors({ active, other, side }: Panes): Picked | string {
  * cursor of each pane. A string is the refusal, in words for a card. A file inside an archive is compared too (read-only).
  */
 export function pickFiles(panes: Panes): Picked | string {
-  const { active, quick } = panes;
+  const { active, other, quick } = panes;
+  if (active.listing.remote !== undefined || other.listing.remote !== undefined) {
+    return REMOTE_NOTICE;
+  }
+
   const count = active.selectedShown().length;
 
   if (count === 0 && quick) {

@@ -13,6 +13,7 @@
   import PaneRow from '$lib/panes/PaneRow.svelte';
   import type { Range } from '$lib/panes/scroll';
   import type { PaneTabs } from '$lib/panes/tabs.svelte';
+  import type { Remote } from '$lib/remote/remote.svelte';
   import { targetOf, wantedBy } from '$lib/panes/thumbs';
   import type { Volumes } from '$lib/panes/volumes.svelte';
   import VirtualColumns from '$lib/panes/VirtualColumns.svelte';
@@ -30,6 +31,7 @@
     tabs,
     volumes,
     hotlist,
+    remote,
     menu,
     active,
     onActivate,
@@ -42,6 +44,8 @@
     tabs: PaneTabs;
     volumes: Volumes;
     hotlist: Hotlist;
+    /** Connecting to and leaving a server: the drive menu offers both. */
+    remote?: Remote;
     /** The dropdown shown under the header, if any. */
     menu: Menu | undefined;
     active: boolean;
@@ -204,7 +208,7 @@
   />
 
   {#if menu === 'drives'}
-    <DriveMenu {tabs} {volumes} onClose={closeMenu} />
+    <DriveMenu {tabs} {volumes} {remote} onClose={closeMenu} />
   {:else if menu === 'hotlist'}
     <HotlistMenu {tabs} {hotlist} onClose={closeMenu} />
   {/if}

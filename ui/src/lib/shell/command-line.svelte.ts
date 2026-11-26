@@ -1,6 +1,7 @@
 import type { ShellEvent } from '$lib/ipc/bindings/ShellEvent';
 import type { ShellId } from '$lib/ipc/bindings/ShellId';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
+import { REMOTE_NOTICE } from '$lib/ops/targets';
 
 /** The commands kept for the arrow keys. */
 export const MOST_REMEMBERED = 50;
@@ -12,7 +13,11 @@ const MOST_KEPT = 1024 * 1024;
 export type Place = { folder: string } | { refusal: string };
 
 /** Where a command runs for a pane's listing: a folder on disk, not an archive or search results. */
-export function placeOf(listing: { folder: string | undefined; readonly: boolean; results: unknown }): Place {
+export function placeOf(listing: { folder: string | undefined; readonly: boolean; results: unknown; remote?: unknown }): Place {
+  if (listing.remote !== undefined) {
+    return { refusal: REMOTE_NOTICE };
+  }
+
   if (listing.readonly || listing.results !== undefined) {
     return { refusal: 'Commands run in a folder on disk: open one first.' };
   }

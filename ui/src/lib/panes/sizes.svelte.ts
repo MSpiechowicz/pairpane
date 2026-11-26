@@ -59,6 +59,11 @@ export class FolderSizes {
 
   /** Queues the folder `name`, unless it is known, running or queued already. */
   measure(name: string) {
+    // Nothing to walk when the pane has no folder on disk (a server's, say).
+    if (this.#folder() === undefined) {
+      return;
+    }
+
     if (this.#known.has(name) || this.#job?.name === name || this.#queue.includes(name)) {
       return;
     }

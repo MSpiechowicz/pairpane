@@ -14,7 +14,18 @@ import { RenameReports } from '$lib/rename/undo';
 import { type Preferences, preferences } from '$lib/shell/preferences.svelte';
 
 import { type FileAction, type Notice, perform, specOf, trashName, what } from './dialogs';
-import { chosen, type DialogKind, type OpRequest, READ_ONLY_NOTICE, refusal, RESULTS_NOTICE, requestFor, resultTargets, targets } from './targets';
+import {
+  chosen,
+  type DialogKind,
+  type OpRequest,
+  READ_ONLY_NOTICE,
+  refusal,
+  REMOTE_NOTICE,
+  RESULTS_NOTICE,
+  requestFor,
+  resultTargets,
+  targets,
+} from './targets';
 import { isTool, ItemTools } from './tools.svelte';
 
 /** The copy, move, add to archive, extract, combine, rename, new item or link dialog that is open, and the panes it works between. */
@@ -125,11 +136,16 @@ export class FileActions {
   }
 
   /**
-   * F4 on an archive's entry (read-only) or on a search result (its folder has to be opened first, so that the edit
-   * is of the file in the folder that is there): says why, and whether it did.
+   * F4 on an archive's entry (read-only), on a file on a server or on a search result (its folder has to be opened
+   * first, so that the edit is of the file in the folder that is there): says why, and whether it did.
    */
   refuseEdit(): boolean {
-    const { readonly, results } = this.#panes[this.#active()].view.listing;
+    const { readonly, results, remote } = this.#panes[this.#active()].view.listing;
+
+    if (remote !== undefined) {
+      this.say(REMOTE_NOTICE, true);
+      return true;
+    }
 
     if (results !== undefined) {
       this.say(RESULTS_NOTICE, true);

@@ -38,8 +38,8 @@ export class InlineRename {
   /** Opens the field on the entry under `view`'s cursor; `..` and an empty row have none. */
   begin(view: PaneView, tab: number) {
     const under = view.entryAt(view.cursor);
-    const path = view.listing.path;
-    if (this.busy || under === undefined || path === undefined) {
+    const { path, remote } = view.listing;
+    if (this.busy || under === undefined || path === undefined || remote !== undefined) {
       return;
     }
 
