@@ -3,28 +3,38 @@
 //! that grows or loses its time, a call that fails.
 
 use std::collections::VecDeque;
-use std::fs::{self, File, Metadata, OpenOptions};
-use std::io::{self, Read, Write};
+use std::fs::{self, File, Metadata};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use tempfile::TempDir;
 
 use crate::model::{Answer, ConflictInfo, OpKind, Outcome, SiteId};
 use crate::vfs::{RemoteEntry, RemoteFs, RemoteKind, RemoteMeta, RemotePath, RemoteReader};
 
+use self::reader::Reader;
+
 use super::super::Request;
 use super::super::testing::{Ended, Rig};
 
+mod reader;
+
 /// What a move says of an item it kept because its folder is not where the walk went.
+#[cfg(unix)]
 pub(super) const FOLDER_CHANGED: &str = "Kept the original: the folder on the server changed while it was moved";
 
 /// What a move says of a removal whose folder turned out not to be where the removal was asked.
+#[cfg(unix)]
 pub(super) const REMOVED_ELSEWHERE: &str =
     "the folder on the server changed during the removal; something in another folder may have been removed";
+
+/// What a move says of a folder whose contents it could not list after the copy, because it is a link by then.
+#[cfg(unix)]
+pub(super) const NOT_LISTED: &str = "The folder was copied, but what is left in it could not be listed, so it stays on the server: it changed while it was being copied";
 
 /// When a file that a reader serves grows.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -60,8 +70,15 @@ pub(super) struct Switches {
     pub(super) open_errors: VecDeque<Option<io::ErrorKind>>,
     /// Items a listing holds besides the ones in the folder.
     pub(super) extra_entries: Vec<(String, RemoteKind)>,
-    /// The server cannot say where a folder is (no `realpath`).
+    /// The server cannot say where a folder is (no `realpath`), or where a link points (no `read_link`).
     pub(super) no_realpath: bool,
+    pub(super) no_read_link: bool,
+    /// Every listing from the n-th on fails (the first is number 1).
+    pub(super) fail_listings_from: Option<usize>,
+    /// Run once, when the n-th listing is asked for (the first is number 1), before the listing looks at a cancel.
+    pub(super) at_listing: Option<(usize, Arc<dyn Fn() + Send + Sync>)>,
+    /// Run once, right after the server removed a file.
+    pub(super) after_remove: Option<Arc<dyn Fn() + Send + Sync>>,
     /// A listing shows files as items of a kind that is neither a file nor a folder.
     pub(super) files_as_other: bool,
     /// Run once, by the first read of a file.
@@ -77,6 +94,8 @@ struct Shared {
     switches: Mutex<Switches>,
     handles: AtomicUsize,
     biggest_read: AtomicUsize,
+    listings: AtomicUsize,
+    looks: AtomicUsize,
 }
 
 impl Shared {
@@ -135,6 +154,11 @@ impl Fake {
         self.shared.handles.load(Ordering::SeqCst)
     }
 
+    /// Calls a caller waited for, one after the other: a batch of looks at once counts as one.
+    pub(super) fn round_trips(&self) -> usize {
+        self.shared.looks.load(Ordering::SeqCst)
+    }
+
     /// The most bytes a read was asked for.
     pub(super) fn biggest_read(&self) -> usize {
         self.shared.biggest_read.load(Ordering::SeqCst)
@@ -153,8 +177,14 @@ impl Fake {
         Ok(())
     }
 
+    /// What the server says of `path` itself, not counted as a call.
+    fn look(&self, path: &RemotePath) -> io::Result<Option<RemoteMeta>> {
+        self.seen(fs::symlink_metadata(self.on_disk(path)))
+    }
+
     fn on_disk(&self, path: &RemotePath) -> PathBuf {
-        path.components().fold(self.root.clone(), |disk, name| disk.join(name))
+        // In one piece: a path of a thousand names is not built name by name for each of a million looks.
+        self.root.join(path.as_str().trim_start_matches('/'))
     }
 
     fn describe(&self, meta: &Metadata) -> RemoteMeta {
@@ -223,8 +253,30 @@ impl RemoteFs for Fake {
     }
 
     fn read_dir(&self, dir: &RemotePath, cancel: &AtomicBool) -> io::Result<Vec<RemoteEntry>> {
+        self.shared.looks.fetch_add(1, Ordering::SeqCst);
+        let listing = self.shared.listings.fetch_add(1, Ordering::SeqCst) + 1;
+        let hook = {
+            let mut switches = self.shared.switches();
+
+            match &switches.at_listing {
+                Some((number, _)) if *number == listing => switches.at_listing.take(),
+                _ => None,
+            }
+        };
+
+        if let Some((_, hook)) = hook {
+            hook();
+        }
         if cancel.load(Ordering::Relaxed) {
             return Err(io::ErrorKind::Interrupted.into());
+        }
+        if self
+            .shared
+            .switches()
+            .fail_listings_from
+            .is_some_and(|from| listing >= from)
+        {
+            return Err(io::Error::other("the server could not list the folder"));
         }
 
         let mut entries = Vec::new();
@@ -265,14 +317,56 @@ impl RemoteFs for Fake {
     }
 
     fn read_link(&self, path: &RemotePath) -> io::Result<String> {
+        self.shared.looks.fetch_add(1, Ordering::SeqCst);
+
+        if self.shared.switches().no_read_link {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
+
         Ok(fs::read_link(self.on_disk(path))?.to_string_lossy().into_owned())
     }
 
     fn lstat(&self, path: &RemotePath) -> io::Result<Option<RemoteMeta>> {
-        self.seen(fs::symlink_metadata(self.on_disk(path)))
+        self.shared.looks.fetch_add(1, Ordering::SeqCst);
+
+        self.look(path)
+    }
+
+    /// Asked in parts at once, as a server that has several requests in flight answers a way of folders.
+    fn lstat_many(&self, paths: &[RemotePath], cancel: &AtomicBool) -> Vec<io::Result<Option<RemoteMeta>>> {
+        self.shared.looks.fetch_add(1, Ordering::SeqCst);
+
+        let parts = thread::available_parallelism().map_or(1, usize::from).min(8);
+        let each = paths.len().div_ceil(parts).max(32);
+
+        thread::scope(|scope| {
+            let asked: Vec<_> = paths
+                .chunks(each)
+                .map(|part| {
+                    scope.spawn(|| {
+                        part.iter()
+                            .map(|path| {
+                                if cancel.load(Ordering::Relaxed) {
+                                    return Err(io::ErrorKind::Interrupted.into());
+                                }
+
+                                self.look(path)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+
+            asked
+                .into_iter()
+                .flat_map(|part| part.join().expect("a thread of the server"))
+                .collect()
+        })
     }
 
     fn realpath(&self, path: &RemotePath) -> io::Result<RemotePath> {
+        self.shared.looks.fetch_add(1, Ordering::SeqCst);
+
         let (unsupported, lexical) = {
             let switches = self.shared.switches();
 
@@ -309,20 +403,20 @@ impl RemoteFs for Fake {
         let file = File::open(&disk)?;
         self.shared.handles.fetch_add(1, Ordering::SeqCst);
 
-        Ok(Box::new(Reader {
-            file,
-            disk,
-            shared: Arc::clone(&self.shared),
-            served: 0,
-            started: false,
-            grown: false,
-        }))
+        Ok(Box::new(Reader::new(file, disk, Arc::clone(&self.shared))))
     }
 
     fn remove_file(&self, path: &RemotePath) -> io::Result<()> {
         self.refuse_removal()?;
 
-        fs::remove_file(self.on_disk(path))
+        let removed = fs::remove_file(self.on_disk(path));
+        let hook = self.shared.switches().after_remove.take();
+
+        if let Some(hook) = hook {
+            hook();
+        }
+
+        removed
     }
 
     fn remove_dir(&self, path: &RemotePath) -> io::Result<()> {
@@ -344,94 +438,6 @@ impl Fake {
         inside.components().try_fold(RemotePath::root(), |resolved, name| {
             resolved.join(&name.as_os_str().to_string_lossy())
         })
-    }
-}
-
-/// A file of the server open for reading.
-struct Reader {
-    file: File,
-    disk: PathBuf,
-    shared: Arc<Shared>,
-    served: u64,
-    started: bool,
-    grown: bool,
-}
-
-impl Reader {
-    fn grow(&self) {
-        let mut file = OpenOptions::new().append(true).open(&self.disk).expect("the file");
-        file.write_all(b"more").expect("append");
-    }
-}
-
-impl RemoteReader for Reader {
-    fn read(&mut self, buf: &mut [u8], cancel: &AtomicBool) -> io::Result<usize> {
-        self.shared.biggest_read.fetch_max(buf.len(), Ordering::SeqCst);
-
-        let hook = {
-            let mut switches = self.shared.switches();
-            assert!(!switches.panic_reads, "the server broke");
-
-            if self.started {
-                None
-            } else {
-                switches.at_first_read.take()
-            }
-        };
-        self.started = true;
-        if let Some(hook) = hook {
-            hook();
-        }
-
-        let (hang, short, fail, kind, grow) = {
-            let switches = self.shared.switches();
-
-            (
-                switches.hang_reads,
-                switches.short_reads,
-                switches.fail_after,
-                switches.fail_kind.unwrap_or(io::ErrorKind::ConnectionAborted),
-                switches.grow,
-            )
-        };
-
-        if hang {
-            loop {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err(io::ErrorKind::Interrupted.into());
-                }
-                thread::sleep(Duration::from_millis(5));
-            }
-        }
-
-        if fail.is_some_and(|limit| self.served >= limit) {
-            return Err(kind.into());
-        }
-
-        let want = short.map_or(buf.len(), |most| most.min(buf.len()));
-        let count = self.file.read(&mut buf[..want])?;
-        self.served += count as u64;
-
-        if count == 0 && grow == Grow::AtEnd && !self.grown {
-            self.grown = true;
-            self.grow();
-        }
-
-        Ok(count)
-    }
-
-    fn meta(&mut self) -> io::Result<RemoteMeta> {
-        Ok(describe(&self.file.metadata()?, &self.shared.switches()))
-    }
-}
-
-impl Drop for Reader {
-    fn drop(&mut self) {
-        if self.shared.switches().grow == Grow::OnClose {
-            self.grow();
-        }
-
-        self.shared.handles.fetch_sub(1, Ordering::SeqCst);
     }
 }
 

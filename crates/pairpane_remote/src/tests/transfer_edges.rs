@@ -3,6 +3,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use pairpane_core::vfs::RemoteKind;
 use pretty_assertions::assert_eq;
 
 use super::browse::connected;
@@ -71,6 +72,58 @@ fn a_read_that_fails_after_some_data_gives_the_data_first_and_then_the_failure()
         got == content[..96 * 1024],
         "what came before the failure was given out, and no more"
     );
+}
+
+#[test]
+fn a_batch_of_looks_is_answered_in_the_order_of_the_paths_beyond_what_is_sent_at_once() {
+    let (h, fs) = connected(Settings::default());
+    let mut paths = Vec::new();
+    let mut want = Vec::new();
+
+    // More than are in flight together, of three kinds in turn: a file, a folder, nothing.
+    for index in 0..150 {
+        let name = format!("data/n{index}");
+
+        want.push(match index % 3 {
+            0 => {
+                h.server.put(&name, &vec![0; index]);
+
+                Some((RemoteKind::File, index as u64))
+            }
+            1 => {
+                std::fs::create_dir_all(h.server.root.path().join(&name)).expect("folder");
+
+                Some((RemoteKind::Dir, 0))
+            }
+            _ => None,
+        });
+        paths.push(path(&format!("/{name}")));
+    }
+
+    let got: Vec<_> = fs
+        .lstat_many(&paths, &AtomicBool::new(false))
+        .into_iter()
+        .map(|answer| answer.expect("answered").map(|meta| (meta.kind, meta.size)))
+        .collect();
+
+    assert_eq!(got, want);
+}
+
+#[test]
+fn a_batch_of_looks_that_met_a_lost_connection_is_asked_again_on_a_new_one() {
+    let (h, fs) = connected(Settings::default());
+
+    h.server.put("data/a", b"abc");
+    h.server.drop_connections();
+    // Seen only when the call is made, as for any read.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    let got = fs.lstat_many(&[path("/data/a"), path("/data/none")], &AtomicBool::new(false));
+
+    assert_eq!(got.len(), 2);
+    assert_eq!(got[0].as_ref().expect("answered").map(|meta| meta.size), Some(3));
+    assert!(got[1].as_ref().expect("answered").is_none());
+    assert_eq!(h.server.counts.connections.load(Ordering::Relaxed), 2);
 }
 
 #[cfg(unix)]
@@ -171,8 +224,15 @@ mod swap {
         let ended = moved_during_swap(&mut rig, &["sub"]);
 
         assert_eq!(ended.outcome, Outcome::Done);
-        assert_eq!(ended.failed(), ["sub/s.bin"]);
+        // The file, and then the folder, which is a link by then and is not looked into for what is left of it.
+        assert_eq!(ended.failed(), ["sub/s.bin", "sub"]);
         assert_eq!(ended.errors[0].error.message, CHANGED);
+        assert!(
+            ended.errors[1]
+                .error
+                .message
+                .starts_with("The folder was copied, but what is left in it could not")
+        );
         assert!(
             rig.on_server("data/victim/s.bin").exists(),
             "the file behind the link is not removed"

@@ -8,8 +8,12 @@ use pretty_assertions::assert_eq;
 
 use crate::model::{Answer, OpKind, Outcome};
 
-use super::super::testing::{Rig, long_ago, read, set_times, temp, tree};
-use super::testing::{FOLDER_CHANGED as CHANGED, Fake, download, failure, fetch, said};
+use super::super::testing::{Rig, read, temp, tree};
+#[cfg(unix)]
+use super::super::testing::{long_ago, set_times};
+#[cfg(unix)]
+use super::testing::{FOLDER_CHANGED as CHANGED, NOT_LISTED};
+use super::testing::{Fake, download, failure, fetch, said};
 
 /// The server swaps its folder `sub` for a link to its folder `victim` when the first file is read.
 #[cfg(unix)]
@@ -63,7 +67,7 @@ fn a_folder_swapped_for_a_link_after_it_was_listed_keeps_the_original_of_a_file_
     let ended = fetch(&mut Rig::new(), OpKind::Move, &server, &["sub"], local.path());
 
     assert_eq!(ended.outcome, Outcome::Done);
-    assert_eq!(said(&ended), [CHANGED]);
+    assert_eq!(said(&ended), [CHANGED, NOT_LISTED]);
     assert_eq!(
         read(&server.at("victim/s.txt")),
         b"s",
@@ -295,6 +299,12 @@ fn a_target_whose_identity_cannot_be_read_is_not_replaced_by_a_move_but_is_by_a_
         let ended = rig.wait_ended(job);
 
         assert_eq!(ended.errors.len(), usize::from(!replaced), "{kind:?}");
+        if !replaced {
+            assert_eq!(
+                said(&ended),
+                ["Kept the original: the file here could not be told apart from one this move already wrote"]
+            );
+        }
         assert_eq!(
             read(&local.path().join("a.txt")),
             if replaced { &b"from the server"[..] } else { b"mine" },

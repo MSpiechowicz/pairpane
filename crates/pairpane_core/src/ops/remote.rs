@@ -16,18 +16,21 @@
 
 mod down;
 mod down_file;
+mod home;
 mod own;
 #[cfg(test)]
 mod testing;
 mod walk;
 
 #[cfg(test)]
+mod down_chain_tests;
+#[cfg(test)]
 mod down_move_tests;
 #[cfg(test)]
 mod down_safety_tests;
 #[cfg(test)]
 mod down_stop_tests;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod down_swap_tests;
 #[cfg(test)]
 mod down_tests;
@@ -67,6 +70,18 @@ impl Run<'_> {
             Stop::Cancelled
         } else {
             Stop::Failed(error)
+        }
+    }
+
+    /// Reports `error` against the item `rel`, and the job goes on: unless that is a cancel, which ends it.
+    fn report(&mut self, rel: &str, error: io::Error) -> Result<(), Stop> {
+        match self.interrupted(error) {
+            Stop::Cancelled => Err(Stop::Cancelled),
+            Stop::Failed(error) => {
+                self.fail(rel, &error);
+
+                Ok(())
+            }
         }
     }
 }

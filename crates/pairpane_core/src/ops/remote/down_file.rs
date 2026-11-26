@@ -134,8 +134,8 @@ impl Run<'_> {
     }
 
     /// [`Run::place_entry`], except that a target this job wrote itself is never replaced, and is not asked about: it is told
-    /// that two items of the server have one name here. So is a target that cannot be told from one when a move would lose
-    /// a file by replacing it.
+    /// that two items of the server have one name here. A target that cannot be told from one, where a move would lose a
+    /// file by replacing it, is said so (see [`Run::replaceable`]).
     fn place_own(&mut self, own: &Own, rel: &str, facts: &FileFacts, target: &Path) -> Result<Place, Stop> {
         if fs::symlink_metadata(target).is_ok() && self.is_own(own, target) {
             return Err(same_name().into());
@@ -143,8 +143,8 @@ impl Run<'_> {
 
         let place = self.place_entry(rel, facts, target)?;
 
-        if matches!(place, Place::Replace(_)) && self.may_be_own(own, place.path()) {
-            return Err(same_name().into());
+        if matches!(place, Place::Replace(_)) {
+            self.replaceable(own, place.path())?;
         }
 
         Ok(place)
@@ -269,8 +269,12 @@ impl Run<'_> {
         // Where the file is, once more and as late as it can be: a folder swapped for a link would have the removal act in
         // another folder.
         let parent = remote.parent();
+        let abort = self.job.control.abort_flag();
+
         if let Some(parent) = &parent {
-            down.home.confirm(down.fs, parent)?;
+            down.home
+                .confirm(down.fs, parent, abort)
+                .map_err(|error| self.interrupted(error))?;
         }
 
         down.fs.remove_file(remote).map_err(|error| {
@@ -285,7 +289,9 @@ impl Run<'_> {
 
         // Where the file was removed from, once more: a folder swapped for a link meanwhile would have had it removed elsewhere.
         if let Some(parent) = &parent {
-            down.home.confirm_after(down.fs, parent)?;
+            down.home
+                .confirm_after(down.fs, parent, abort)
+                .map_err(|error| self.interrupted(error))?;
         }
 
         Ok(())

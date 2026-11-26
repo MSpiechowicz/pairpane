@@ -5,19 +5,24 @@ use std::future::Future;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use pairpane_core::model::SiteId;
 use pairpane_core::vfs::{RemoteEntry, RemoteFs, RemoteKind, RemoteMeta, RemotePath, RemoteReader};
 use russh_sftp::client::RawSftpSession;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::protocol::{FileAttributes, OpenFlags};
+use tokio::task::JoinSet;
 
-use crate::error::{fail, from_sftp};
+use crate::error::{closed, fail, from_sftp, lost};
 use crate::link::Link;
 use crate::names::{Collected, MAX_NAME_BYTES};
-use crate::runtime::{call, limited};
+use crate::runtime::{call, call_until, limited};
 use crate::sftp_files::SftpReader;
 use crate::site::Site;
+
+/// The looks of one batch (see [`RemoteFs::lstat_many`]) in flight at once: what an SFTP client of OpenSSH keeps.
+const LOOKS_IN_FLIGHT: usize = 64;
 
 /// The most entries one listing returns; a server that sends more is refused rather than held in memory.
 pub(crate) const MAX_ENTRIES: usize = 1_000_000;
@@ -107,11 +112,7 @@ impl SftpFs {
                 }
             });
 
-            match asked {
-                Ok(attributes) => Ok(Some(meta_of(&attributes.attrs))),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-                Err(error) => Err(error),
-            }
+            present(asked.map(|attributes| meta_of(&attributes.attrs)))
         })
     }
 
@@ -187,6 +188,33 @@ impl RemoteFs for SftpFs {
         self.attributes(path, true)
     }
 
+    fn lstat_many(&self, paths: &[RemotePath], cancel: &AtomicBool) -> Vec<io::Result<Option<RemoteMeta>>> {
+        let asked = self.run(|link| {
+            let names = paths.iter().map(|path| path.as_str().to_owned()).collect();
+            let limit = self.site.config.timeouts.request;
+            let answers = call_until(&self.site.runtime, looks(Arc::clone(&link.sftp), names, limit), cancel)?;
+
+            // A connection that was lost is opened again and the batch asked once more, as for one look.
+            if answers.iter().any(|answer| {
+                answer
+                    .as_ref()
+                    .is_err_and(|error| error.kind() == io::ErrorKind::ConnectionAborted)
+            }) {
+                return Err(lost());
+            }
+
+            Ok(answers)
+        });
+
+        // A batch that failed as a whole fails each look with the same words (they hold no path).
+        asked.unwrap_or_else(|error| {
+            paths
+                .iter()
+                .map(|_| Err(io::Error::new(error.kind(), error.to_string())))
+                .collect()
+        })
+    }
+
     fn realpath(&self, path: &RemotePath) -> io::Result<RemotePath> {
         self.run(|link| {
             let path = path.as_str().to_owned();
@@ -247,6 +275,53 @@ impl RemoteFs for SftpFs {
             })
         })
     }
+}
+
+/// `answer` of a look, where a path that is not there is `None`.
+fn present(answer: io::Result<RemoteMeta>) -> io::Result<Option<RemoteMeta>> {
+    match answer {
+        Ok(meta) => Ok(Some(meta)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// The `lstat` of each of `paths`, [`LOOKS_IN_FLIGHT`] of them in flight together (the next goes out as one is answered);
+/// the answers in the order of the paths. Each has the request limit.
+async fn looks(
+    sftp: Arc<RawSftpSession>,
+    paths: Vec<String>,
+    limit: Duration,
+) -> io::Result<Vec<io::Result<Option<RemoteMeta>>>> {
+    let mut answers: Vec<Option<io::Result<Option<RemoteMeta>>>> = (0..paths.len()).map(|_| None).collect();
+    let mut waiting = paths.into_iter().enumerate();
+    let mut asked = JoinSet::new();
+
+    loop {
+        while asked.len() < LOOKS_IN_FLIGHT
+            && let Some((index, path)) = waiting.next()
+        {
+            let sftp = Arc::clone(&sftp);
+
+            asked.spawn(async move {
+                let answer = limited(limit, async { sftp.lstat(path).await.map_err(from_sftp) }).await;
+
+                (index, present(answer.map(|attributes| meta_of(&attributes.attrs))))
+            });
+        }
+
+        let Some(joined) = asked.join_next().await else {
+            break;
+        };
+        let (index, answer) = joined.map_err(|_| closed())?;
+
+        answers[index] = Some(answer);
+    }
+
+    Ok(answers
+        .into_iter()
+        .map(|answer| answer.unwrap_or_else(|| Err(closed())))
+        .collect())
 }
 
 /// The path a server answered with as a [`RemotePath`]. A trailing slash (`/home/me/`) is only a spelling and is dropped;

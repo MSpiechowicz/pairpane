@@ -7,7 +7,7 @@
 
 use std::fmt;
 use std::io;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::model::SiteId;
 
@@ -179,7 +179,9 @@ pub struct RemoteEntry {
 /// narrows that window (a caller checks the folder right before it removes), it does not close it.
 ///
 /// `lstat`, `realpath`, `open_read`, `remove_file` and `remove_dir` have a default that fails with `Unsupported`, so a
-/// server that only browses implements the first five methods.
+/// server that only browses implements the first five methods. A caller that removes things also asks `read_link` of each
+/// link on the way to its folder (a server that does not resolve links in `realpath` shows a link repointed only by
+/// where it leads), and refuses to move through a link where the server says `Unsupported`.
 pub trait RemoteFs: Send + Sync {
     /// The connection this answers for.
     fn site(&self) -> SiteId;
@@ -204,6 +206,22 @@ pub trait RemoteFs: Send + Sync {
     /// `None` when it does not exist.
     fn lstat(&self, _path: &RemotePath) -> io::Result<Option<RemoteMeta>> {
         Err(unsupported())
+    }
+
+    /// [`RemoteFs::lstat`] of each of `paths`, one answer for each and in the same order. A server that can have several
+    /// requests in flight answers them in about the time of one (a caller checks a long way of folders with it); the
+    /// default asks one after the other. Once `cancel` is set, the answers not yet had are `Interrupted` errors.
+    fn lstat_many(&self, paths: &[RemotePath], cancel: &AtomicBool) -> Vec<io::Result<Option<RemoteMeta>>> {
+        paths
+            .iter()
+            .map(|path| {
+                if cancel.load(Ordering::Relaxed) {
+                    Err(io::ErrorKind::Interrupted.into())
+                } else {
+                    self.lstat(path)
+                }
+            })
+            .collect()
     }
 
     /// `path` with every symbolic link in it resolved, as the server spells it: `NotFound` when it does not exist. A
@@ -368,6 +386,10 @@ mod tests {
         let secret = path("/secret/name");
         let refused = [
             server.lstat(&secret).map(|_| ()),
+            server
+                .lstat_many(std::slice::from_ref(&secret), &AtomicBool::new(false))
+                .remove(0)
+                .map(|_| ()),
             server.realpath(&secret).map(|_| ()),
             server.open_read(&secret).map(|_| ()),
             server.remove_file(&secret),
@@ -378,6 +400,20 @@ mod tests {
             let error = result.expect_err("refused");
             assert_eq!(error.kind(), io::ErrorKind::Unsupported);
             assert!(!error.to_string().contains("secret"), "the message names no path");
+        }
+    }
+
+    #[test]
+    fn many_looks_default_to_one_answer_for_each_path_and_stop_with_an_interrupt_once_cancelled() {
+        let paths = [path("/a"), path("/a/b"), path("/a/b/c")];
+
+        for (cancelled, kind) in [(false, io::ErrorKind::Unsupported), (true, io::ErrorKind::Interrupted)] {
+            let answers = Browsing.lstat_many(&paths, &AtomicBool::new(cancelled));
+
+            assert_eq!(answers.len(), 3, "one answer for each path");
+            for answer in answers {
+                assert_eq!(answer.expect_err("refused").kind(), kind, "cancelled: {cancelled}");
+            }
         }
     }
 

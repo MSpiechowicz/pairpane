@@ -21,9 +21,10 @@ use super::super::open;
 use super::super::partial::Partial;
 use super::super::report::refusal;
 use super::super::transfer::{MAX_DEPTH, Run, Stop};
+use super::home::Home;
 use super::own::{Own, same_name};
 use super::usable_here;
-use super::walk::{Budget, Home, Listed, refuse_inside};
+use super::walk::{Budget, Listed, refuse_inside};
 
 /// Items in a row that fail because the server does not answer, after which the job gives up on it.
 const MAX_STRIKES: u32 = 3;
@@ -65,7 +66,8 @@ impl Run<'_> {
             fs: &*job.fs,
             probe: &alias.name,
             strikes: 0,
-            home: Home::of(&*job.fs, &job.dir, self.moving())?,
+            home: Home::of(&*job.fs, &job.dir, self.moving(), self.job.control.abort_flag())
+                .map_err(|error| self.interrupted(error))?,
             budget: Budget::new(self.inner.hooks.walk_limits),
             own: Own::default(),
         };
@@ -263,7 +265,7 @@ impl Run<'_> {
         }
 
         if self.moving() {
-            self.remove_folder(down, remote, rel);
+            self.remove_folder(down, remote, rel)?;
         }
 
         if created {
@@ -274,25 +276,32 @@ impl Run<'_> {
     }
 
     /// Removes the folder `remote` from the server once a move emptied it: what was skipped or failed keeps it. Only when
-    /// the folder it is in is still where the walk went (see [`Home::confirm`]).
-    fn remove_folder(&mut self, down: &Down<'_>, remote: &RemotePath, rel: &str) {
+    /// the folder it is in is still where the walk went (see [`Home::confirm`]). A folder that is kept for want of an
+    /// answer is reported, and a cancel ends the job.
+    fn remove_folder(&mut self, down: &Down<'_>, remote: &RemotePath, rel: &str) -> Result<(), Stop> {
+        self.checkpoint()?;
+
         let Some(parent) = remote.parent() else {
-            return;
+            return Ok(());
         };
+        let abort = self.job.control.abort_flag();
 
-        if let Err(error) = down.home.confirm(down.fs, &parent) {
-            self.fail(rel, &error);
-
-            return;
+        if let Err(error) = down.home.confirm(down.fs, &parent, abort) {
+            return self.report(rel, error);
         }
 
-        let abort = self.job.control.abort_flag();
-        let empty = down
-            .entries_of(remote, abort)
-            .is_ok_and(|left| left.iter().all(|entry| entry.name == "." || entry.name == ".."));
+        let left = match down.entries_of(remote, abort) {
+            Ok(left) => left,
+            Err(error) => {
+                let what =
+                    "The folder was copied, but what is left in it could not be listed, so it stays on the server";
 
-        if !empty {
-            return;
+                return self.report(rel, in_context(what, &error));
+            }
+        };
+
+        if !left.iter().all(|entry| entry.name == "." || entry.name == "..") {
+            return Ok(());
         }
 
         if let Err(error) = down.fs.remove_dir(remote) {
@@ -304,11 +313,12 @@ impl Run<'_> {
 
             self.fail(rel, &in_context(what, &error));
 
-            return;
+            return Ok(());
         }
 
-        if let Err(error) = down.home.confirm_after(down.fs, &parent) {
-            self.fail(rel, &error);
+        match down.home.confirm_after(down.fs, &parent, abort) {
+            Ok(()) => Ok(()),
+            Err(error) => self.report(rel, error),
         }
     }
 }
