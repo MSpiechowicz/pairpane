@@ -7,12 +7,16 @@ import type { CompareId } from './bindings/CompareId';
 import type { CompareOptions } from './bindings/CompareOptions';
 import type { CompareRoot } from './bindings/CompareRoot';
 import type { ControlAction } from './bindings/ControlAction';
+import type { DeviceStatus } from './bindings/DeviceStatus';
+import type { DevicesEvent } from './bindings/DevicesEvent';
+import type { DevicesOverview } from './bindings/DevicesOverview';
 import type { Dimensions } from './bindings/Dimensions';
 import type { EditOpened } from './bindings/EditOpened';
 import type { EditSaved } from './bindings/EditSaved';
 import type { EditorSetting } from './bindings/EditorSetting';
 import type { EditSaveOptions } from './bindings/EditSaveOptions';
 import type { ExternalEdit } from './bindings/ExternalEdit';
+import type { FoundDevice } from './bindings/FoundDevice';
 import type { FindEvent } from './bindings/FindEvent';
 import type { FindId } from './bindings/FindId';
 import type { FindQuery } from './bindings/FindQuery';
@@ -26,6 +30,8 @@ import type { MdDocument } from './bindings/MdDocument';
 import type { MenuCommand } from './bindings/MenuCommand';
 import type { OpKind } from './bindings/OpKind';
 import type { OpsEvent } from './bindings/OpsEvent';
+import type { PairedDevice } from './bindings/PairedDevice';
+import type { PairingShown } from './bindings/PairingShown';
 import type { PackFormat } from './bindings/PackFormat';
 import type { PackLevel } from './bindings/PackLevel';
 import type { PaneId } from './bindings/PaneId';
@@ -148,6 +154,15 @@ export const commands = {
   editor_set_dirty: cmd<{ dirty: boolean }, null>(),
   editor_close_ack: cmd<undefined, null>(),
   app_close_confirmed: cmd<undefined, null>(),
+  app_quit: cmd<undefined, null>(),
+  devices_open: cmd<{ onEvent: EventSink<DevicesEvent>; session: number }, DevicesOverview>(),
+  devices_pair_begin: cmd<undefined, PairingShown>(),
+  devices_pair_cancel: cmd<undefined, boolean>(),
+  devices_join: cmd<{ code: string; target: string }, PairedDevice>(),
+  devices_discovered: cmd<undefined, FoundDevice[]>(),
+  devices_status: cmd<{ nodeId: string }, DeviceStatus>(),
+  devices_rename: cmd<{ nodeId: string; name: string }, PairedDevice[]>(),
+  devices_unpair: cmd<{ nodeId: string }, PairedDevice[]>(),
   state_load: cmd<undefined, SavedState | null>(),
   state_save: cmd<{ state: SavedState }, null>(),
 };

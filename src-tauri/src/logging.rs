@@ -14,6 +14,40 @@ use tauri_plugin_log::{RotationStrategy, Target, TargetKind, WEBVIEW_TARGET};
 /// Log targets that may carry IPC payloads or webview console output.
 const PAYLOAD_TARGETS: &[&str] = &["tauri::ipc", WEBVIEW_TARGET];
 
+/// Crates under the device link (iroh, its mDNS lookup, and the QUIC, DNS, netlink and async crates it uses) that log
+/// addresses of the user's devices and of the networks they are on, or their own state: nothing of them is logged.
+const NETWORK_TARGETS: &[&str] = &[
+    "iroh",
+    "iroh_base",
+    "iroh_dns",
+    "iroh_relay",
+    "iroh_metrics",
+    "iroh_mdns_address_lookup",
+    "swarm_discovery",
+    "noq",
+    "noq_proto",
+    "noq_udp",
+    "netwatch",
+    "netdev",
+    "netlink_proto",
+    "netlink_packet_core",
+    "netlink_packet_route",
+    "netlink_sys",
+    "hickory_proto",
+    "hickory_resolver",
+    "n0_dns_resolver",
+    "n0_watcher",
+    "n0_future",
+    "n0_error",
+    "simple_dns",
+    "tokio_websockets",
+    "acto",
+];
+
+/// Crates that the link shares with the updater and that log what a peer on the network sent while it is refused (the
+/// TLS stack names the server name of a QUIC handshake in its warnings): only their errors are logged.
+const ERRORS_ONLY_TARGETS: &[&str] = &["rustls"];
+
 /// Size at which the log file is rotated.
 const MAX_LOG_FILE_BYTES: u128 = 1024 * 1024;
 
@@ -34,7 +68,7 @@ pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
         LevelFilter::Info
     };
 
-    tauri_plugin_log::Builder::new()
+    let mut builder = tauri_plugin_log::Builder::new()
         .clear_targets()
         .targets(targets)
         .level(LevelFilter::Info)
@@ -44,6 +78,18 @@ pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
         .level_for("zbus", LevelFilter::Warn)
         // notify's own log lines can name the watched folder; its errors reach our handler, which logs a fixed reason.
         .level_for("notify", LevelFilter::Off)
+        // The link's own lines are warnings about the service; the network stack under it logs addresses of the user's
+        // devices and of the networks they are on (iroh, its mDNS lookup and the QUIC and network crates it uses).
+        .level_for("pairpane_link", LevelFilter::Warn);
+
+    for target in NETWORK_TARGETS {
+        builder = builder.level_for(*target, LevelFilter::Off);
+    }
+    for target in ERRORS_ONLY_TARGETS {
+        builder = builder.level_for(*target, LevelFilter::Error);
+    }
+
+    builder
         .filter(is_payload_free)
         .max_file_size(MAX_LOG_FILE_BYTES)
         .rotation_strategy(RotationStrategy::KeepSome(KEPT_LOG_FILES))
@@ -54,4 +100,52 @@ fn is_payload_free(metadata: &Metadata) -> bool {
     let target = metadata.target();
 
     !PAYLOAD_TARGETS.iter().any(|blocked| target.starts_with(blocked))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_network_stack_under_the_link_is_silenced() {
+        // The crates of the link's tree that log addresses, resolvers' answers or the state of the network.
+        let required = [
+            "iroh",
+            "iroh_base",
+            "iroh_dns",
+            "iroh_relay",
+            "iroh_metrics",
+            "iroh_mdns_address_lookup",
+            "swarm_discovery",
+            "noq",
+            "noq_proto",
+            "noq_udp",
+            "netwatch",
+            "netlink_proto",
+            "netlink_packet_core",
+            "netlink_packet_route",
+            "netlink_sys",
+            "hickory_proto",
+            "hickory_resolver",
+            "n0_dns_resolver",
+            "acto",
+        ];
+
+        for target in required {
+            assert!(NETWORK_TARGETS.contains(&target), "{target} is not silenced");
+        }
+        // Any host on the network can start a QUIC handshake with the link and so make the TLS stack warn.
+        assert!(ERRORS_ONLY_TARGETS.contains(&"rustls"), "rustls warnings are logged");
+    }
+
+    #[test]
+    fn payload_targets_are_dropped_and_the_rest_pass() {
+        let blocked = Metadata::builder().target("tauri::ipc::channel").build();
+        let console = Metadata::builder().target(WEBVIEW_TARGET).build();
+        let own = Metadata::builder().target("pairpane_core::fs").build();
+
+        assert!(!is_payload_free(&blocked));
+        assert!(!is_payload_free(&console));
+        assert!(is_payload_free(&own));
+    }
 }

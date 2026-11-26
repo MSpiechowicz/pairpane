@@ -6,27 +6,13 @@ use std::time::{Duration, Instant};
 use pairpane_core::model::{JobView, Outcome};
 use pairpane_core::ops::{AnswerError, MAX_NAME_UNITS, Refused, UnknownJob};
 use tauri::async_runtime::block_on;
-use tauri::ipc::InvokeResponseBody;
 
 use super::*;
-use crate::commands::testing::{elsewhere, names, root};
+use crate::commands::testing::{collecting, elsewhere, names, root};
 
 /// A channel that records what it receives, decoded.
 pub(super) fn collecting_channel() -> (Channel<OpsEvent>, Arc<Mutex<Vec<OpsEvent>>>) {
-    let received = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&received);
-    let channel = Channel::new(move |body| {
-        let InvokeResponseBody::Json(json) = body else {
-            panic!("events are sent as JSON");
-        };
-        sink.lock()
-            .expect("not poisoned")
-            .push(serde_json::from_str(&json).expect("an OpsEvent"));
-
-        Ok(())
-    });
-
-    (channel, received)
+    collecting()
 }
 
 pub(super) fn received(events: &Arc<Mutex<Vec<OpsEvent>>>) -> Vec<OpsEvent> {

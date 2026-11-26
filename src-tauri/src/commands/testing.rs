@@ -67,6 +67,24 @@ pub(super) fn gated<T: DeserializeOwned + Send + 'static>() -> (Channel<T>, Arc<
     (channel, gate, log)
 }
 
+/// A channel that records what it receives, decoded.
+pub(super) fn collecting<T: DeserializeOwned + Send + 'static>() -> (Channel<T>, Arc<Mutex<Vec<T>>>) {
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&received);
+    let channel = Channel::new(move |body| {
+        let InvokeResponseBody::Json(json) = body else {
+            panic!("events are sent as JSON");
+        };
+        sink.lock()
+            .expect("not poisoned")
+            .push(serde_json::from_str(&json).expect("an event"));
+
+        Ok(())
+    });
+
+    (channel, received)
+}
+
 /// An absolute folder that the tests never touch on disk.
 pub(super) fn root() -> String {
     if cfg!(windows) { "C:\\data" } else { "/data" }.to_owned()

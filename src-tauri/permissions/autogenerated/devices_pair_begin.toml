@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-devices-pair-begin"
+description = "Enables the devices_pair_begin command without any pre-configured scope."
+commands.allow = ["devices_pair_begin"]
+
+[[permission]]
+identifier = "deny-devices-pair-begin"
+description = "Denies the devices_pair_begin command without any pre-configured scope."
+commands.deny = ["devices_pair_begin"]

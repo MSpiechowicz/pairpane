@@ -25,8 +25,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 ts-rs = { version = "12.0.1", features = ["serde-json-impl"] }
 tracing = "0.1.44"
-# Desktop shell (Tauri 2 only; Tauri 3 alpha is not used).
-tauri = "2.12.2"
+# Desktop shell (Tauri 2 only; Tauri 3 alpha is not used). `tray-icon` is for the tray icon that keeps the app running
+# (src-tauri/src/tray.rs) while the main window is hidden and a device is paired.
+tauri = { version = "2.12.2", features = ["tray-icon"] }
 tauri-build = "2.7.1"
 tauri-plugin-single-instance = "2.5.2"
 tauri-plugin-window-state = "2.5.0"
@@ -187,6 +188,9 @@ keyring = "4.2.0"
 # The async runtime iroh runs on: the link service, its accept loop and its timeouts (pairpane_link). `rt-multi-thread`
 # and `macros` are for the service and its tests, `time` for the timeouts and `sync` for the channels and locks.
 tokio = { version = "1.54.1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
+# The QR code of this device's address that the Devices screen shows (src-tauri/src/commands/devices/qr.rs): a safe,
+# dependency-free encoder; the page draws the modules as one SVG path, so no image or SVG crate is needed. MIT.
+qrcodegen = "1.8.0"
 # Dev dependencies
 pretty_assertions = "1.4"
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }

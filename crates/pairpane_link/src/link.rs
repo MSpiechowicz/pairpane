@@ -157,17 +157,18 @@ impl Link {
         Ok(offer)
     }
 
-    /// Cancels the active pairing code.
-    pub fn cancel_pairing(&self) -> Result<()> {
+    /// Cancels the active pairing code. `true` when a code was active: only then is
+    /// [`LinkEvent::PairingEnded`] sent (with [`PairingEndReason::Cancelled`]).
+    pub fn cancel_pairing(&self) -> Result<bool> {
         self.open()?;
         // The timer's slot is held over both steps, as in `begin_pairing`, so a code made in between keeps its timer.
         let mut slot = lock(&self.expiry);
-        self.ctx.host.cancel();
+        let ended = self.ctx.host.cancel();
         if let Some(old) = slot.take() {
             old.abort();
         }
 
-        Ok(())
+        Ok(ended)
     }
 
     fn replace_timer(&self, timer: Option<JoinHandle<()>>) {

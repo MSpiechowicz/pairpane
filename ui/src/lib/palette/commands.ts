@@ -10,7 +10,9 @@ export type CommandId =
   | 'settings'
   | 'editSettings'
   | 'keyboardShortcuts'
-  | 'checkUpdates';
+  | 'devices'
+  | 'checkUpdates'
+  | 'quit';
 
 /** Every command, by the name the palette shows. */
 export const COMMANDS: readonly { id: CommandId; label: string }[] = [
@@ -60,7 +62,9 @@ export const COMMANDS: readonly { id: CommandId; label: string }[] = [
   { id: 'settings', label: 'Settings…' },
   { id: 'editSettings', label: 'Edit settings' },
   { id: 'keyboardShortcuts', label: 'Keyboard shortcuts…' },
+  { id: 'devices', label: 'Devices…' },
   { id: 'checkUpdates', label: 'Check for updates' },
+  { id: 'quit', label: 'Quit Pairpane' },
 ];
 
 /** Whether `id` is an action of the keymap (whatever keys it has, if any). */

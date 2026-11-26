@@ -9,6 +9,7 @@ use tauri_build::{AppManifest, Attributes};
 /// Every `#[tauri::command]` (src/commands and src/menu.rs); keep in sync with `generate_handler!` in `lib.rs`.
 const COMMANDS: &[&str] = &[
     "app_info",
+    "app_quit",
     "update_check",
     "update_install",
     "app_relaunch",
@@ -75,6 +76,14 @@ const COMMANDS: &[&str] = &[
     "editor_set_dirty",
     "editor_close_ack",
     "app_close_confirmed",
+    "devices_open",
+    "devices_pair_begin",
+    "devices_pair_cancel",
+    "devices_join",
+    "devices_discovered",
+    "devices_status",
+    "devices_rename",
+    "devices_unpair",
 ];
 
 fn main() {

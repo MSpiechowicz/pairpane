@@ -21,6 +21,10 @@ tauri-build.workspace = true
 
 [dependencies]
 pairpane_core = { path = "../crates/pairpane_core" }
+# The device link service the Devices screen drives (commands/devices); the async runtime is Tauri's own.
+pairpane_link = { path = "../crates/pairpane_link" }
+tokio.workspace = true
+qrcodegen.workspace = true
 # `generate_context!` embeds the `plugins` section of `tauri.conf.json` as `serde_json` values.
 serde_json.workspace = true
 tauri.workspace = true
@@ -35,6 +39,10 @@ getrandom.workspace = true
 time.workspace = true
 # `log` feature: tracing events from the core crate reach tauri-plugin-log (no subscriber is installed).
 tracing = { workspace = true, features = ["log"] }
+
+# The host name that this device is announced by (`uname`'s nodename), a safe API.
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["system"] }
 
 [dev-dependencies]
 # Pictures to make thumbnails of (tests/thumb_helper.rs), encoded by the same crate that decodes them.

@@ -1,8 +1,10 @@
 <script lang="ts">
+  import DevicesDialog from '$lib/devices/DevicesDialog.svelte';
   import type { Transport } from '$lib/ipc/transport';
   import type { QuitGuard } from '$lib/ops/quit.svelte';
 
   import ChoiceDialog from './ChoiceDialog.svelte';
+  import type { ShellDialog } from './dialogs';
   import { keymap } from './keymap.svelte';
   import KeymapDialog from './KeymapDialog.svelte';
   import { preferences } from './preferences.svelte';
@@ -16,7 +18,7 @@
     onClose,
   }: {
     /** The dialog of the top bar's Settings menu that is open. */
-    open: 'keys' | 'settings' | undefined;
+    open: ShellDialog | undefined;
     ipc: Transport;
     /** Its question about quitting with transfers running, when it has one on the screen. */
     quit: QuitGuard;
@@ -30,6 +32,8 @@
   <KeymapDialog {keymap} {onClose} />
 {:else if open === 'settings'}
   <SettingsDialog {preferences} loadEditor={() => ipc.invoke('settings_editor', undefined)} onEditSettings={() => (onClose(), onEditSettings())} {onClose} />
+{:else if open === 'devices'}
+  <DevicesDialog {ipc} {onClose} />
 {/if}
 
 {#if quit.asking}

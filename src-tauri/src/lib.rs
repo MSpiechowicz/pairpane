@@ -9,12 +9,50 @@ mod commands;
 mod error;
 mod logging;
 mod menu;
+mod tray;
 mod updates;
 mod window;
 
 use std::process::ExitCode;
+use std::sync::Arc;
 
-use tauri::{Manager, RunEvent};
+use commands::devices::{LinkService, device_name, host_name, paired_on_disk};
+use tauri::{Manager, RunEvent, Wry};
+
+/// Manages the device link. It starts now only when devices are paired already (they must be answered); a fresh install
+/// does not listen until the Devices screen is opened.
+fn manage_devices(app: &mut tauri::App) {
+    // Without a data folder the link never starts.
+    let dir = app.path().app_data_dir().ok();
+    let paired = dir.as_deref().is_some_and(paired_on_disk);
+    let name = device_name(host_name().as_deref());
+
+    // When the last device is gone, nothing keeps the app alive in the tray: the window comes back (on the main thread,
+    // where the tray is).
+    let on_empty = app.handle().clone();
+    app.manage(LinkService::new(
+        dir,
+        name,
+        Arc::new(move || {
+            let app = on_empty.clone();
+            if let Err(error) = on_empty.run_on_main_thread(move || tray::reveal_if_hidden(&app)) {
+                tracing::warn!(%error, "cannot show the window");
+            }
+        }),
+    ));
+
+    if !paired {
+        return;
+    }
+
+    let handle = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        let devices = handle.state::<LinkService>();
+        if let Err(error) = devices.ensure_started().await {
+            tracing::warn!(kind = error.kind(), "the device link did not start");
+        }
+    });
+}
 
 /// Builds and runs the app until the last window closes; the searches and the transfers still running are cancelled, and given up to two seconds to clean up, as it exits, and the viewer's sessions are ended (which stops the HEIC helper that runs) and its temporary archive files are swept.
 pub fn run() -> ExitCode {
@@ -22,7 +60,8 @@ pub fn run() -> ExitCode {
         // Must be registered first so a second launch exits before anything else starts.
         // Its argv is ignored: nothing from another process is forwarded to the webview.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            window::focus_main_window(app);
+            // Also from the tray, where the window is hidden.
+            tray::reveal(app);
         }))
         .plugin(tauri_plugin_window_state::Builder::default().build())
         // Rust-side only: no JS opener permission is granted, so its injected link handler is off.
@@ -61,6 +100,7 @@ pub fn run() -> ExitCode {
             // The same for the staging folders of an unpacking that a crash left (a RAR unpacked by `unrar`).
             tauri::async_runtime::spawn_blocking(pairpane_core::archive::rar::stage::sweep);
             app.manage(close::CloseGuard::default());
+            app.manage(tray::Tray::<Wry>::default());
             // Next to the window-state plugin's file. Without a config folder nothing is saved.
             let state_file = app
                 .path()
@@ -76,6 +116,7 @@ pub fn run() -> ExitCode {
                 .map(|dir| dir.join(pairpane_core::settings::SETTINGS_FILE));
             app.manage(commands::edit::Editor::new(settings_file));
 
+            manage_devices(app);
             window::create_main_window(app)?;
 
             let version = app.package_info().version.to_string();
@@ -89,6 +130,7 @@ pub fn run() -> ExitCode {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app::app_info,
+            commands::app::app_quit,
             commands::updates::update_check,
             commands::updates::update_install,
             commands::updates::app_relaunch,
@@ -152,6 +194,14 @@ pub fn run() -> ExitCode {
             commands::edit::edit_external,
             commands::edit::settings_open,
             commands::edit::setting::settings_editor,
+            commands::devices::devices_open,
+            commands::devices::devices_pair_begin,
+            commands::devices::devices_pair_cancel,
+            commands::devices::devices_join,
+            commands::devices::devices_discovered,
+            commands::devices::devices_status,
+            commands::devices::devices_rename,
+            commands::devices::devices_unpair,
             close::editor_set_dirty,
             close::editor_close_ack,
             close::app_close_confirmed,
@@ -161,6 +211,8 @@ pub fn run() -> ExitCode {
             app.run(|app, event| {
                 // An exit with unsaved text in the editor waits for the page's answer, unless it is a restart.
                 close::on_run_event(app, &event);
+                // A window that is hidden in the tray keeps the app running; the dock shows it again.
+                tray::on_run_event(app, &event);
 
                 // Cancel the jobs, silently, and give each a moment to remove its partial file (the plan's decision 8).
                 if let RunEvent::Exit = event {
@@ -194,6 +246,15 @@ pub fn run() -> ExitCode {
                     // A HEIC decode that runs stops its helper process when its session ends.
                     if let Some(viewer) = app.try_state::<commands::view::Viewer>() {
                         viewer.close_all();
+                    }
+                    // The device link closes its connections, but is not waited for longer than that.
+                    if let Some(devices) = app.try_state::<LinkService>() {
+                        // The timer is made inside the runtime: a timeout made outside it panics.
+                        tauri::async_runtime::block_on(async {
+                            tokio::time::timeout(commands::devices::SHUTDOWN_WAIT, devices.shutdown())
+                                .await
+                                .ok();
+                        });
                     }
                     commands::view::archive_entry::sweep();
                     pairpane_core::archive::rar::stage::sweep_on_exit();

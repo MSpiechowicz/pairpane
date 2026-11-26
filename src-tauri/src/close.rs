@@ -189,6 +189,13 @@ pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
         return;
     };
 
+    // While a device is paired the window goes to the tray instead of closing (`tray.rs`); nothing is asked then.
+    if crate::tray::hide_instead_of_close(window) {
+        api.prevent_close();
+
+        return;
+    }
+
     let app = window.app_handle();
     let (Some(close), Some(events)) = (app.try_state::<CloseGuard>(), app.try_state::<MenuEvents>()) else {
         return;
@@ -211,7 +218,13 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
     };
 
     let request = Request::Exit(code.unwrap_or(0));
-    if close.intercept(request, Instant::now(), || events.try_send(MenuCommand::CloseRequested)) {
+    let ask = || {
+        // A quit from the tray comes while the window is hidden, and the question is asked in it.
+        crate::tray::reveal_if_hidden(app);
+
+        events.try_send(MenuCommand::CloseRequested)
+    };
+    if close.intercept(request, Instant::now(), ask) {
         api.prevent_exit();
     }
 }

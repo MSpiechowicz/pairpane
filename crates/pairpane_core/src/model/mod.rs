@@ -8,6 +8,7 @@ mod app;
 mod archive;
 mod columns;
 mod compare;
+mod devices;
 mod edit;
 mod find;
 mod ipc_error;
@@ -30,6 +31,10 @@ pub use columns::{Dimensions, GitEntry, GitMark, GitStatus};
 pub use compare::{
     CompareEvent, CompareFacts, CompareId, CompareOptions, CompareRoot, CompareRow, CompareStatus, SyncDirection,
     SyncFacts, SyncItem, SyncRemoval,
+};
+pub use devices::{
+    DeviceStatus, DevicesEvent, DevicesOverview, FoundDevice, KeyStorage, OwnDevice, PairedDevice, PairingEnd,
+    PairingShown, QrImage,
 };
 pub use edit::{EditDocument, EditOpened, EditSaveOptions, EditSaved, EditorSetting, ExternalEdit, LineEnding};
 pub use find::{FindCriteria, FindEvent, FindHit, FindId, FindQuery, FindText, SavedSearch, Tri};

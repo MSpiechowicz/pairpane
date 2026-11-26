@@ -42,6 +42,7 @@
   import { preferences } from '$lib/shell/preferences.svelte';
   import { Session } from '$lib/shell/session.svelte';
   import ShellDialogs from '$lib/shell/ShellDialogs.svelte';
+  import { DIALOG_OF, opensDialog, type ShellDialog } from '$lib/shell/dialogs';
   import { isTyping, reloadsPage } from '$lib/shell/shortcuts';
   import { keymap } from '$lib/shell/keymap.svelte';
   import { switchesPane } from '$lib/shell/switchPane';
@@ -66,7 +67,7 @@
   let failure = $state<string | undefined>();
   let active = $state<Side>('left');
   /** The dialog of the top bar's Settings menu that is open. */
-  let dialog = $state<'keys' | 'settings'>();
+  let dialog = $state<ShellDialog>();
   /** The dropdown that is open, and the pane under whose header it is. */
   let menu = $state<{ side: Side; kind: Menu } | undefined>();
 
@@ -102,6 +103,7 @@
   });
 
   const toggleHidden = () => preferences.set({ showHidden: !preferences.value.showHidden });
+  const exit = () => void ipc.invoke('app_quit', undefined).catch((error) => files.say(IpcFailure.from(error).message, true));
 
   const transfers = new Transfers(ipc, (job, result) => {
     if (job.kind === 'addToArchive') {
@@ -244,10 +246,10 @@
       toggleHidden();
     } else if (item.id === 'editSettings') {
       editSettings();
-    } else if (item.id === 'keyboardShortcuts') {
-      dialog = 'keys';
-    } else if (item.id === 'settings') {
-      dialog = 'settings';
+    } else if (opensDialog(item.id)) {
+      dialog = DIALOG_OF[item.id];
+    } else if (item.id === 'quit') {
+      exit();
     } else if (item.id === 'checkUpdates') {
       void updates.check(true);
     } else if (isAction(item.id)) {
@@ -333,9 +335,9 @@
     layout={panes[active].view.layout}
     onLayout={(layout) => (panes[active].view.layout = layout)}
     onCheckForUpdates={() => void updates.check(true)}
-    onSettings={() => (dialog = 'settings')}
+    onDialog={(shown) => (dialog = shown)}
     onEditSettings={editSettings}
-    onKeyboardShortcuts={() => (dialog = 'keys')}
+    onQuit={exit}
     onToggleHidden={toggleHidden}
     onFiles={chooseFile}
     onFind={find}
