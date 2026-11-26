@@ -1,3 +1,10 @@
+# [0.35.0](https://github.com/MSpiechowicz/pairpane/compare/v0.34.2...v0.35.0) (2026-11-26)
+
+
+### Features
+
+* **link:** Devices screen and tray service (#89) ([61bb19d](https://github.com/MSpiechowicz/pairpane/commit/61bb19d8f3f0cc1a4ac7295e0f0cff29d931b6d1)), closes [#27](https://github.com/MSpiechowicz/pairpane/issues/27)
+
 ## [0.34.2](https://github.com/MSpiechowicz/pairpane/compare/v0.34.1...v0.34.2) (2026-11-25)
 
 
