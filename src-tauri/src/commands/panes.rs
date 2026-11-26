@@ -18,7 +18,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use pairpane_core::listing::{FolderWatch, platform};
-use pairpane_core::model::{FindId, IpcError, IpcErrorCode, ListEvent, PaneId};
+use pairpane_core::model::{FindId, IpcError, IpcErrorCode, ListEvent, PaneId, SiteId};
+use pairpane_core::vfs::RemotePath;
 use tauri::State;
 use tauri::async_runtime;
 use tauri::ipc::Channel;
@@ -49,6 +50,8 @@ pub(super) enum SlotKey {
     Archive(PathBuf),
     /// The results of a search: no folder, so nothing is watched and nothing can be measured.
     Results(FindId),
+    /// A folder on a server: not watched, and not on this machine's disk, so nothing is measured.
+    Remote { site: SiteId, dir: RemotePath },
 }
 
 impl SlotKey {
@@ -56,7 +59,7 @@ impl SlotKey {
     pub(super) fn measured(&self) -> Option<&Path> {
         match self {
             Self::Folder(path) | Self::Archive(path) => Some(path),
-            Self::Results(_) => None,
+            Self::Results(_) | Self::Remote { .. } => None,
         }
     }
 }
@@ -275,6 +278,7 @@ pub(super) fn folder_error(error: &io::Error, denied: &str, failed: &str) -> Ipc
 }
 
 pub mod archive;
+pub mod remote;
 mod run;
 
 #[cfg(test)]

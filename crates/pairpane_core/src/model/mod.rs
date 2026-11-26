@@ -17,6 +17,7 @@ mod listing;
 mod markdown;
 mod ops;
 mod pack;
+mod remote;
 mod rename;
 mod shell;
 mod state;
@@ -46,6 +47,7 @@ pub use ops::{
     Answer, ConflictInfo, ControlAction, FileFacts, ItemError, JobId, JobPhase, JobView, OpKind, OpsEvent, Outcome,
 };
 pub use pack::{PackFormat, PackLevel};
+pub use remote::{ConnectOutcome, ConnectTarget, SecretKind, SecretReason, SiteId, SshHost};
 pub use rename::{
     CaseChange, CasePart, RenameCounter, RenamePreview, RenameProblem, RenameRow, RenameRule, RuleError, RuleField,
     SavedRename,

@@ -1,9 +1,8 @@
 <script lang="ts">
-  import type { Crumb } from '$lib/ipc/bindings/Crumb';
   import type { Volume } from '$lib/ipc/bindings/Volume';
   import { crumbKey } from '$lib/panes/archive';
   import { displayName } from '$lib/panes/format';
-  import { anchored, tabLabel } from '$lib/panes/crumbs';
+  import { anchored, remoteLabel, tabLabel } from '$lib/panes/crumbs';
   import type { PaneTabs } from '$lib/panes/tabs.svelte';
 
   let {
@@ -23,22 +22,14 @@
   } = $props();
 
   const listing = $derived(tabs.view.listing);
-  const crumbs = $derived(anchored(listing.crumbs, volumes));
+  // A server's crumbs are its own paths: no volume of this computer names any of them.
+  const crumbs = $derived(listing.remote === undefined ? anchored(listing.crumbs, volumes) : listing.crumbs);
 
   /** Long paths scroll so the current folder (the end) stays in view. */
   function showEnd(node: HTMLElement, _path: string | undefined) {
     const scroll = () => (node.scrollLeft = node.scrollWidth);
     scroll();
     return { update: scroll };
-  }
-
-  /** A step of the path bar: a real folder, or a folder inside an archive (the crumb then has `inside`). */
-  function goTo(crumb: Crumb) {
-    if (crumb.inside === undefined) {
-      void listing.open(crumb.path);
-    } else {
-      void listing.openArchive({ archive: crumb.path, dir: crumb.inside });
-    }
   }
 
   /** The middle button closes a tab, as in a browser. */
@@ -76,7 +67,7 @@
               <button
                 type="button"
                 class:last={position === crumbs.length - 1 && listing.results === undefined}
-                onclick={() => goTo(crumb)}>{displayName(crumb.name)}</button
+                onclick={() => void listing.openCrumb(crumb)}>{displayName(crumb.name)}</button
               >
             {/each}
             <!-- The crumbs are the folder searched; the results are what is listed in it. -->
@@ -86,7 +77,7 @@
           </nav>
         </div>
       {:else}
-        {@const label = displayName(tabLabel(tab.path, volumes))}
+        {@const label = displayName(tab.remote === undefined ? tabLabel(tab.path, volumes) : remoteLabel(tab.remote))}
         <div class="tab">
           <button class="name" type="button" onclick={() => tabs.select(index)} onauxclick={(e) => closeOnMiddle(e, index)}
             >{label}</button

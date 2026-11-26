@@ -17,7 +17,8 @@ use pairpane_core::vfs::{ArchiveFolder, VfsFolder};
 use tauri::State;
 use tauri::ipc::Channel;
 
-use super::{Claim, Panes, SlotKey, Slots, claim_sizing};
+use super::run::claiming_sizes;
+use super::{Claim, Panes, SlotKey, Slots};
 use crate::commands::archives::{Archives, Target, archive_error, check_inner};
 use crate::commands::items::blocking;
 use crate::commands::ops::failed;
@@ -116,14 +117,13 @@ impl Open {
             self.dir.clone(),
         );
 
-        let key = SlotKey::Archive(self.target.path.clone());
-        let mut send = |event: ListEvent| {
-            if matches!(event, ListEvent::Start { .. }) {
-                claim_sizing(&self.slots, self.pane, self.generation, &key);
-            }
-            // A closed channel only means the page went away; the next open starts over.
-            self.on_event.send(event).ok();
-        };
+        let mut send = claiming_sizes(
+            &self.slots,
+            self.pane,
+            self.generation,
+            SlotKey::Archive(self.target.path.clone()),
+            &self.on_event,
+        );
 
         // The folder is not in the archive: nothing was sent, and the command rejects.
         folder

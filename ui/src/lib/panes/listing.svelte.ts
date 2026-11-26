@@ -10,14 +10,19 @@ import type { PaneLocation } from '$lib/ipc/bindings/PaneLocation';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
 
 import { joinInner, sameSpot, spotOf } from './archive';
+import { type RemotePlace, remoteOf, sameRemote } from './remote';
 
 /** A listing slower than this shows a spinner in its pane; a faster one never flashes it. */
 export const SPINNER_DELAY_MS = 150;
 
 export type ListingStatus = 'loading' | 'ready' | 'error';
 
-/** What an open asks for: a real folder (`null`: home) and one of its folders, a place inside an archive, or the results of a search. */
-type Target = { folder: string | null; child: string | null } | { spot: ArchiveSpot } | { results: FindId };
+/** What an open asks for: a real folder (`null`: home) and one of its folders, a place inside an archive, a folder on a server (and one of its folders), or the results of a search. */
+type Target =
+  | { folder: string | null; child: string | null }
+  | { spot: ArchiveSpot }
+  | { remote: RemotePlace; child: string | null }
+  | { results: FindId };
 
 /** What a pane's view needs to hear about a listing besides its (reactive) state. */
 export interface ListingHooks {
@@ -41,7 +46,8 @@ export interface ListingHooks {
  * inside an archive is listed the same way (`openArchive`); the archive is then read-only and has no `path`. The
  * results of a search are listed the same way too (`openResults`): the entries are named by their path below the
  * folder searched, so the pane has no `path` either (nothing may treat those names as one folder's), and `enter`
- * opens the real folder.
+ * opens the real folder. A folder on a server is listed the same way too (`openRemote`): it is read-only, and its
+ * path is the server's, so the pane has neither a `path` nor a `folder` (nothing may use it as a local one).
  */
 export class Listing {
   /** The real folder listed, or the folder that holds the archive shown. */
@@ -91,14 +97,19 @@ export class Listing {
   /** Whether the latest open has delivered its `start`. */
   #started = false;
 
-  /** The real folder shown; `undefined` before the first listing, inside an archive and in search results (their names are no plain names of one folder). */
-  get path(): string | undefined {
-    return this.archive === undefined && this.results === undefined ? this.#folder : undefined;
+  /** Where on a server the pane is (set while it shows a folder there); a path of it is the server's, not a local one. */
+  get remote(): RemotePlace | undefined {
+    return remoteOf(this.place);
   }
 
-  /** The real folder shown, the folder that holds the archive shown, or the folder searched. */
+  /** The real folder shown; `undefined` before the first listing, inside an archive, on a server and in search results (their names are no plain names of one folder). */
+  get path(): string | undefined {
+    return this.archive === undefined && this.results === undefined ? this.folder : undefined;
+  }
+
+  /** The real folder shown, the folder that holds the archive shown, or the folder searched; never one on a server. */
   get folder(): string | undefined {
-    return this.#folder;
+    return this.remote === undefined ? this.#folder : undefined;
   }
 
   /** What is listed cannot be changed (the backend says so: inside an archive, for one). */
@@ -106,8 +117,13 @@ export class Listing {
     return this.capabilities?.writable === false;
   }
 
-  /** Tells one listed place from another: a folder, a folder inside an archive, or the results of a search. */
+  /** Tells one listed place from another: a folder, a folder inside an archive or on a server, or the results of a search. */
   get location(): string {
+    const remote = this.remote;
+    if (remote !== undefined) {
+      return `\0remote\0${remote.site}\0${remote.dir}`;
+    }
+
     if (this.results !== undefined) {
       return `${this.#folder}\0\0${this.results}`;
     }
@@ -142,6 +158,31 @@ export class Listing {
     return this.#open({ spot: { archive: spot.archive, dir } }, false);
   }
 
+  /** Opens the folder of a server `place` (a pane's `remote`, or a crumb's place), or its folder `child`. */
+  openRemote(place: RemotePlace, child: string | null = null): Promise<void> {
+    return this.#open({ remote: place, child }, false);
+  }
+
+  /** Opens the folder a path-bar step `crumb` stands for: on a server its `path` is the server's. */
+  openCrumb(crumb: Crumb): Promise<void> {
+    const remote = this.remote;
+    if (remote !== undefined) {
+      return this.openRemote({ ...remote, dir: crumb.path });
+    }
+
+    return crumb.inside === undefined ? this.open(crumb.path) : this.openArchive({ archive: crumb.path, dir: crumb.inside });
+  }
+
+  /** Opens the folder above the one shown on the server (`parent`); nothing at its root. */
+  openParent(): Promise<void> {
+    const remote = this.remote;
+    if (remote === undefined || this.parent === null) {
+      return Promise.resolve();
+    }
+
+    return this.openRemote({ ...remote, dir: this.parent });
+  }
+
   /** Lists the results of the search `id` (the backend keeps them under it); `..` leads to the folder searched. */
   openResults(id: FindId): Promise<void> {
     return this.#open({ results: id }, false);
@@ -149,6 +190,11 @@ export class Listing {
 
   /** What is shown now, as an open that lists it again. */
   #here(): Target {
+    const remote = this.remote;
+    if (remote !== undefined) {
+      return { remote, child: null };
+    }
+
     if (this.results !== undefined) {
       return { results: this.results };
     }
@@ -166,7 +212,11 @@ export class Listing {
       return sameSpot(target.spot, this.archive);
     }
 
-    return this.archive === undefined && this.results === undefined && target.child === null && target.folder === (this.#folder ?? null);
+    if ('remote' in target) {
+      return target.child === null && sameRemote(target.remote, this.place) && target.remote.dir === this.#folder;
+    }
+
+    return this.remote === undefined && this.archive === undefined && this.results === undefined && target.child === null && target.folder === (this.#folder ?? null);
   }
 
   #request(target: Target, onEvent: (event: ListEvent) => void, signal: AbortSignal) {
@@ -178,6 +228,11 @@ export class Listing {
     if ('spot' in target) {
       const { archive, dir } = target.spot;
       return this.#ipc.invoke('archive_open', { pane: this.#pane, archive, dir, showHidden, onEvent }, { signal });
+    }
+
+    if ('remote' in target) {
+      const { site, dir } = target.remote;
+      return this.#ipc.invoke('remote_open', { pane: this.#pane, site, dir, child: target.child, showHidden, onEvent });
     }
 
     const { folder, child } = target;
@@ -256,6 +311,11 @@ export class Listing {
 
   /** Opens the folder named `name` inside the current one (inside an archive too); in search results it is the path below the folder searched. */
   enter(name: string): Promise<void> {
+    const remote = this.remote;
+    if (remote !== undefined) {
+      return this.openRemote(remote, name);
+    }
+
     if (this.results !== undefined) {
       return this.open(joinResult(this.#folder ?? '', name));
     }
@@ -270,7 +330,12 @@ export class Listing {
         // them, so a live update does not flash empty rows.
         const archive = spotOf(event.location);
         const results = event.location.kind === 'results' ? event.location.id : undefined;
-        const reload = event.path === this.#folder && sameSpot(archive, this.archive) && results === this.results && this.error === undefined;
+        const reload =
+          event.path === this.#folder &&
+          sameSpot(archive, this.archive) &&
+          results === this.results &&
+          sameRemote(event.location, this.place) &&
+          this.error === undefined;
         const next = new Array<Entry | undefined>(event.total);
         if (reload) {
           this.reloads += 1;
@@ -335,10 +400,10 @@ export class Listing {
       this.notice = message;
       this.#settle('ready');
 
-      // The owner may open another folder at once; that open brings the watch back by itself.
+      // The owner may open another folder at once; that open brings the watch back by itself. A server's folder has no watch.
       const generation = this.#generation;
       this.#hooks.onNotice?.();
-      if (!wasReload && generation === this.#generation) {
+      if (!wasReload && generation === this.#generation && this.remote === undefined) {
         void this.#open(this.#here(), true);
       }
 

@@ -1,8 +1,8 @@
-# Workspace root: the pairpane_core crate, the pairpane_link crate (device pairing and direct connection) and the thin
-# Tauri shell.
+# Workspace root: the pairpane_core crate, the pairpane_link crate (device pairing and direct connection), the
+# pairpane_remote crate (SFTP browsing over SSH) and the thin Tauri shell.
 [workspace]
 resolver = "3"
-members = ["crates/pairpane_core", "crates/pairpane_link", "src-tauri"]
+members = ["crates/pairpane_core", "crates/pairpane_link", "crates/pairpane_remote", "src-tauri"]
 
 [workspace.package]
 version = "0.35.0"
@@ -191,6 +191,14 @@ tokio = { version = "1.54.1", default-features = false, features = ["macros", "r
 # The QR code of this device's address that the Devices screen shows (src-tauri/src/commands/devices/qr.rs): a safe,
 # dependency-free encoder; the page draws the modules as one SVG path, so no image or SVG crate is needed. MIT.
 qrcodegen = "1.8.0"
+# Remote sites (pairpane_remote): SSH and its SFTP subsystem, in pure Rust. Only the `ring` crypto backend (never
+# aws-lc-rs, which builds C code) and `rsa` for RSA keys (rsa 0.10 has the Marvin timing fix); no default features, so no
+# compression (zlib). russh-sftp speaks over any byte stream, so it has no russh dependency of its own.
+russh = { version = "0.65.4", default-features = false, features = ["ring", "rsa"] }
+russh-sftp = "4.0.0"
+# Dev only (pairpane_remote's tests): the stream of connections a fake ssh-agent on a Unix socket is served from; in the
+# lockfile already through russh.
+tokio-stream = { version = "0.1.19", default-features = false, features = ["net"] }
 # Dev dependencies
 pretty_assertions = "1.4"
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }

@@ -34,7 +34,7 @@ mod terminal;
 mod tests;
 
 pub use clean::Cleaner;
-pub use env::appimage_env;
+pub use env::{appimage_env, apply_appimage_env, cleaned_env, inherit_cleaned_env};
 pub use terminal::terminal;
 #[cfg(all(test, unix, not(target_os = "macos")))]
 use terminal::terminal_from;
@@ -93,12 +93,7 @@ impl Shell {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        for (name, value) in appimage_env(std::env::vars_os()) {
-            match value {
-                Some(value) => command.env(name, value),
-                None => command.env_remove(name),
-            };
-        }
+        apply_appimage_env(&mut command);
 
         #[cfg(unix)]
         {

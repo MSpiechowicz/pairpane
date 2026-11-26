@@ -12,7 +12,7 @@ import { join, resolve } from 'node:path';
  * Workspace crates whose Cargo.lock entry carries the release version: every member of the workspace (a test checks this
  * list against Cargo.toml, so a new crate cannot be left out and fail the release's locked build).
  */
-export const WORKSPACE_PACKAGES = ['pairpane_core', 'pairpane_link', 'pairpane_app'] as const;
+export const WORKSPACE_PACKAGES = ['pairpane_core', 'pairpane_link', 'pairpane_remote', 'pairpane_app'] as const;
 
 // Official semver.org regular expression (strict: no leading "v", no leading zeros).
 const SEMVER =

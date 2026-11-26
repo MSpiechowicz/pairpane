@@ -11,7 +11,7 @@ const script = join(repoRoot, 'scripts', 'set-version.ts');
 
 const TOML = `# Workspace root
 [workspace]
-members = ["crates/pairpane_core", "crates/pairpane_link", "src-tauri"]
+members = ["crates/pairpane_core", "crates/pairpane_link", "crates/pairpane_remote", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"   # keep me
@@ -33,6 +33,10 @@ dependencies = [
 
 [[package]]
 name = "pairpane_link"
+version = "0.1.0"
+
+[[package]]
+name = "pairpane_remote"
 version = "0.1.0"
 
 [[package]]
@@ -70,12 +74,14 @@ describe('set-version', () => {
     expect(lock).toBe(
       LOCK.replace('"pairpane_core"\nversion = "0.1.0"', '"pairpane_core"\nversion = "1.2.3"')
         .replace('"pairpane_link"\nversion = "0.1.0"', '"pairpane_link"\nversion = "1.2.3"')
+        .replace('"pairpane_remote"\nversion = "0.1.0"', '"pairpane_remote"\nversion = "1.2.3"')
         .replace('"pairpane_app"\nversion = "0.1.0"', '"pairpane_app"\nversion = "1.2.3"'),
     );
     expect(lock).toContain('name = "serde"\nversion = "0.1.0"');
     expect(out).toContain('Cargo.toml [workspace.package]: 0.1.0 -> 1.2.3');
     expect(out).toContain('Cargo.lock pairpane_core: 0.1.0 -> 1.2.3');
     expect(out).toContain('Cargo.lock pairpane_link: 0.1.0 -> 1.2.3');
+    expect(out).toContain('Cargo.lock pairpane_remote: 0.1.0 -> 1.2.3');
     expect(out).toContain('Cargo.lock pairpane_app: 0.1.0 -> 1.2.3');
   });
 

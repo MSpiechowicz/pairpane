@@ -2,6 +2,8 @@
   import DevicesDialog from '$lib/devices/DevicesDialog.svelte';
   import type { Transport } from '$lib/ipc/transport';
   import type { QuitGuard } from '$lib/ops/quit.svelte';
+  import RemoteDialogs from '$lib/remote/RemoteDialogs.svelte';
+  import type { Remote } from '$lib/remote/remote.svelte';
 
   import ChoiceDialog from './ChoiceDialog.svelte';
   import type { ShellDialog } from './dialogs';
@@ -14,6 +16,7 @@
     open,
     ipc,
     quit,
+    remote,
     onEditSettings,
     onClose,
   }: {
@@ -22,6 +25,8 @@
     ipc: Transport;
     /** Its question about quitting with transfers running, when it has one on the screen. */
     quit: QuitGuard;
+    /** Connecting to a server: its dialogs. */
+    remote: Remote;
     /** "Edit settings file…" of the settings dialog. */
     onEditSettings: () => void;
     onClose: () => void;
@@ -35,6 +40,8 @@
 {:else if open === 'devices'}
   <DevicesDialog {ipc} {onClose} />
 {/if}
+
+<RemoteDialogs {remote} />
 
 {#if quit.asking}
   <ChoiceDialog

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::{FindId, IpcError};
+use super::{FindId, IpcError, SiteId};
 
 /// Which of the two panes a command is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -72,6 +72,8 @@ pub enum PaneLocation {
     Archive { archive: String, dir: String },
     /// The results of a search; every entry's name is its path below the folder searched.
     Results { id: FindId },
+    /// A folder on a server (`dir` is an absolute path there); `label` is what the path bar calls the server.
+    Remote { site: SiteId, label: String, dir: String },
 }
 
 /// What a pane may do with the entries it lists.
@@ -87,7 +89,7 @@ impl PaneCapabilities {
     /// A folder on disk, and the results of a search (which list entries of folders on disk).
     pub const WRITABLE: Self = Self { writable: true };
 
-    /// An archive.
+    /// An archive, and a folder on a server.
     pub const READ_ONLY: Self = Self { writable: false };
 }
 
@@ -107,7 +109,7 @@ pub enum ListEvent {
         /// The path bar, from the root down to this folder.
         crumbs: Vec<Crumb>,
         total: u32,
-        /// Where the listing is: a folder on disk, a folder inside an archive, or the results of a search.
+        /// Where the listing is: a folder on disk, inside an archive or on a server, or the results of a search.
         location: PaneLocation,
         /// What the pane may do with the entries.
         capabilities: PaneCapabilities,

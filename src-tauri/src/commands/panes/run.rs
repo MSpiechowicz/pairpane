@@ -109,9 +109,27 @@ fn set_watch(slots: &Slots, pane: PaneId, generation: u64, watch: Option<Watch>)
     drop(replaced);
 }
 
+/// What sends a listing's events to `on_event` when the pane's size jobs follow the folder of `key` (see
+/// [`claim_sizing`]): they move as `start` goes out, if `generation` is still the pane's latest open.
+pub(super) fn claiming_sizes<'a>(
+    slots: &'a Slots,
+    pane: PaneId,
+    generation: u64,
+    key: SlotKey,
+    on_event: &'a Channel<ListEvent>,
+) -> impl FnMut(ListEvent) + 'a {
+    move |event| {
+        if matches!(event, ListEvent::Start { .. }) {
+            claim_sizing(slots, pane, generation, &key);
+        }
+        // A closed channel only means the page went away; the next open starts over.
+        on_event.send(event).ok();
+    }
+}
+
 /// Lists `folder` onto `on_event`, calling `on_start` as the first pass ends (just before `start` is sent); `true`
 /// when it could not be listed.
-fn list(
+pub(super) fn list(
     folder: &dyn VfsFolder,
     show_hidden: bool,
     cancel: &AtomicBool,

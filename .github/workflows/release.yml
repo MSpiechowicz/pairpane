@@ -197,7 +197,7 @@ jobs:
           # shellcheck disable=SC2016 # an awk program, not shell
           expect_bump Cargo.lock '
             /^\[\[package\]\]$/ { own = 0 }
-            /^name = "pairpane_(core|link|app)"$/ { own = 1 }
+            /^name = "pairpane_(core|link|remote|app)"$/ { own = 1 }
             own && /^version = "[^"]*"$/ { print "version = \"" v "\""; own = 0; next }
             { print }'
           echo "release commit $SHA = $TESTED_SHA + version $VERSION"

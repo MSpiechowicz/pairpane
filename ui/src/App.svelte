@@ -16,17 +16,14 @@
   import type { AppInfo } from '$lib/ipc/bindings/AppInfo';
   import { ipc as backend } from '$lib/ipc/client';
   import { IpcFailure } from '$lib/ipc/transport';
-  import ConflictDialog from '$lib/ops/ConflictDialog.svelte';
-  import DeleteDialog from '$lib/ops/DeleteDialog.svelte';
+  import FileDialogs from '$lib/ops/FileDialogs.svelte';
   import { FileActions } from '$lib/ops/fileActions.svelte';
-  import OpDialog from '$lib/ops/OpDialog.svelte';
-  import PasswordDialog from '$lib/ops/PasswordDialog.svelte';
   import { Passwords } from '$lib/ops/passwords.svelte';
   import { QuitGuard } from '$lib/ops/quit.svelte';
+  import { REMOTE_NOTICE } from '$lib/ops/targets';
   import { Transfers } from '$lib/ops/transfers.svelte';
   import TransfersChip from '$lib/ops/TransfersChip.svelte';
   import TransfersPanel from '$lib/ops/TransfersPanel.svelte';
-  import ToolDialogs from '$lib/ops/ToolDialogs.svelte';
   import { focusActiveList } from '$lib/panes/focus';
   import { reloadShowing } from '$lib/panes/archive';
   import { FlatView } from '$lib/panes/flat.svelte';
@@ -34,6 +31,7 @@
   import { Hotlist } from '$lib/panes/hotlist.svelte';
   import { PaneTabs } from '$lib/panes/tabs.svelte';
   import { Volumes } from '$lib/panes/volumes.svelte';
+  import { Remote } from '$lib/remote/remote.svelte';
   import { SavedRenames } from '$lib/rename/saved.svelte';
   import { CommandLine, placeOf } from '$lib/shell/command-line.svelte';
   import Dock from '$lib/shell/Dock.svelte';
@@ -115,6 +113,8 @@
   });
   let panelOpen = $state(false);
   const files = new FileActions(ipc, panes, () => active);
+  // Connecting to a server opens its home folder in the active pane.
+  const remote = new Remote(ipc, panes, () => active, (text, error) => files.say(text, error));
   const flat = new FlatView(ipc, panes, (text, error) => files.say(text, error), () => preferences.value.showHidden);
   flat.watch();
   const comparison = new Comparison(ipc, panes, (text, error) => files.say(text, error), () => preferences.value.showHidden);
@@ -150,6 +150,7 @@
       editor.modal ||
       diff.modal ||
       passwords.modal ||
+      remote.modal ||
       finder.modal ||
       comparison.modal ||
       palette.shown ||
@@ -159,11 +160,22 @@
 
   /** Alt+F7: the Find dialog, on the folder the active pane shows (inside an archive: the folder that holds it). */
   function find() {
-    const { folder } = panes[active].view.listing;
-    if (folder === undefined) {
+    const { folder, remote: server } = panes[active].view.listing;
+    if (server !== undefined) {
+      files.say(REMOTE_NOTICE, true);
+    } else if (folder === undefined) {
       files.say('Wait until the folder has been listed.', true);
     } else {
       finder.show(folder);
+    }
+  }
+
+  /** F3 and the Files menu's viewer: a file on a server has no path on disk to show yet, so a card says so. */
+  function view() {
+    if (panes[active].view.listing.remote !== undefined) {
+      files.say(REMOTE_NOTICE, true);
+    } else {
+      viewer.open();
     }
   }
 
@@ -209,7 +221,7 @@
     showMenu,
     files: (action) => files.run(action),
     toggleTransfers: () => (panelOpen = !panelOpen),
-    view: () => viewer.open(),
+    view: () => view(),
     edit: () => edit(),
     compareFiles: () => diff.open(),
     quickView: () => viewer.toggleQuick(),
@@ -244,6 +256,10 @@
       panes[active].view.pointAt(item.name);
     } else if (item.id === 'toggleHidden') {
       toggleHidden();
+    } else if (item.id === 'connectSftp') {
+      void remote.show();
+    } else if (item.id === 'disconnectSftp') {
+      void remote.disconnect(panes[active]);
     } else if (item.id === 'editSettings') {
       editSettings();
     } else if (opensDialog(item.id)) {
@@ -355,6 +371,7 @@
           tabs={panes[side]}
           {volumes}
           {hotlist}
+          {remote}
           menu={menu?.side === side ? menu.kind : undefined}
           active={active === side}
           rename={files.rename}
@@ -367,7 +384,7 @@
   </main>
 
   <Dock
-    inArchive={panes[active].view.listing.readonly}
+    inArchive={panes[active].view.listing.readonly && panes[active].view.listing.remote === undefined}
     inResults={panes[active].view.listing.results !== undefined}
     {commandLine}
     onAction={(action) => runAction(action, actions)}
@@ -400,48 +417,9 @@
   <Palette {palette} onTake={takePicked} />
 {/if}
 
-<ShellDialogs open={dialog} {ipc} {quit} onEditSettings={editSettings} onClose={() => (dialog = undefined)} />
+<ShellDialogs open={dialog} {ipc} {quit} {remote} onEditSettings={editSettings} onClose={() => (dialog = undefined)} />
 
-{#if files.dialog}
-  <OpDialog
-    request={files.dialog.request}
-    {ipc}
-    onClose={() => files.closeDialog()}
-    onDone={(name) => files.dialogDone(name)}
-    onNotice={(notice) => files.say(notice.text, notice.error)}
-  />
-{/if}
-
-{#if files.tools.dialog}
-  <ToolDialogs
-    {ipc}
-    dialog={files.tools.dialog}
-    {renames}
-    onClose={() => files.closeTool()}
-    onDone={(output) => files.toolDone(output)}
-  />
-{/if}
-
-{#if files.removal}
-  <DeleteDialog
-    permanent={files.removal.permanent}
-    names={files.removal.names}
-    onConfirm={() => files.confirmRemoval()}
-    onClose={() => files.closeRemoval()}
-  />
-{/if}
-
-{#if question}
-  {#key `${question.info.job}:${question.info.question}`}
-    <ConflictDialog {transfers} {question} />
-  {/key}
-{/if}
-
-{#if passwords.prompt}
-  {#key passwords.prompt.archive}
-    <PasswordDialog {passwords} prompt={passwords.prompt} />
-  {/key}
-{/if}
+<FileDialogs {ipc} {files} {transfers} {passwords} {renames} />
 
 {#if viewer.overlay}
   <ViewerOverlay session={viewer.overlay} onClose={() => viewer.close()} />

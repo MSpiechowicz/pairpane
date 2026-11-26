@@ -6,6 +6,7 @@ import type { FindCriteria } from '$lib/ipc/bindings/FindCriteria';
 import type { FindEvent } from '$lib/ipc/bindings/FindEvent';
 import type { FindId } from '$lib/ipc/bindings/FindId';
 import { IpcFailure, type Transport } from '$lib/ipc/transport';
+import { REMOTE_NOTICE } from '$lib/ops/targets';
 import { isTyping } from '$lib/shell/shortcuts';
 
 import type { Listing } from './listing.svelte';
@@ -101,6 +102,10 @@ export class FlatSide {
 
   /** Why a flat view cannot be made of what the pane shows, or `undefined`. */
   #refusal(): string | undefined {
+    if (this.#listing.remote !== undefined) {
+      return REMOTE_NOTICE;
+    }
+
     if (this.#listing.archive !== undefined) {
       return 'A flat view lists a folder on disk: leave the archive first.';
     }

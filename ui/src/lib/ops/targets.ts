@@ -53,6 +53,9 @@ export function chosen(view: PaneView): Entry[] {
   return under === undefined ? [] : [under];
 }
 
+/** What the card says when an action is asked of a pane that shows a folder on a server, or would write into one. */
+export const REMOTE_NOTICE = 'Files on a server can only be browsed for now.';
+
 /** What the card says when an action would change an archive's contents. */
 export const READ_ONLY_NOTICE = 'Archives are read-only here — extract first (F5).';
 
@@ -81,11 +84,16 @@ const FROM_RESULTS: ReadonlySet<FileAction> = new Set(['copy', 'trash', 'deleteP
 const WRITES_TO_OTHER: ReadonlySet<FileAction> = new Set(['copy', 'move', 'symlink', 'hardlink', 'split', 'combine', 'extract']);
 
 /**
- * Why `action` cannot run between these panes, or `undefined` when it can: nothing changes an archive (copying out
- * of one is extracting), and only copying from a folder is written into one, when it is of a kind that can be.
+ * Why `action` cannot run between these panes, or `undefined` when it can: nothing is done on a server (asked first:
+ * a folder there is read-only, which would make copying out of it an extraction), nothing changes an archive (copying
+ * out of one is extracting), and only copying from a folder is written into one, when it is of a kind that can be.
  * Search results are only copied, removed and packed, and nothing is written into them.
  */
 export function refusal(action: FileAction, source: PaneView, other: PaneView): string | undefined {
+  if (source.listing.remote !== undefined || (other.listing.remote !== undefined && WRITES_TO_OTHER.has(action))) {
+    return REMOTE_NOTICE;
+  }
+
   if (source.listing.results !== undefined && !FROM_RESULTS.has(action)) {
     return RESULTS_NOTICE;
   }

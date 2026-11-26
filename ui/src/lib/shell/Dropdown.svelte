@@ -227,6 +227,27 @@
     background: var(--accent);
   }
 
+  /* A button below the list that does something with the menu's subject (a menu's footer). */
+  .menu :global(.action) {
+    width: 100%;
+    height: 28px;
+    margin-top: 4px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    color: var(--dim);
+    text-align: left;
+    transition:
+      color 0.12s,
+      background-color 0.12s;
+  }
+
+  .menu :global(.action:hover:not(:disabled)) {
+    background: var(--panel-2);
+    color: var(--text);
+  }
+
   .option > :global(.dim) {
     color: var(--dim);
   }

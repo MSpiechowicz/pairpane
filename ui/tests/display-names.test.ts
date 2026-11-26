@@ -18,6 +18,7 @@ const ALLOWED: Record<string, string> = {
   'ops/AttributesDialog.svelte: row.label': 'the fixed label of a permission row',
   'ops/OpDialog.svelte: spec.label': 'the fixed name of the field a dialog asks for (`Target folder`)',
   'ops/PasswordDialog.svelte: message': 'one of two fixed sentences',
+  'ops/PasswordDialog.svelte: notice': 'a fixed sentence, or nothing',
   'viewer/HexView.svelte: row.label': 'the offset of a row in hex digits',
   'diff/HexDiffView.svelte: row.label': 'the offset of a row in hex digits',
 };

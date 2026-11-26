@@ -223,12 +223,7 @@ fn open_terminal(shells: &Shells, folder: &Path, place: Permit, ask: impl FnOnce
     // As for the command line: a program typed in the terminal is looked for on the PATH, not in the folder first.
     #[cfg(windows)]
     command.env("NoDefaultCurrentDirectoryInExePath", "1");
-    for (name, value) in shell::appimage_env(std::env::vars_os()) {
-        match value {
-            Some(value) => command.env(name, value),
-            None => command.env_remove(name),
-        };
-    }
+    shell::apply_appimage_env(&mut command);
 
     // A console program started by the app (which has none) gets a console of its own, and its input and output.
     #[cfg(windows)]

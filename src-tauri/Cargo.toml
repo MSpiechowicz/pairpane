@@ -23,6 +23,8 @@ tauri-build.workspace = true
 pairpane_core = { path = "../crates/pairpane_core" }
 # The device link service the Devices screen drives (commands/devices); the async runtime is Tauri's own.
 pairpane_link = { path = "../crates/pairpane_link" }
+# SFTP sites (commands/remote); it owns its own async runtime, and every call blocks.
+pairpane_remote = { path = "../crates/pairpane_remote" }
 tokio.workspace = true
 qrcodegen.workspace = true
 # `generate_context!` embeds the `plugins` section of `tauri.conf.json` as `serde_json` values.
@@ -45,6 +47,8 @@ tracing = { workspace = true, features = ["log"] }
 rustix = { workspace = true, features = ["system"] }
 
 [dev-dependencies]
+# An SSH server in this process for the tests of the remote commands.
+pairpane_remote = { path = "../crates/pairpane_remote", features = ["test-server"] }
 # Pictures to make thumbnails of (tests/thumb_helper.rs), encoded by the same crate that decodes them.
 image.workspace = true
 tempfile.workspace = true

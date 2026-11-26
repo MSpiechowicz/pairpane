@@ -11,6 +11,8 @@ export type CommandId =
   | 'editSettings'
   | 'keyboardShortcuts'
   | 'devices'
+  | 'connectSftp'
+  | 'disconnectSftp'
   | 'checkUpdates'
   | 'quit';
 
@@ -63,6 +65,8 @@ export const COMMANDS: readonly { id: CommandId; label: string }[] = [
   { id: 'editSettings', label: 'Edit settings' },
   { id: 'keyboardShortcuts', label: 'Keyboard shortcuts…' },
   { id: 'devices', label: 'Devices…' },
+  { id: 'connectSftp', label: 'Connect to SFTP server…' },
+  { id: 'disconnectSftp', label: 'Disconnect from the server' },
   { id: 'checkUpdates', label: 'Check for updates' },
   { id: 'quit', label: 'Quit Pairpane' },
 ];

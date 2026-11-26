@@ -24,7 +24,7 @@ parent: string | null,
  */
 crumbs: Array<Crumb>, total: number, 
 /**
- * Where the listing is: a folder on disk, a folder inside an archive, or the results of a search.
+ * Where the listing is: a folder on disk, inside an archive or on a server, or the results of a search.
  */
 location: PaneLocation, 
 /**

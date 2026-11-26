@@ -15,7 +15,8 @@ use tauri_plugin_log::{RotationStrategy, Target, TargetKind, WEBVIEW_TARGET};
 const PAYLOAD_TARGETS: &[&str] = &["tauri::ipc", WEBVIEW_TARGET];
 
 /// Crates under the device link (iroh, its mDNS lookup, and the QUIC, DNS, netlink and async crates it uses) that log
-/// addresses of the user's devices and of the networks they are on, or their own state: nothing of them is logged.
+/// addresses of the user's devices and of the networks they are on, or their own state, and the SSH crates under the
+/// remote sites (they log through `log` and can name hosts, users and key files): nothing of them is logged.
 const NETWORK_TARGETS: &[&str] = &[
     "iroh",
     "iroh_base",
@@ -42,6 +43,10 @@ const NETWORK_TARGETS: &[&str] = &[
     "simple_dns",
     "tokio_websockets",
     "acto",
+    "russh",
+    "russh_sftp",
+    "russh_cryptovec",
+    "pageant",
 ];
 
 /// Crates that the link shares with the updater and that log what a peer on the network sent while it is refused (the
@@ -80,7 +85,9 @@ pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
         .level_for("notify", LevelFilter::Off)
         // The link's own lines are warnings about the service; the network stack under it logs addresses of the user's
         // devices and of the networks they are on (iroh, its mDNS lookup and the QUIC and network crates it uses).
-        .level_for("pairpane_link", LevelFilter::Warn);
+        .level_for("pairpane_link", LevelFilter::Warn)
+        // The same for the remote sites: its warnings are about the service, never about a host.
+        .level_for("pairpane_remote", LevelFilter::Warn);
 
     for target in NETWORK_TARGETS {
         builder = builder.level_for(*target, LevelFilter::Off);
@@ -130,8 +137,10 @@ mod tests {
             "n0_dns_resolver",
             "acto",
         ];
+        // The SSH crates under the remote sites: every crate of their tree that logs (`cargo tree -p pairpane_remote`).
+        let ssh = ["russh", "russh_sftp", "russh_cryptovec", "pageant"];
 
-        for target in required {
+        for target in required.into_iter().chain(ssh) {
             assert!(NETWORK_TARGETS.contains(&target), "{target} is not silenced");
         }
         // Any host on the network can start a QUIC handshake with the link and so make the TLS stack warn.

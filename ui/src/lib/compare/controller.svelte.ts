@@ -4,7 +4,7 @@ import type { Transport } from '$lib/ipc/transport';
 import { isMacPlatform, isWindowsPlatform } from '$lib/panes/keys';
 import type { PaneTabs } from '$lib/panes/tabs.svelte';
 import type { PaneView } from '$lib/panes/view.svelte';
-import { RESULTS_NOTICE } from '$lib/ops/targets';
+import { REMOTE_NOTICE, RESULTS_NOTICE } from '$lib/ops/targets';
 
 import { compareListings, quickSummary } from './quick';
 import { Syncer } from './syncer.svelte';
@@ -12,7 +12,7 @@ import { Syncer } from './syncer.svelte';
 /** The names of a folder fold together (`A.txt` is `a.TXT`) where the filesystem does not tell cases apart. */
 const foldsCase = () => isWindowsPlatform() || isMacPlatform();
 
-/** What a pane shows as one side of a comparison: its folder, or the folder inside its archive; search results are neither. */
+/** What a pane shows as one side of a comparison: its folder, or the folder inside its archive; search results and a server's folder are neither. */
 function rootOf(view: PaneView): CompareRoot | undefined {
   const { archive, path } = view.listing;
   if (archive !== undefined) {
@@ -24,6 +24,10 @@ function rootOf(view: PaneView): CompareRoot | undefined {
 
 /** Why the two panes cannot be compared, or `undefined` when they can. */
 function refusal(left: PaneView, right: PaneView): string | undefined {
+  if (left.listing.remote !== undefined || right.listing.remote !== undefined) {
+    return REMOTE_NOTICE;
+  }
+
   if (left.listing.results !== undefined || right.listing.results !== undefined) {
     return RESULTS_NOTICE;
   }

@@ -1,0 +1,40 @@
+[package]
+name = "pairpane_remote"
+description = "Remote sites for Pairpane: SSH and SFTP browsing, host key checks and the ~/.ssh files (no Tauri dependency)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+# The in-process SSH and SFTP server the tests talk to; also for the app's tests that need a server to connect to.
+test-server = ["dep:tempfile"]
+
+[dependencies]
+base64.workspace = true
+getrandom.workspace = true
+hmac.workspace = true
+pairpane_core = { path = "../pairpane_core" }
+russh.workspace = true
+russh-sftp.workspace = true
+sha1.workspace = true
+tempfile = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["io-util", "net"] }
+tracing.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile.workspace = true
+
+# Key files are opened without waiting (`O_NONBLOCK`), then checked on the open file; in the lockfile already.
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+[target.'cfg(unix)'.dev-dependencies]
+tokio-stream.workspace = true
+
+[lints]
+workspace = true

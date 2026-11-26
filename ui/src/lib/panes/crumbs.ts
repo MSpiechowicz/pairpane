@@ -1,6 +1,8 @@
 import type { Crumb } from '$lib/ipc/bindings/Crumb';
 import type { Volume } from '$lib/ipc/bindings/Volume';
 
+import type { RemotePlace } from './remote';
+
 /** The name of the filesystem root when no volume claims it: "System" for `/`, the drive letter for `C:\`. */
 function rootName(path: string): string {
   const drive = path.replace(/[\\/]+$/, '');
@@ -74,4 +76,9 @@ export function tabLabel(path: string | null, volumes: readonly Volume[]): strin
   }
 
   return parts.at(-1) ?? rootName(path);
+}
+
+/** What a tab that is not the active one shows when it is on a server: its folder's name, or the server's at its root. */
+export function remoteLabel(place: RemotePlace): string {
+  return place.dir.split('/').filter((part) => part !== '').at(-1) ?? place.label;
 }

@@ -28,6 +28,14 @@ impl CommandError {
         Self(IpcError::new(code, message))
     }
 
+    /// An error with `code` whose `message` is shown as it is, `Forbidden` too. Callers must pass only a fixed text that
+    /// holds no path, host, user or secret (the messages of `pairpane_remote`, which the user needs to act on: a host key
+    /// that changed, a sign-in that was not accepted): the message goes to the page and to the log as it is, so a text
+    /// built from anything the user or a server supplied must not come here.
+    pub(crate) fn fixed(code: IpcErrorCode, message: impl Into<String>) -> Self {
+        Self(IpcError::new(code, message))
+    }
+
     /// The error category (what the UI branches on).
     #[cfg(test)]
     pub fn code(&self) -> IpcErrorCode {
@@ -48,6 +56,18 @@ mod tests {
         let value = serde_json::to_value(&error).expect("serializable");
 
         assert_eq!(value, json!({ "code": "notFound", "message": "no update to install" }));
+    }
+
+    #[test]
+    fn a_fixed_forbidden_error_keeps_its_message() {
+        let error = CommandError::fixed(IpcErrorCode::Forbidden, "the server's host key was not trusted");
+
+        let value = serde_json::to_value(&error).expect("serializable");
+
+        assert_eq!(
+            value,
+            json!({ "code": "forbidden", "message": "the server's host key was not trusted" })
+        );
     }
 
     #[test]

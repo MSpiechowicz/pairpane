@@ -9,7 +9,7 @@ import type { ListEvent } from '$lib/ipc/bindings/ListEvent';
 import type { OpsEvent } from '$lib/ipc/bindings/OpsEvent';
 
 import App from '../src/App.svelte';
-import { archiveStart, entry, folderStart } from './panes';
+import { archiveStart, entry, folderStart, remoteStart } from './panes';
 
 export type Answers = Record<string, (args: never) => unknown>;
 
@@ -18,7 +18,7 @@ export function appWorld(invoke: Mock, answers: Answers = {}) {
   const opens: { pane: string; emit: (event: ListEvent) => void }[] = [];
   let ops: (event: OpsEvent) => void = () => {};
   invoke.mockImplementation(async (name: string, args: { pane?: string; onEvent?: never }) => {
-    if (name === 'pane_open' || name === 'archive_open') {
+    if (name === 'pane_open' || name === 'archive_open' || name === 'remote_open') {
       opens.push({ pane: args.pane as string, emit: args.onEvent as never });
     } else if (name === 'ops_subscribe') {
       ops = args.onEvent as never;
@@ -39,6 +39,14 @@ export function appWorld(invoke: Mock, answers: Answers = {}) {
         ],
       }),
     );
+    channel.emit({ kind: 'batch', offset: 0, entries });
+    channel.emit({ kind: 'done', dirs: 0, files: entries.length, bytes: 0, free: null });
+  };
+
+  /** Lists the folder `dir` of the server `site` in a pane (the one whose listing was asked last). */
+  const listRemote = (side: 'left' | 'right', site: number, label: string, dir: string, entries: Entry[]) => {
+    const channel = opens.filter((open) => open.pane === side).at(-1)!;
+    channel.emit(remoteStart(site, label, dir, entries.length));
     channel.emit({ kind: 'batch', offset: 0, entries });
     channel.emit({ kind: 'done', dirs: 0, files: entries.length, bytes: 0, free: null });
   };
@@ -66,6 +74,7 @@ export function appWorld(invoke: Mock, answers: Answers = {}) {
     sent,
     list,
     listIn,
+    listRemote,
     ops: (...events: OpsEvent[]) => events.forEach((event) => ops(event)),
     ready: async () => {
       await vi.waitFor(() => expect(opens.length).toBeGreaterThanOrEqual(2));
