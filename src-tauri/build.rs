@@ -37,6 +37,7 @@ const COMMANDS: &[&str] = &[
     "state_save",
     "ops_subscribe",
     "ops_start",
+    "ops_remote",
     "ops_extract",
     "ops_pack",
     "ops_add_to_archive",

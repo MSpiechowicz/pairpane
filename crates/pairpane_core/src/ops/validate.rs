@@ -5,11 +5,12 @@ use std::collections::HashSet;
 use crate::archive;
 use crate::listing::platform;
 use crate::model::{ArchiveFormat, AttributeChange, EntryKind, ModeChange, OpKind, PackFormat, PaneId, SyncDirection};
+use crate::vfs::is_remote_name;
 
 use super::transfer::MAX_DEPTH;
 use super::{
-    MAX_NAME_UNITS, MAX_NAMES, MAX_NAMES_BYTES, MIN_PART_SIZE, PackJob, Refused, Request, SyncPlan, SyncRemove,
-    SyncRoot, Task,
+    Direction, MAX_NAME_UNITS, MAX_NAMES, MAX_NAMES_BYTES, MIN_PART_SIZE, PackJob, Refused, Request, SyncPlan,
+    SyncRemove, SyncRoot, Task,
 };
 
 /// The Unix permission bits a mask of a mode change may use (with setuid, setgid and sticky).
@@ -103,6 +104,10 @@ pub(super) fn validate(request: &Request) -> Result<(), Refused> {
         if has_nested_names(&request.names) || folded.len() != request.names.len() {
             return Err(Refused::InvalidNames);
         }
+    } else if matches!(&request.task, Task::Remote(job) if job.direction == Direction::Download) {
+        // The names are the server's: its idea of a plain name, not this computer's. A name this computer cannot
+        // use is skipped, and counted, when the job runs.
+        check_names_with(&request.names, is_remote_name)?;
     } else {
         check_names(&request.names)?;
     }
@@ -227,6 +232,8 @@ fn validate_task(request: &Request) -> Result<(), Refused> {
         } => sync_acceptable(left, right, plans, removals, request.names.len()),
         // Only a synchronization that is over is undone, and the names are what its log looks at.
         Task::SyncUndo { log } => log.finished() && log.undoable() == request.names.len(),
+        // Only a download is carried out so far.
+        Task::Remote(job) => job.direction == Direction::Download,
     };
 
     if accepted { Ok(()) } else { Err(Refused::InvalidTask) }

@@ -24,6 +24,11 @@ pub(crate) fn lost() -> io::Error {
     )
 }
 
+/// The caller asked to stop a read that was waiting for the server.
+pub(crate) fn cancelled() -> io::Error {
+    fail(io::ErrorKind::Interrupted, "the read was cancelled")
+}
+
 /// The site was closed, or the service that runs it was shut down.
 pub(crate) fn closed() -> io::Error {
     fail(io::ErrorKind::NotConnected, "the connection is closed")

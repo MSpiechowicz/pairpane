@@ -64,6 +64,10 @@ export function specOf(request: OpRequest): Spec {
       const verb = request.kind === 'copy' ? 'Copy' : 'Move';
       return { title: `${verb} ${what(request.names)} to`, confirm: verb, label: 'Target folder', initial: request.to, verify: true };
     }
+    case 'remote': {
+      const verb = request.move ? 'Move' : 'Copy';
+      return { title: `${verb} ${what(request.names)} to`, confirm: verb, label: 'Target folder', initial: request.shown, verify: true, fixed: true };
+    }
     case 'add':
       return {
         title: `Copy ${what(request.names)} to`,
@@ -173,6 +177,15 @@ export async function perform(ipc: Transport, request: OpRequest, value: string,
       for (const { folder, names, within } of folders(request)) {
         await ipc.invoke('ops_start', { kind: request.kind, from: folder, names, to: value, verify, within });
       }
+      return { name: value };
+    case 'remote':
+      await ipc.invoke('ops_remote', {
+        kind: request.move ? 'move' : 'copy',
+        from: request.from,
+        to: request.to,
+        names: request.names,
+        verify,
+      });
       return { name: value };
     case 'add':
       await ipc.invoke('ops_add_to_archive', { archive: request.archive, dir: request.dir, from: request.from, names: request.names });

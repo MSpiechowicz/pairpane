@@ -10,6 +10,7 @@ use crate::model::{
     AttributeChange, HashAlgorithm, IpcError, IpcErrorCode, OpKind, PackFormat, PackLevel, PaneId, SyncDirection,
     SyncFacts,
 };
+use crate::vfs::{RemoteFs, RemotePath};
 
 use super::{ArchiveJob, RenameLog, SyncLog};
 
@@ -81,6 +82,48 @@ pub enum Task {
     /// Puts back what the synchronization `log` describes (see `sync_undo`). The names are the paths it looks at, as
     /// [`SyncLog::names`] gives them; `from` and `to` are a folder the synchronization wrote to.
     SyncUndo { log: SyncLog },
+    /// A copy or a move between a server and a folder on this computer, the kind [`Request::kind`] names (see
+    /// [`RemoteJob`]).
+    Remote(RemoteJob),
+}
+
+/// Which way the items of a [`Task::Remote`] go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// From the server's folder to the request's `to` on this computer.
+    Download,
+    /// From the request's `from` on this computer to the server's folder. `submit` refuses it for now.
+    Upload,
+}
+
+/// The server side of a copy or a move between a server and this computer. The request's `from` (a download) holds no
+/// path: the folder the items are in is `dir`, on the server `fs` talks to, and `names` are plain names inside it.
+///
+/// Equal when the direction and the folder are, and the server is the same one (by identity). `Debug` says the site, the
+/// folder and the direction.
+#[derive(Clone)]
+pub struct RemoteJob {
+    pub direction: Direction,
+    pub fs: Arc<dyn RemoteFs>,
+    pub dir: RemotePath,
+}
+
+impl PartialEq for RemoteJob {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.fs, &other.fs) && self.direction == other.direction && self.dir == other.dir
+    }
+}
+
+impl Eq for RemoteJob {}
+
+impl fmt::Debug for RemoteJob {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        out.debug_struct("RemoteJob")
+            .field("direction", &self.direction)
+            .field("site", &self.fs.site())
+            .field("dir", &self.dir)
+            .finish()
+    }
 }
 
 /// One side of a synchronization.
@@ -162,7 +205,16 @@ impl fmt::Debug for PackJob {
 }
 
 impl Task {
-    /// The kind of job of this task; `None` for [`Task::Transfer`], which is a copy or a move by [`Request::kind`].
+    /// The server side of a [`Task::Remote`]; `None` for every other task.
+    #[must_use]
+    pub fn remote(&self) -> Option<&RemoteJob> {
+        match self {
+            Self::Remote(job) => Some(job),
+            _ => None,
+        }
+    }
+
+    /// The kind of job of this task; `None` for [`Task::Transfer`] and [`Task::Remote`], which are a copy or a move by [`Request::kind`].
     #[must_use]
     pub fn kind(&self) -> Option<OpKind> {
         match self {
@@ -178,6 +230,7 @@ impl Task {
             Self::Rename { .. } => Some(OpKind::Rename),
             Self::Sync { .. } => Some(OpKind::Sync),
             Self::SyncUndo { .. } => Some(OpKind::SyncUndo),
+            Self::Remote(_) => None,
         }
     }
 }
@@ -186,7 +239,7 @@ impl Task {
 /// (`check_folder` for the folders, `is_plain_name` for every name, `is_item_path` for those of a pack); the engine resolves them on its worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
-    /// Copy or move for a [`Task::Transfer`]; the kind of the task otherwise (`submit` refuses a mismatch).
+    /// Copy or move for a [`Task::Transfer`] or [`Task::Remote`]; the kind of the task otherwise (`submit` refuses a mismatch).
     pub kind: OpKind,
     /// The folder the items are in.
     pub from: PathBuf,
@@ -213,6 +266,32 @@ impl Request {
             to,
             verify: false,
             task,
+        }
+    }
+
+    /// A download of the `names` of the server folder `from` into the folder `to` of this computer: a copy, or a move
+    /// (`kind`: [`OpKind::Copy`] or [`OpKind::Move`], which `submit` checks) that removes each item from the server once
+    /// it is in place. The request's own `from` is empty.
+    #[must_use]
+    pub fn download(
+        kind: OpKind,
+        fs: Arc<dyn RemoteFs>,
+        from: RemotePath,
+        names: Vec<String>,
+        to: PathBuf,
+        verify: bool,
+    ) -> Self {
+        Self {
+            kind,
+            from: PathBuf::new(),
+            names,
+            to,
+            verify,
+            task: Task::Remote(RemoteJob {
+                direction: Direction::Download,
+                fs,
+                dir: from,
+            }),
         }
     }
 }

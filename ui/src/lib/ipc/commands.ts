@@ -52,6 +52,7 @@ import type { SyncItem } from './bindings/SyncItem';
 import type { SyncRemoval } from './bindings/SyncRemoval';
 import type { TextQuery } from './bindings/TextQuery';
 import type { TextWindow } from './bindings/TextWindow';
+import type { TransferPlace } from './bindings/TransferPlace';
 import type { TrashOutcome } from './bindings/TrashOutcome';
 import type { UpdateInfo } from './bindings/UpdateInfo';
 import type { UpdateProgress } from './bindings/UpdateProgress';
@@ -112,6 +113,7 @@ export const commands = {
   volumes_list: cmd<{ onEvent: EventSink<VolumeEvent> }, null>(),
   ops_subscribe: cmd<{ onEvent: EventSink<OpsEvent> }, null>(),
   ops_start: cmd<{ kind: OpKind; from: string; names: string[]; to: string; verify: boolean; within?: ResultFolder }, JobId>(),
+  ops_remote: cmd<{ kind: OpKind; from: TransferPlace; to: TransferPlace; names: string[]; verify: boolean }, JobId>(),
   ops_extract: cmd<{ archive: string; dir: string; names: string[]; to: string }, JobId>(),
   ops_task: cmd<{ from: string; names: string[]; task: JobTask }, JobId>(),
   ops_pack: cmd<

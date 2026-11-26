@@ -60,7 +60,7 @@ impl Run<'_> {
     }
 
     /// The BLAKE3 hash of `file`, read from its start, stopping between chunks for a pause or a cancel.
-    fn hash(&mut self, file: &mut File) -> Result<blake3::Hash, Stop> {
+    pub(super) fn hash(&mut self, file: &mut File) -> Result<blake3::Hash, Stop> {
         file.rewind()?;
 
         let mut hasher = blake3::Hasher::new();

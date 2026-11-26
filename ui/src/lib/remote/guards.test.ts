@@ -32,13 +32,23 @@ describe('what a pane on a server refuses', () => {
     const { panes, backend, untouched } = await world();
     const files = new FileActions(backend.ipc, panes, () => 'left');
 
-    files.run('copy');
+    files.run('newFolder');
     files.run('trash');
     files.run('renameInline');
 
     expect(files.toast).toMatchObject({ text: REMOTE_NOTICE, error: true });
     expect([files.dialog, files.removal, files.tools.dialog, files.rename.current]).toEqual([undefined, undefined, undefined, undefined]);
     expect(untouched()).toBe(true);
+  });
+
+  it('copying out of it opens a dialog for the job, with no card', async () => {
+    const { panes, backend } = await world();
+    const files = new FileActions(backend.ipc, panes, () => 'left');
+
+    files.run('copy');
+
+    expect(files.toast).toBeUndefined();
+    expect(files.dialog?.request).toMatchObject({ kind: 'remote', move: false, names: ['a.txt'], shown: '/work' });
   });
 
   it('F4, with the same card', async () => {

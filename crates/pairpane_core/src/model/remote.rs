@@ -84,6 +84,27 @@ pub struct SshHost {
     pub port: Option<u16>,
 }
 
+/// One end of a transfer between a folder on this computer and one on a server, as the page names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[ts(export)]
+pub enum TransferPlace {
+    /// A folder on disk, absolute.
+    Folder { path: String },
+    /// A folder on a server: `dir` is an absolute path there.
+    Remote { site: SiteId, dir: String },
+}
+
+/// The server side of a transfer job, as the Transfers panel shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct JobRemote {
+    pub site: SiteId,
+    /// The folder on the server the items come from, or go into: an absolute path there.
+    pub dir: String,
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -177,6 +198,44 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn transfer_place_is_tagged_by_kind() {
+        let folder = TransferPlace::Folder {
+            path: "/home/me".to_owned(),
+        };
+        let remote = TransferPlace::Remote {
+            site: SiteId(4),
+            dir: "/srv/data".to_owned(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&folder).expect("serializable"),
+            json!({ "kind": "folder", "path": "/home/me" })
+        );
+        assert_eq!(
+            serde_json::to_value(&remote).expect("serializable"),
+            json!({ "kind": "remote", "site": 4, "dir": "/srv/data" })
+        );
+        assert_eq!(
+            serde_json::from_value::<TransferPlace>(json!({ "kind": "remote", "site": 4, "dir": "/srv/data" }))
+                .expect("deserializable"),
+            remote
+        );
+    }
+
+    #[test]
+    fn job_remote_serializes_in_camel_case() {
+        let remote = JobRemote {
+            site: SiteId(2),
+            dir: "/srv".to_owned(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&remote).expect("serializable"),
+            json!({ "site": 2, "dir": "/srv" })
+        );
     }
 
     #[test]

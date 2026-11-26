@@ -1,4 +1,5 @@
-//! [`RemoteFs`] over a site's SFTP channel: the calls a pane's listing makes, each with its own time limit.
+//! [`RemoteFs`] over a site's SFTP channel: the calls a pane's listing and a download make, each with its own time limit.
+//! What reads a file is in [`SftpReader`](crate::sftp_files::SftpReader).
 
 use std::future::Future;
 use std::io;
@@ -6,15 +7,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pairpane_core::model::SiteId;
-use pairpane_core::vfs::{RemoteEntry, RemoteFs, RemoteKind, RemoteMeta, RemotePath};
+use pairpane_core::vfs::{RemoteEntry, RemoteFs, RemoteKind, RemoteMeta, RemotePath, RemoteReader};
 use russh_sftp::client::RawSftpSession;
 use russh_sftp::client::error::Error as SftpError;
-use russh_sftp::protocol::FileAttributes;
+use russh_sftp::protocol::{FileAttributes, OpenFlags};
 
 use crate::error::{fail, from_sftp};
 use crate::link::Link;
 use crate::names::{Collected, MAX_NAME_BYTES};
 use crate::runtime::{call, limited};
+use crate::sftp_files::SftpReader;
 use crate::site::Site;
 
 /// The most entries one listing returns; a server that sends more is refused rather than held in memory.
@@ -26,7 +28,7 @@ const TYPE_FILE: u32 = 0o100_000;
 const TYPE_LINK: u32 = 0o120_000;
 const PERMISSIONS: u32 = 0o7777;
 
-/// The browsing calls of one site. Blocking, and safe to call from several threads.
+/// The browsing and downloading calls of one site. Blocking, and safe to call from several threads.
 pub(crate) struct SftpFs {
     site: Arc<Site>,
 }
@@ -38,7 +40,7 @@ impl SftpFs {
 
     /// Runs `op` on the site's connection. When the connection turns out to be gone, it is opened again and `op` runs
     /// once more on the new one.
-    fn run<T>(&self, mut op: impl FnMut(&Link) -> io::Result<T>) -> io::Result<T> {
+    fn run<T>(&self, mut op: impl FnMut(&Arc<Link>) -> io::Result<T>) -> io::Result<T> {
         let _lease = self.site.lease();
         let link = self.link()?;
 
@@ -52,6 +54,24 @@ impl SftpFs {
             }
             result => result,
         }
+    }
+
+    /// Runs `op` on the site's connection, once: a call that changes the server is never repeated on a new connection,
+    /// because after a lost one nobody can tell whether it took effect. A connection found gone is forgotten, so that
+    /// the next call opens a new one.
+    fn run_once<T>(&self, op: impl FnOnce(&Link) -> io::Result<T>) -> io::Result<T> {
+        let _lease = self.site.lease();
+        let link = self.link()?;
+        let result = op(&link);
+
+        if result
+            .as_ref()
+            .is_err_and(|error| error.kind() == io::ErrorKind::ConnectionAborted)
+        {
+            self.site.forget(&link);
+        }
+
+        result
     }
 
     fn link(&self) -> io::Result<Arc<Link>> {
@@ -72,6 +92,26 @@ impl SftpFs {
 
         call(&self.site.runtime, async move {
             limited(limit, async { op(sftp).await.map_err(from_sftp) }).await
+        })
+    }
+
+    /// The attributes of `path` (of what a link points to, unless `itself`), `None` when there is no such file.
+    fn attributes(&self, path: &RemotePath, itself: bool) -> io::Result<Option<RemoteMeta>> {
+        self.run(|link| {
+            let path = path.as_str().to_owned();
+            let asked = self.request(link, move |sftp| async move {
+                if itself {
+                    sftp.lstat(path).await
+                } else {
+                    sftp.stat(path).await
+                }
+            });
+
+            match asked {
+                Ok(attributes) => Ok(Some(meta_of(&attributes.attrs))),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+                Err(error) => Err(error),
+            }
         })
     }
 
@@ -140,14 +180,55 @@ impl RemoteFs for SftpFs {
     }
 
     fn stat(&self, path: &RemotePath) -> io::Result<Option<RemoteMeta>> {
+        self.attributes(path, false)
+    }
+
+    fn lstat(&self, path: &RemotePath) -> io::Result<Option<RemoteMeta>> {
+        self.attributes(path, true)
+    }
+
+    fn realpath(&self, path: &RemotePath) -> io::Result<RemotePath> {
         self.run(|link| {
             let path = path.as_str().to_owned();
+            let name = self.request(link, move |sftp| async move { sftp.realpath(path).await })?;
+            let unexpected = || fail(io::ErrorKind::InvalidData, "the server sent something unexpected");
 
-            match self.request(link, move |sftp| async move { sftp.stat(path).await }) {
-                Ok(attributes) => Ok(Some(meta_of(&attributes.attrs))),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-                Err(error) => Err(error),
-            }
+            let file = name.files.into_iter().next().ok_or_else(unexpected)?;
+
+            RemotePath::new(&file.filename).map_err(|_| unexpected())
+        })
+    }
+
+    fn open_read(&self, path: &RemotePath) -> io::Result<Box<dyn RemoteReader>> {
+        // Taken first: from here on the connection is not closed for being idle, whatever the reader's life is like.
+        let lease = self.site.lease_owned();
+        let (link, handle) = self.run(|link| {
+            let path = path.as_str().to_owned();
+            let opened = self.request(link, move |sftp| async move {
+                sftp.open(path, OpenFlags::READ, FileAttributes::default()).await
+            })?;
+
+            Ok((Arc::clone(link), opened.handle))
+        })?;
+
+        Ok(Box::new(SftpReader::new(link, Arc::clone(&self.site), handle, lease)))
+    }
+
+    fn remove_file(&self, path: &RemotePath) -> io::Result<()> {
+        self.run_once(|link| {
+            let path = path.as_str().to_owned();
+
+            self.request(link, move |sftp| async move { sftp.remove(path).await })
+                .map(|_| ())
+        })
+    }
+
+    fn remove_dir(&self, path: &RemotePath) -> io::Result<()> {
+        self.run_once(|link| {
+            let path = path.as_str().to_owned();
+
+            self.request(link, move |sftp| async move { sftp.rmdir(path).await })
+                .map(|_| ())
         })
     }
 
@@ -167,7 +248,7 @@ impl RemoteFs for SftpFs {
 }
 
 /// What the server's attributes say, as the listing wants it. The type is in the mode's upper bits.
-fn meta_of(attributes: &FileAttributes) -> RemoteMeta {
+pub(crate) fn meta_of(attributes: &FileAttributes) -> RemoteMeta {
     let kind = match attributes.permissions.map(|mode| mode & TYPE_MASK) {
         Some(TYPE_DIR) => RemoteKind::Dir,
         Some(TYPE_FILE) => RemoteKind::File,

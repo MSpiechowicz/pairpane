@@ -22,7 +22,9 @@ use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::{RemoteEntry, RemoteFs, RemoteKind, RemoteMeta, RemotePath, VfsFolder, send_listing, sorted};
+use super::{
+    RemoteEntry, RemoteFs, RemoteKind, RemoteMeta, RemotePath, VfsFolder, is_remote_name, send_listing, sorted,
+};
 use crate::listing::{Outcome, count};
 use crate::model::{Crumb, Entry, EntryKind, ListEvent, PaneCapabilities, PaneLocation};
 
@@ -77,7 +79,7 @@ impl RemoteFolder {
 
         for item in listed {
             let hidden = item.name.starts_with('.');
-            if !is_plain(&item.name) || (hidden && !show_hidden) {
+            if !is_remote_name(&item.name) || (hidden && !show_hidden) {
                 continue;
             }
 
@@ -155,12 +157,6 @@ impl VfsFolder for RemoteFolder {
 
         Ok(send_listing(start, &entries, cancel, emit))
     }
-}
-
-/// A name a pane can show and open: a server may send `.` and `..` and, if it is faulty or hostile, a name with a path
-/// in it.
-fn is_plain(name: &str) -> bool {
-    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\0'])
 }
 
 /// One entry as a pane shows it. A folder has no size; a read-only entry is one the owner may not write.

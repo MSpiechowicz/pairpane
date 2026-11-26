@@ -19,6 +19,23 @@ use super::{Task, name_fits};
 /// Bytes moved between two checkpoints.
 const CHUNK: usize = 1024 * 1024;
 
+/// What sees the bytes a [`Run::pump`] moves: a checksum of them.
+pub(super) trait Tally {
+    fn tally(&mut self, bytes: &[u8]);
+}
+
+impl Tally for crc32fast::Hasher {
+    fn tally(&mut self, bytes: &[u8]) {
+        self.update(bytes);
+    }
+}
+
+impl Tally for blake3::Hasher {
+    fn tally(&mut self, bytes: &[u8]) {
+        self.update(bytes);
+    }
+}
+
 /// What a tool job works on: the folder the items are in, the folder it writes into (the same one for a tool that
 /// works in place), and the items that are there.
 pub(super) struct Scene {
@@ -32,6 +49,10 @@ impl Run<'_> {
     pub(super) fn run_task(&mut self, task: &Task) -> Result<(), Stop> {
         self.checkpoint()?;
         self.phase(JobPhase::Preparing);
+
+        if let Task::Remote(job) = task {
+            return self.remote(job);
+        }
 
         if let Task::Extract { inner, entries, source } = task {
             return self.extract(inner, entries, source);
@@ -89,7 +110,8 @@ impl Run<'_> {
             | Task::AddToArchive { .. }
             | Task::Rename { .. }
             | Task::Sync { .. }
-            | Task::SyncUndo { .. } => {
+            | Task::SyncUndo { .. }
+            | Task::Remote(_) => {
                 Err(refusal(io::ErrorKind::InvalidInput, "this job cannot start with these items").into())
             }
         }
@@ -135,15 +157,15 @@ impl Run<'_> {
         Ok(to)
     }
 
-    /// Moves up to `limit` bytes from `from` to `to`, counting them in `crc` and in the job's progress, and stopping
+    /// Moves up to `limit` bytes from `from` to `to`, counting them in `seen` and in the job's progress, and stopping
     /// between chunks for a pause or a cancel. Returns how many bytes there were: fewer than `limit` at the end of
     /// `from`.
     pub(super) fn pump(
         &mut self,
         from: &mut (impl Read + ?Sized),
-        to: &mut File,
+        to: &mut (impl Write + ?Sized),
         limit: u64,
-        crc: &mut crc32fast::Hasher,
+        seen: &mut impl Tally,
     ) -> Result<u64, Stop> {
         let mut buffer = std::mem::take(&mut self.buffer);
         buffer.resize(CHUNK, 0);
@@ -160,7 +182,7 @@ impl Run<'_> {
                 Err(error) => return Err(error.into()),
             };
 
-            crc.update(&buffer[..read]);
+            seen.tally(&buffer[..read]);
             to.write_all(&buffer[..read])?;
             done += read as u64;
             self.add_bytes(read as u64);

@@ -39,6 +39,7 @@ mod regular;
 mod resolve;
 mod runtime;
 mod sftp;
+mod sftp_files;
 mod site;
 mod suggestions;
 mod terms;

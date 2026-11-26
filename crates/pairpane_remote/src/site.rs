@@ -249,6 +249,19 @@ impl Site {
         Lease(self)
     }
 
+    /// [`lease`](Self::lease) that owns the site, for what outlives a call: an open file keeps its connection (and so
+    /// the server's handle) from being closed for being idle, even while the transfer that reads it is paused.
+    pub(crate) fn lease_owned(self: &Arc<Self>) -> OwnedLease {
+        self.busy.fetch_add(1, Ordering::AcqRel);
+
+        OwnedLease(Arc::clone(self))
+    }
+
+    fn release(&self) {
+        *self.idle_since.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Instant::now();
+        self.busy.fetch_sub(1, Ordering::AcqRel);
+    }
+
     /// Closes the connection when the site has not been used for `idle`; it opens again when used.
     pub(crate) async fn close_if_idle(&self, idle: Duration) {
         let unused = self.busy.load(Ordering::Acquire) == 0
@@ -310,11 +323,15 @@ pub(crate) struct Lease<'a>(&'a Site);
 
 impl Drop for Lease<'_> {
     fn drop(&mut self) {
-        *self
-            .0
-            .idle_since
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Instant::now();
-        self.0.busy.fetch_sub(1, Ordering::AcqRel);
+        self.0.release();
+    }
+}
+
+/// [`Lease`] that owns the site (see [`Site::lease_owned`]).
+pub(crate) struct OwnedLease(Arc<Site>);
+
+impl Drop for OwnedLease {
+    fn drop(&mut self) {
+        self.0.release();
     }
 }

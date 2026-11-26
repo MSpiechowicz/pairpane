@@ -8,12 +8,12 @@ use std::future::Future;
 use std::io;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use tokio::runtime::{Builder, Handle, Runtime};
 
-use crate::error::{closed, fail, timed_out};
+use crate::error::{cancelled, closed, fail, timed_out};
 
 /// Worker threads of the runtime: the connections' I/O only; nothing here is CPU bound.
 const WORKERS: usize = 2;
@@ -21,7 +21,7 @@ const WORKERS: usize = 2;
 /// The threads that run a prompt or a file write for a connection (`spawn_blocking`).
 const BLOCKING_THREADS: usize = 4;
 
-/// How often [`within`] looks at the clock.
+/// How often [`within`] looks at the clock, and [`call_until`] at its flag.
 const TICK: Duration = Duration::from_millis(50);
 
 /// The runtime of a [`Pool`](crate::Pool); closed by [`shut_down`](Self::shut_down) or when dropped.
@@ -81,6 +81,34 @@ where
     T: Send + 'static,
     F: Future<Output = io::Result<T>> + Send + 'static,
 {
+    start(handle, work).recv().unwrap_or_else(|_| Err(closed()))
+}
+
+/// [`call`], which also ends, with `Interrupted`, within [`TICK`] of `cancel` being set. The future is not stopped: it
+/// runs to its own limit and its result is dropped, so what it started on the server may still finish.
+pub(crate) fn call_until<T, F>(handle: &Handle, work: F, cancel: &AtomicBool) -> io::Result<T>
+where
+    T: Send + 'static,
+    F: Future<Output = io::Result<T>> + Send + 'static,
+{
+    let receive = start(handle, work);
+
+    loop {
+        match receive.recv_timeout(TICK) {
+            Ok(result) => return result,
+            Err(RecvTimeoutError::Disconnected) => return Err(closed()),
+            Err(RecvTimeoutError::Timeout) if cancel.load(Ordering::Acquire) => return Err(cancelled()),
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+    }
+}
+
+/// Starts `work` on the runtime; its result comes on the channel.
+fn start<T, F>(handle: &Handle, work: F) -> Receiver<io::Result<T>>
+where
+    T: Send + 'static,
+    F: Future<Output = io::Result<T>> + Send + 'static,
+{
     let (send, receive) = mpsc::sync_channel(1);
 
     handle.spawn(async move {
@@ -88,7 +116,7 @@ where
         let _ = send.send(work.await);
     });
 
-    receive.recv().unwrap_or_else(|_| Err(closed()))
+    receive
 }
 
 /// `work` with a limit of `limit`; `TimedOut` when it takes longer.

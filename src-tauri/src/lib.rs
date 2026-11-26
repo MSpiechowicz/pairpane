@@ -160,6 +160,7 @@ pub fn run() -> ExitCode {
             commands::state::state_save,
             commands::ops::ops_subscribe,
             commands::ops::ops_start,
+            commands::ops::remote::ops_remote,
             commands::ops::extract::ops_extract,
             commands::ops::pack::ops_pack,
             commands::ops::add::ops_add_to_archive,
