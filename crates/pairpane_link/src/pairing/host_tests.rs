@@ -122,7 +122,8 @@ fn cancelling_ends_the_code_and_an_attempt_that_runs() {
     host.begin().unwrap();
     let running = host.start_attempt().unwrap();
 
-    host.cancel();
+    assert!(host.cancel());
+    assert!(!host.cancel());
 
     assert_eq!(host.state(), PairingState::Idle);
     assert!(!running.succeed());

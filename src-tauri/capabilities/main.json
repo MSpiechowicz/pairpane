@@ -5,6 +5,7 @@
   "windows": ["main"],
   "permissions": [
     "allow-app-info",
+    "allow-app-quit",
     "allow-update-check",
     "allow-update-install",
     "allow-app-relaunch",
@@ -70,6 +71,14 @@
     "allow-settings-editor",
     "allow-editor-set-dirty",
     "allow-editor-close-ack",
-    "allow-app-close-confirmed"
+    "allow-app-close-confirmed",
+    "allow-devices-open",
+    "allow-devices-pair-begin",
+    "allow-devices-pair-cancel",
+    "allow-devices-join",
+    "allow-devices-discovered",
+    "allow-devices-status",
+    "allow-devices-rename",
+    "allow-devices-unpair"
   ]
 }

@@ -17,7 +17,7 @@ export interface PaletteSources {
 }
 
 /** The most rows the palette shows for what is typed. */
-export const MOST_SHOWN = 50;
+export const MOST_SHOWN = 60;
 
 /** How many recent folders show while nothing is typed. */
 const RECENT_SHOWN = 8;

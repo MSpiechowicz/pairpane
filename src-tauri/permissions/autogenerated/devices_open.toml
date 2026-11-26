@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-devices-open"
+description = "Enables the devices_open command without any pre-configured scope."
+commands.allow = ["devices_open"]
+
+[[permission]]
+identifier = "deny-devices-open"
+description = "Denies the devices_open command without any pre-configured scope."
+commands.deny = ["devices_open"]

@@ -6,6 +6,7 @@
 
   import FilesMenu from './FilesMenu.svelte';
   import type { FilesChoice } from './menu';
+  import type { ShellDialog } from './dialogs';
   import { keymap } from './keymap.svelte';
   import type { Theme } from './theme.svelte';
   import ViewMenu from './ViewMenu.svelte';
@@ -19,9 +20,9 @@
     layout,
     onLayout,
     onCheckForUpdates,
-    onSettings,
+    onDialog,
     onEditSettings,
-    onKeyboardShortcuts,
+    onQuit,
     onToggleHidden,
     onFiles,
     onFind,
@@ -40,12 +41,12 @@
     /** An item of the View menu was chosen; it does what its key does. */
     onLayout: (layout: Layout) => void;
     onCheckForUpdates: () => void;
-    /** "Settings…": the settings dialog (the palette opens it too). */
-    onSettings: () => void;
+    /** "Settings…", "Keyboard Shortcuts…" and "Devices…": the dialog that opens (the palette opens them too). */
+    onDialog: (dialog: ShellDialog) => void;
     /** "Edit Settings…": the settings file opens in the system's editor for it. */
     onEditSettings: () => void;
-    /** "Keyboard Shortcuts…": the dialog that changes the keys (the palette opens it too). */
-    onKeyboardShortcuts: () => void;
+    /** "Quit Pairpane": the app stops, even when it would stay in the tray (the palette quits it too). */
+    onQuit: () => void;
     onToggleHidden: () => void;
     /** An item of the Files menu was chosen; it does what its key does. */
     onFiles: (action: FilesChoice) => void;
@@ -76,6 +77,16 @@
   function editSettings() {
     open = undefined;
     onEditSettings();
+  }
+
+  function chooseDialog(dialog: ShellDialog) {
+    open = undefined;
+    onDialog(dialog);
+  }
+
+  function quit() {
+    open = undefined;
+    onQuit();
   }
 
   function chooseFile(action: FilesChoice) {
@@ -127,12 +138,14 @@
 
 {#snippet settings()}
   <div class="popup" role="menu">
-    <button class="popup-item" type="button" role="menuitem" onclick={() => ((open = undefined), onSettings())}>Settings…</button>
+    <button class="popup-item" type="button" role="menuitem" onclick={() => chooseDialog('settings')}>Settings…</button>
     <button class="popup-item" type="button" role="menuitem" onclick={editSettings}>Edit Settings…</button>
-    <button class="popup-item" type="button" role="menuitem" onclick={() => ((open = undefined), onKeyboardShortcuts())}>Keyboard Shortcuts…</button>
+    <button class="popup-item" type="button" role="menuitem" onclick={() => chooseDialog('keys')}>Keyboard Shortcuts…</button>
+    <button class="popup-item" type="button" role="menuitem" onclick={() => chooseDialog('devices')}>Devices…</button>
     {#if !nativeMenu}
       <button class="popup-item" type="button" role="menuitem" onclick={checkForUpdates}>Check for Updates…</button>
     {/if}
+    <button class="popup-item" type="button" role="menuitem" onclick={quit}>Quit Pairpane</button>
   </div>
 {/snippet}
 

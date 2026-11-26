@@ -158,13 +158,15 @@ impl PairingHost {
         })
     }
 
-    /// Cancels the active code, if there is one.
-    pub fn cancel(&self) {
+    /// Cancels the active code, if there is one; `true` when there was (and the observer is told).
+    pub fn cancel(&self) -> bool {
         let _order = self.ordered();
         let ended = self.lock().active.take().is_some();
         if ended {
             self.notify(Change::Ended(PairingEndReason::Cancelled));
         }
+
+        ended
     }
 
     /// Ends the active code if its time has run out; the observer is told. A timer calls this when the code is due.

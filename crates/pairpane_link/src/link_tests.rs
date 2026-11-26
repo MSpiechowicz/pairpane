@@ -238,7 +238,8 @@ async fn a_cancelled_code_and_a_host_that_never_showed_one_refuse_pairing() {
 
     let never = joiner.link.join("7K2M-9QXZ", &host.target()).await;
     let offer = host.link.begin_pairing().unwrap();
-    host.link.cancel_pairing().unwrap();
+    assert!(host.link.cancel_pairing().unwrap());
+    assert!(!host.link.cancel_pairing().unwrap());
     let cancelled = joiner.link.join(&offer.code, &host.target()).await;
 
     assert!(matches!(never, Err(Error::PairingRejected)), "{never:?}");
