@@ -82,6 +82,9 @@ pub(super) struct Hooks {
     /// What a download of items on a server may hold at once: entries of the folders being walked, bytes of their names,
     /// and entries listed over the whole scan; in place of the limits of the engine.
     pub(super) walk_limits: Option<(usize, usize, usize)>,
+    /// How long a download that is cancelled goes on checking the folder of an item it just removed from a server, in place
+    /// of the engine's.
+    pub(super) check_grace: Option<Duration>,
     /// A download names what it writes in lower case, as a disk that does not tell `A` from `a` does: two items on a
     /// server that differ only by case then meet at one name.
     pub(super) fold_names: bool,

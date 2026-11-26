@@ -7,17 +7,21 @@ use std::fs;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use pretty_assertions::assert_eq;
 
-use crate::model::{OpKind, Outcome, SiteId};
+use crate::model::{ControlAction, OpKind, Outcome, SiteId};
 use crate::vfs::{RemoteEntry, RemoteFs, RemoteMeta, RemotePath, RemoteReader};
 
 use super::super::Request;
-use super::super::testing::{Rig, long_ago, read, set_times, temp, tree};
+use super::super::testing::{Ended, Rig, long_ago, read, set_times, temp, tree};
 use super::down_chain_tests::{cancelled_at, gate};
 use super::down_swap_tests::{swap_for_victim, with_victim};
 use super::testing::{FOLDER_CHANGED, Fake, REMOVED_ELSEWHERE, download, failure, said};
+
+const UNCHECKED: &str = "It was removed, but the folder it was in could not be checked afterwards: the job was cancelled and the server did not answer in time";
 
 const NOT_SAID: &str =
     "this server does not say where a linked folder really is, so its items cannot be moved through a link";
@@ -115,13 +119,45 @@ fn a_cancel_right_after_a_removal_that_went_to_another_folder_still_reports_it()
     assert_eq!(said(&ended), [REMOVED_ELSEWHERE]);
 }
 
-/// A server that answers the first `honest` batches of looks as it should, and every one after with no answer at all.
-struct Short {
+/// What a server answers to a batch of looks.
+type Looks = Box<dyn Fn(&Fake, &[RemotePath], &AtomicBool) -> Vec<io::Result<Option<RemoteMeta>>> + Send + Sync>;
+
+/// A server whose batches of looks are answered by `looks`; all else is the answer of `inner`.
+struct Meddled {
     inner: Arc<Fake>,
-    honest: AtomicUsize,
+    looks: Looks,
 }
 
-impl RemoteFs for Short {
+impl Meddled {
+    /// Answers the first `honest` batches of looks as it should, and every one after with no answer at all.
+    fn short(inner: &Arc<Fake>, honest: usize) -> Arc<Self> {
+        let honest = AtomicUsize::new(honest);
+
+        Self::new(inner, move |fake, paths, cancel| {
+            let honest = honest
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(1))
+                .is_ok();
+
+            if honest {
+                fake.lstat_many(paths, cancel)
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
+    fn new(
+        inner: &Arc<Fake>,
+        looks: impl Fn(&Fake, &[RemotePath], &AtomicBool) -> Vec<io::Result<Option<RemoteMeta>>> + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            inner: Arc::clone(inner),
+            looks: Box::new(looks),
+        })
+    }
+}
+
+impl RemoteFs for Meddled {
     fn site(&self) -> SiteId {
         self.inner.site()
     }
@@ -147,16 +183,7 @@ impl RemoteFs for Short {
     }
 
     fn lstat_many(&self, paths: &[RemotePath], cancel: &AtomicBool) -> Vec<io::Result<Option<RemoteMeta>>> {
-        let honest = self
-            .honest
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(1))
-            .is_ok();
-
-        if honest {
-            self.inner.lstat_many(paths, cancel)
-        } else {
-            Vec::new()
-        }
+        (self.looks)(&self.inner, paths, cancel)
     }
 
     fn realpath(&self, path: &RemotePath) -> io::Result<RemotePath> {
@@ -178,7 +205,7 @@ impl RemoteFs for Short {
 
 /// Moves `s.txt` from `sub` of a server that answers `honest` batches of looks right, and then none, and has `sub` swapped for a link
 /// to `victim` by the first read of a file.
-fn move_from_short(honest: usize) -> (Arc<Fake>, crate::ops::testing::Ended) {
+fn move_from_short(honest: usize) -> (Arc<Fake>, Ended) {
     let server = with_victim();
 
     server.switch(|switches| {
@@ -186,10 +213,7 @@ fn move_from_short(honest: usize) -> (Arc<Fake>, crate::ops::testing::Ended) {
         switches.at_first_read = Some(swap_for_victim(&server, "sub"));
     });
     let local = temp();
-    let short = Arc::new(Short {
-        inner: Arc::clone(&server),
-        honest: AtomicUsize::new(honest),
-    });
+    let short = Meddled::short(&server, honest);
     let request = Request::download(
         OpKind::Move,
         short,
@@ -226,4 +250,72 @@ fn a_server_that_answers_fewer_looks_than_asked_before_a_removal_has_it_kept() {
     );
     assert_eq!(read(&server.at("victim/s.txt")), b"V", "what the link leads to stays");
     assert_eq!(read(&server.at("sub.real/s.txt")), b"s", "so does the original");
+}
+
+/// Moves `a.txt` from the root of `server` through `meddled`, and cancels the job right after the server removed it (when
+/// `removed` is raised), with the check after the removal given `grace` once cancelled. Returns how the job ended and how
+/// long it took from the cancel.
+fn cancelled_after_removal(
+    server: &Arc<Fake>,
+    meddled: Arc<Meddled>,
+    removed: Arc<AtomicBool>,
+    grace: Duration,
+) -> (Ended, Duration) {
+    let local = temp();
+    let mut rig = Rig::hooked(|hooks| hooks.check_grace = Some(grace));
+    let request = Request::download(
+        OpKind::Move,
+        meddled,
+        RemotePath::root(),
+        vec!["a.txt".to_owned()],
+        local.path().to_owned(),
+        false,
+    );
+    let (held, stopped, go) = gate();
+    let hook = Arc::new(move || {
+        removed.store(true, Ordering::SeqCst);
+        held();
+    });
+
+    server.switch(|switches| switches.after_remove = Some(hook));
+    let job = rig.start(request);
+    stopped.recv_timeout(Duration::from_secs(10)).expect("the removal");
+    let cancelled = Instant::now();
+    rig.engine.control(job, ControlAction::Cancel).expect("known job");
+    go.send(()).expect("the server waits");
+
+    let ended = rig.wait_ended(job);
+
+    (ended, cancelled.elapsed())
+}
+
+#[test]
+fn a_server_that_stalls_the_check_after_a_removal_does_not_hold_a_cancelled_job_beyond_the_grace() {
+    let server = Fake::new();
+    let removed = Arc::new(AtomicBool::new(false));
+    // From the removal on, a batch of looks waits for the flag it is given (as a real one waits for its reply), up to 4 s.
+    let meddled = Meddled::new(&server, {
+        let removed = Arc::clone(&removed);
+
+        move |fake, paths, cancel| {
+            let from = Instant::now();
+
+            while removed.load(Ordering::SeqCst)
+                && !cancel.load(Ordering::Acquire)
+                && from.elapsed() < Duration::from_secs(4)
+            {
+                thread::sleep(Duration::from_millis(10));
+            }
+
+            fake.lstat_many(paths, cancel)
+        }
+    });
+
+    server.put("a.txt", b"a");
+
+    let (ended, took) = cancelled_after_removal(&server, meddled, removed, Duration::from_millis(300));
+
+    assert_eq!(ended.outcome, Outcome::Cancelled);
+    assert_eq!(said(&ended), [UNCHECKED]);
+    assert!(took < Duration::from_secs(2), "the cancel took {took:?}");
 }

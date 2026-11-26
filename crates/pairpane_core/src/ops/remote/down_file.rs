@@ -127,7 +127,7 @@ impl Run<'_> {
 
         if self.moving() {
             flush_folder(to)?;
-            self.remove_original(down, remote, reader, &opened)?;
+            self.remove_original(down, (rel, remote), reader, &opened)?;
         }
 
         Ok(())
@@ -241,7 +241,7 @@ impl Run<'_> {
     fn remove_original(
         &mut self,
         down: &Down<'_>,
-        remote: &RemotePath,
+        (rel, remote): (&str, &RemotePath),
         mut reader: Box<dyn RemoteReader>,
         opened: &RemoteMeta,
     ) -> Result<(), Stop> {
@@ -290,8 +290,8 @@ impl Run<'_> {
         // Where the file was removed from, once more: a folder swapped for a link meanwhile would have had it removed elsewhere.
         if let Some(parent) = &parent {
             down.home
-                .confirm_after(down.fs, parent)
-                .map_err(|error| self.interrupted(error))?;
+                .confirm_after(down.fs, parent, self.after_check())
+                .map_err(|error| self.removed_unchecked(rel, error))?;
         }
 
         Ok(())

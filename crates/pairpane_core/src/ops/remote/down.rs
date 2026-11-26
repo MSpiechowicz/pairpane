@@ -9,6 +9,8 @@
 
 use std::io;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use crate::listing::platform;
 use crate::model::JobPhase;
@@ -21,7 +23,7 @@ use super::super::open;
 use super::super::partial::Partial;
 use super::super::report::refusal;
 use super::super::transfer::{MAX_DEPTH, Run, Stop};
-use super::home::Home;
+use super::home::{CANCEL_GRACE, Home};
 use super::own::{Own, same_name};
 use super::usable_here;
 use super::walk::{Budget, Listed, refuse_inside};
@@ -148,6 +150,26 @@ impl Run<'_> {
         }
 
         Ok(items)
+    }
+
+    /// The flag of a cancel and the time the check after a removal goes on once it is raised (see [`Home::confirm_after`]).
+    pub(super) fn after_check(&self) -> (&AtomicBool, Duration) {
+        (
+            self.job.control.abort_flag(),
+            self.inner.hooks.check_grace.unwrap_or(CANCEL_GRACE),
+        )
+    }
+
+    /// What the check after the removal of `rel` that failed with `error` ends the item with. On a cancelled job the removal
+    /// is reported first (a cancel must not hide it) and the job is cancelled; else the item fails with `error`.
+    pub(super) fn removed_unchecked(&mut self, rel: &str, error: io::Error) -> Stop {
+        if self.job.control.is_cancelled() {
+            self.fail(rel, &error);
+
+            Stop::Cancelled
+        } else {
+            Stop::Failed(error)
+        }
     }
 
     /// Settles the item at `rel`, which came to `done`. A failure is reported and the job goes on, unless the server is
@@ -316,9 +338,12 @@ impl Run<'_> {
             return Ok(());
         }
 
-        match down.home.confirm_after(down.fs, &parent) {
+        match down.home.confirm_after(down.fs, &parent, self.after_check()) {
             Ok(()) => Ok(()),
-            Err(error) => self.report(rel, error),
+            Err(error) => match self.removed_unchecked(rel, error) {
+                Stop::Failed(error) => self.report(rel, error),
+                stopped => Err(stopped),
+            },
         }
     }
 }

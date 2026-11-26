@@ -17,11 +17,21 @@
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::thread;
+use std::time::Duration;
 
 use crate::vfs::{RemoteFs, RemoteKind, RemoteMeta, RemotePath};
 
 use super::super::copy::in_context;
 use super::super::report::refusal;
+
+/// How long the check after a removal goes on once the job is cancelled, before it is given up and the removal is reported as
+/// not checked.
+pub(super) const CANCEL_GRACE: Duration = Duration::from_secs(5);
+
+/// How often the wait for a cancel looks at the flag (the flag has no way to wake a waiter).
+const CANCEL_POLL: Duration = Duration::from_millis(20);
 
 /// What a name on the way to the job's folder is at the start: its kind and, for a link, where it points as written.
 #[derive(Debug, PartialEq, Eq)]
@@ -175,18 +185,53 @@ impl Home {
     }
 
     /// Fails when `folder` is not where the walk went, after something was removed from it: the removal may have been
-    /// done in another folder. A cancel does not interrupt it: a removal that went elsewhere must be reported even when the
-    /// job is cancelled right after, and the check is one bounded batch.
-    pub(super) fn confirm_after(&self, fs: &dyn RemoteFs, folder: &RemotePath) -> io::Result<()> {
-        self.settle(
-            fs,
-            folder,
-            &AtomicBool::new(false),
-            (
-                "the folder on the server changed during the removal; something in another folder may have been removed",
-                "It was removed, but the folder it was in could not be checked afterwards",
-            ),
-        )
+    /// done in another folder. A cancel (`abort` is the flag of the job) does not interrupt it at first: a removal that went
+    /// elsewhere must be reported even when the job is cancelled right after. But a server that stalls must not hold a
+    /// cancelled job for the many requests of the check, so `grace` after the cancel the check is given up, and fails
+    /// (with the kind `Other`, so that it is reported, not taken for the cancel) as a check that could not be made.
+    pub(super) fn confirm_after(
+        &self,
+        fs: &dyn RemoteFs,
+        folder: &RemotePath,
+        (abort, grace): (&AtomicBool, Duration),
+    ) -> io::Result<()> {
+        const UNCHECKED: &str = "It was removed, but the folder it was in could not be checked afterwards";
+
+        let given_up = AtomicBool::new(false);
+        let (finished, over) = mpsc::channel::<()>();
+
+        let checked = thread::scope(|scope| {
+            let given_up = &given_up;
+
+            scope.spawn(move || {
+                if cancelled_before_end(&over, abort) && over.recv_timeout(grace) == Err(RecvTimeoutError::Timeout) {
+                    given_up.store(true, Ordering::Release);
+                }
+            });
+
+            let checked = self.settle(
+                fs,
+                folder,
+                given_up,
+                (
+                    "the folder on the server changed during the removal; something in another folder may have been removed",
+                    UNCHECKED,
+                ),
+            );
+            drop(finished);
+
+            checked
+        });
+
+        checked.map_err(|error| {
+            if error.kind() == io::ErrorKind::Interrupted {
+                io::Error::other(format!(
+                    "{UNCHECKED}: the job was cancelled and the server did not answer in time"
+                ))
+            } else {
+                error
+            }
+        })
     }
 
     /// Fails with the first words when `folder` is not where the walk went, and with the second when that cannot be told.
@@ -248,7 +293,22 @@ impl Home {
             }
         }
 
+        if cancel.load(Ordering::Acquire) {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
+
         Ok(fs.realpath(folder)? == expected)
+    }
+}
+
+/// Waits until `abort` is set (`true`) or the check is over (`false`, once the sender of `over` is dropped).
+fn cancelled_before_end(over: &Receiver<()>, abort: &AtomicBool) -> bool {
+    loop {
+        match over.recv_timeout(CANCEL_POLL) {
+            Err(RecvTimeoutError::Timeout) if abort.load(Ordering::Acquire) => return true,
+            Err(RecvTimeoutError::Timeout) => {}
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => return false,
+        }
     }
 }
 
